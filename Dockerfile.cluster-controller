@@ -1,0 +1,28 @@
+# Build stage
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache git make
+
+WORKDIR /app
+
+# Copy go mod files
+COPY cluster-controller/go.* ./
+RUN go mod download
+
+# Copy source code
+COPY cluster-controller/ .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o cluster-controller cmd/manager/main.go
+
+# Final stage
+FROM alpine:3.19
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /
+
+# Copy the binary from builder
+COPY --from=builder /app/cluster-controller .
+
+ENTRYPOINT ["/cluster-controller"]

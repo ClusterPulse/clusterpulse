@@ -1,0 +1,1 @@
+"""OpenShift Cluster Monitor application."""

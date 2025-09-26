@@ -1,0 +1,7 @@
+kopf==1.36.1
+redis==5.0.1
+kubernetes==29.0.0
+urllib3==2.1.0
+pydantic==2.5.3
+prometheus_client
+tenacity
