@@ -73,7 +73,8 @@ ClusterPulse follows a microservices architecture with four core components:
 
 ## Deployment
 
-The usual method of deployment is through OLM. Currently working on deploying to OperatorHub.
+### OperatorHub
+ClusterPulse can be deployed through OLM in the OperatorHub. It is currently inside the community operator index!
 
 ### Helm
 ```
