@@ -51,29 +51,50 @@ class AuthorizationError(HTTPException):
         super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
+def create_anonymous_user() -> User:
+    """Create an anonymous user for unauthenticated access."""
+    return User(
+        username="anonymous",
+        email="anonymous@clusterpulse.local",
+        preferred_username="Anonymous User",
+        groups=["anonymous"],  # Special group for anonymous access
+    )
+
+
 def extract_user_from_headers(request: Request) -> Optional[User]:
-    """Extract user from OAuth proxy headers."""
-    if not settings.oauth_proxy_enabled:
-        if settings.environment == "development":
+    """Extract user from OAuth proxy headers, or return anonymous user if unauth enabled."""
+    # Check if unauth mode is enabled and no OAuth headers present
+    username = request.headers.get(settings.oauth_header_user)
+    
+    if not username:
+        # No OAuth headers present
+        if settings.unauth_enabled:
+            # Return anonymous user
+            logger.debug("Unauth mode enabled, creating anonymous user")
+            return create_anonymous_user()
+        
+        # Unauth not enabled, check dev mode
+        if not settings.oauth_proxy_enabled and settings.environment == "development":
             return User(
                 username="dev-user",
                 email="dev@example.com",
                 preferred_username="Development User",
                 groups=["developers", "cluster-viewers"],
             )
+        
         return None
-
-    username = request.headers.get(settings.oauth_header_user)
+    
+    # OAuth headers present - normal authenticated flow
     email = request.headers.get(settings.oauth_header_email)
-
-    if not username:
-        return None
-
     return User(username=username, email=email, groups=[], preferred_username=username)
 
 
 def resolve_groups_realtime(username: str, email: Optional[str] = None) -> List[str]:
     """Resolve user groups from OpenShift in real-time."""
+    # Anonymous users keep their anonymous group
+    if username == "anonymous":
+        return ["anonymous"]
+    
     if not k8s_dynamic_client:
         logger.error(f"No Kubernetes client available for group resolution")
         if settings.environment == "development":
@@ -114,7 +135,6 @@ def resolve_groups_realtime(username: str, email: Optional[str] = None) -> List[
             logger.warning(f"Could not access User API: {e}")
 
         # Method 2: Check Group resources for membership
-        # This is critical because some OpenShift setups don't populate User.groups
         try:
             group_resource = k8s_dynamic_client.resources.get(
                 api_version="user.openshift.io/v1", kind="Group"
@@ -176,3 +196,8 @@ async def get_user_with_groups(user: User = Depends(get_current_user)) -> User:
     user.groups = resolve_groups_realtime(user.username, user.email)
     logger.debug(f"Resolved {len(user.groups)} groups for {user.username}")
     return user
+
+
+def is_anonymous_user(user: User) -> bool:
+    """Check if user is anonymous."""
+    return user.username == "anonymous"

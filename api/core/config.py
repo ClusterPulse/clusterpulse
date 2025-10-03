@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     oauth_header_user: str = Field("X-Forwarded-User", env="OAUTH_HEADER_USER")
     oauth_header_email: str = Field("X-Forwarded-Email", env="OAUTH_HEADER_EMAIL")
 
+    # Unauthenticated Access (NEW)
+    unauth_enabled: bool = Field(False, env="UNAUTH_ENABLED")
+    unauth_read_only: bool = Field(True, env="UNAUTH_READ_ONLY")  # Always true for safety
+
     # RBAC Configuration
     rbac_enabled: bool = Field(True, env="RBAC_ENABLED")
     rbac_default_deny: bool = Field(True, env="RBAC_DEFAULT_DENY")
