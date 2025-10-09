@@ -870,31 +870,33 @@ class RBACEngine:
             email="anonymous@system",
             groups=["anonymous", "public"],
             is_service_account=False,
-            attributes={"anonymous": True}
+            attributes={"anonymous": True},
         )
-    
+
     def authorize_anonymous(self, action: Action, resource: Resource) -> RBACDecision:
         """
         Authorize anonymous access - always allows viewing basic cluster health.
         """
         anonymous_principal = self.create_anonymous_principal()
-        request = Request(principal=anonymous_principal, action=action, resource=resource)
-        
+        request = Request(
+            principal=anonymous_principal, action=action, resource=resource
+        )
+
         # Only allow VIEW action for clusters
         if action != Action.VIEW or resource.type != ResourceType.CLUSTER:
             return RBACDecision(
                 decision=Decision.DENY,
                 request=request,
-                reason="Anonymous access only allows viewing cluster health"
+                reason="Anonymous access only allows viewing cluster health",
             )
-        
+
         # Always allow viewing cluster health for anonymous users
         return RBACDecision(
             decision=Decision.ALLOW,
             request=request,
             reason="Anonymous access to public cluster information",
             permissions={Action.VIEW},
-            metadata={"anonymous": True, "restricted": True}
+            metadata={"anonymous": True, "restricted": True},
         )
 
 

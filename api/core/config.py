@@ -53,7 +53,9 @@ class Settings(BaseSettings):
 
     # Anonymous Access Configuration
     allow_anonymous_access: bool = Field(False, env="ALLOW_ANONYMOUS_ACCESS")
-    anonymous_cluster_view: bool = Field(True, env="ANONYMOUS_CLUSTER_VIEW")  # View cluster names/health
+    anonymous_cluster_view: bool = Field(
+        True, env="ANONYMOUS_CLUSTER_VIEW"
+    )  # View cluster names/health
     public_api_prefix: str = "/api/v1/public"
 
     # Redis Configuration

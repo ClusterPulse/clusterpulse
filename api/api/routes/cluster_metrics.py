@@ -9,8 +9,7 @@ from typing import Any, Dict, List, Optional, Set
 
 import redis
 from src.core.logging import get_logger
-from src.core.rbac_engine import Principal, RBACEngine
-from src.core.rbac_engine import ResourceType
+from src.core.rbac_engine import Principal, RBACEngine, ResourceType
 
 logger = get_logger(__name__)
 

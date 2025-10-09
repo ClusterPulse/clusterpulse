@@ -7,11 +7,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from src.api.dependencies.auth import (
-    AuthorizationError,
-    get_user_with_groups,
-    rbac_engine,
-)
+from src.api.dependencies.auth import (AuthorizationError,
+                                       get_user_with_groups, rbac_engine)
 from src.api.routes.cluster_metrics import create_metrics_calculator
 from src.core.logging import get_logger
 from src.core.rbac_engine import Action, Principal, RBACDecision
@@ -397,7 +394,7 @@ async def get_cluster_nodes(
     """Get nodes for a specific cluster."""
 
     # Check cluster access
-    decision = await check_cluster_access(cluster_name, user)
+    await check_cluster_access(cluster_name, user)
 
     principal = Principal(username=user.username, email=user.email, groups=user.groups)
 
@@ -497,7 +494,7 @@ async def get_cluster_operators(
     """Get operators for a specific cluster."""
 
     # Check cluster access
-    decision = await check_cluster_access(cluster_name, user)
+    await check_cluster_access(cluster_name, user)
 
     principal = Principal(username=user.username, email=user.email, groups=user.groups)
 
@@ -548,7 +545,7 @@ async def get_cluster_namespaces(
     """Get namespaces for a specific cluster - ONLY those the user can access."""
 
     # Check cluster access
-    decision = await check_cluster_access(cluster_name, user)
+    await check_cluster_access(cluster_name, user)
 
     principal = Principal(username=user.username, email=user.email, groups=user.groups)
 
@@ -747,7 +744,7 @@ async def get_cluster_alerts(
     """Get alerts for a specific cluster."""
 
     # Check cluster access
-    decision = await check_cluster_access(cluster_name, user)
+    await check_cluster_access(cluster_name, user)
 
     principal = Principal(username=user.username, email=user.email, groups=user.groups)
 
@@ -789,7 +786,7 @@ async def get_cluster_events(
     """Get recent events for a specific cluster."""
 
     # Check cluster access
-    decision = await check_cluster_access(cluster_name, user)
+    await check_cluster_access(cluster_name, user)
 
     principal = Principal(username=user.username, email=user.email, groups=user.groups)
 

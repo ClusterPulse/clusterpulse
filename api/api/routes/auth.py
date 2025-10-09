@@ -9,12 +9,9 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import RedirectResponse
-from src.api.dependencies.auth import (
-    get_current_user,
-    get_optional_current_user,
-    get_user_with_groups,
-    rbac_engine,
-)
+from src.api.dependencies.auth import (get_current_user,
+                                       get_optional_current_user,
+                                       get_user_with_groups, rbac_engine)
 from src.core.config import settings
 from src.core.logging import get_logger
 from src.core.rbac_engine import Principal, Resource, ResourceType
