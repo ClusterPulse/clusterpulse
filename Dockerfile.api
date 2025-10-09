@@ -54,6 +54,7 @@ ENV PATH=/usr/local/bin:$PATH \
     PORT=8080 \
     HOME=/app
 
+
 # Use numeric UID
 USER 1001
 
