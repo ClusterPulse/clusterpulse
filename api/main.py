@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from src.api.middleware.auth import AuthMiddleware
 from src.api.middleware.logging import LoggingMiddleware
-from src.api.routes import auth, clusters, health, registries
+from src.api.routes import auth, clusters, health, public, registries
 from src.core.config import settings
 from src.core.logging import get_logger, setup_logging
 from src.core.redis_client import close_redis_connection, get_redis_client
@@ -87,6 +87,12 @@ app.include_router(
     registries.router, prefix=f"{settings.api_prefix}", tags=["registries"]
 )
 
+# Register public routes (if anonymous access enabled)
+if settings.allow_anonymous_access:
+    app.include_router(
+        public.router, prefix=settings.public_api_prefix, tags=["public"]
+    )
+    logger.info("Public API endpoints enabled")
 
 if __name__ == "__main__":
     uvicorn.run(

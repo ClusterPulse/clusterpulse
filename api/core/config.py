@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     rbac_audit_enabled: bool = Field(True, env="RBAC_AUDIT_ENABLED")
     rbac_group_sync_interval: int = Field(300, env="RBAC_GROUP_SYNC_INTERVAL")
 
+    # Anonymous Access Configuration
+    allow_anonymous_access: bool = Field(False, env="ALLOW_ANONYMOUS_ACCESS")
+    anonymous_cluster_view: bool = Field(
+        False, env="ANONYMOUS_CLUSTER_VIEW"
+    )  # View cluster names/health
+    public_api_prefix: str = "/api/v1/public"
+
     # Redis Configuration
     redis_host: str = Field("redis", env="REDIS_HOST")
     redis_port: int = Field(6379, env="REDIS_PORT")
