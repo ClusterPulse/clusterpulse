@@ -863,6 +863,51 @@ class RBACEngine:
         self.redis.lpush(audit_key, json.dumps(audit_entry))
         self.redis.expire(audit_key, 86400 * 30)
 
+    def create_anonymous_principal(self) -> Principal:
+        """Create a principal for anonymous/unauthenticated users."""
+        return Principal(
+            username="anonymous",
+            email="anonymous@system",
+            groups=["anonymous", "public"],
+            is_service_account=False,
+            attributes={"anonymous": True}
+        )
+    
+    def authorize_anonymous(self, action: Action, resource: Resource) -> RBACDecision:
+        """
+        Authorize anonymous access - only allows viewing basic cluster health.
+        This is a fast-path for anonymous users that doesn't require policy evaluation.
+        """
+        anonymous_principal = self.create_anonymous_principal()
+        
+        # Only allow VIEW action for clusters
+        if action != Action.VIEW or resource.type != ResourceType.CLUSTER:
+            return RBACDecision(
+                decision=Decision.DENY,
+                request=Request(principal=anonymous_principal, action=action, resource=resource),
+                reason="Anonymous access only allows viewing cluster health"
+            )
+        
+        # Check for anonymous-specific policies (if any exist)
+        request = Request(principal=anonymous_principal, action=action, resource=resource)
+        
+        # Try to find anonymous policies first
+        policies = self._get_applicable_policies(anonymous_principal)
+        
+        if policies:
+            # Evaluate normally if policies exist
+            return self._evaluate_policies(request, policies)
+        
+        # Default: Allow basic view access to cluster health only
+        return RBACDecision(
+            decision=Decision.ALLOW,
+            request=request,
+            reason="Anonymous access to public cluster information",
+            permissions={Action.VIEW},  # Only VIEW permission
+            metadata={"anonymous": True, "restricted": True}
+        )
+
+
 
 def create_rbac_engine(redis_client: redis.Redis, cache_ttl: int = 0) -> RBACEngine:
     """Create RBAC engine instance."""

@@ -10,7 +10,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = get_logger(__name__)
 
-
 class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware for handling authentication concerns."""
 
@@ -22,12 +21,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
             settings.readiness_check_path,
         ]:
             return await call_next(request)
-
+        
+        # Skip auth for public endpoints if anonymous access is enabled
+        if settings.allow_anonymous_access and request.url.path.startswith(settings.public_api_prefix):
+            logger.debug(f"Allowing anonymous access to public endpoint: {request.url.path}")
+            return await call_next(request)
+        
         # Add request ID for tracing
         request_id = request.headers.get("X-Request-ID", f"{time.time()}")
         request.state.request_id = request_id
 
-        # Log OAuth headers if in debug mode (simplified - no groups)
+        # Log OAuth headers if in debug mode
         if settings.debug:
             oauth_headers = {
                 settings.oauth_header_user: request.headers.get(
