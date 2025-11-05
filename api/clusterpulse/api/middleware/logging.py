@@ -4,7 +4,7 @@ import time
 from typing import Callable
 
 from fastapi import Request, Response
-from src.core.logging import get_logger, log_event
+from clusterpulse.core.logging import get_logger, log_event
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = get_logger(__name__)

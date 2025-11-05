@@ -6,10 +6,10 @@ import json
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, Query
-from src.api.dependencies.auth import get_current_user
-from src.core.logging import get_logger
-from src.core.redis_client import get_redis_client
-from src.models.auth import User
+from clusterpulse.api.dependencies.auth import get_current_user
+from clusterpulse.core.logging import get_logger
+from clusterpulse.core.redis_client import get_redis_client
+from clusterpulse.models.auth import User
 
 logger = get_logger(__name__)
 redis_client = get_redis_client()
