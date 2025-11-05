@@ -80,7 +80,7 @@ docker run -d -p 6379:6379 redis:latest
 
 4. **Run the application:**
 ```bash
-python -m uvicorn src.main:app --reload --host 0.0.0.0 --port 8080
+python -m uvicorn clusterpulse.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
 5. **Access the API documentation:**
@@ -131,7 +131,7 @@ The RBAC engine is the heart of the authorization system. It evaluates policies 
 
 **Usage Example:**
 ```python
-from src.core.rbac_engine import RBACEngine, Principal, Resource, ResourceType, Action, Request
+from clusterpulse.core.rbac_engine import RBACEngine, Principal, Resource, ResourceType, Action, Request
 
 # Create principal from user
 principal = Principal(
@@ -332,7 +332,7 @@ filtered_resources = rbac_engine.filter_resources(
 Use appropriate exceptions:
 
 ```python
-from src.api.dependencies.auth import AuthenticationError, AuthorizationError
+from clusterpulse.api.dependencies.auth import AuthenticationError, AuthorizationError
 
 # Authentication failed
 raise AuthenticationError("Invalid credentials")
@@ -352,7 +352,7 @@ raise HTTPException(
 Use structured logging with context:
 
 ```python
-from src.core.logging import get_logger, log_event
+from clusterpulse.core.logging import get_logger, log_event
 
 logger = get_logger(__name__)
 
@@ -372,7 +372,7 @@ log_event(
 Enable debug mode for detailed logging:
 
 ```bash
-DEBUG=True LOG_LEVEL=DEBUG python -m uvicorn src.main:app
+DEBUG=True LOG_LEVEL=DEBUG python -m uvicorn clusterpulse.main:app
 ```
 
 ### Health Check Endpoints
