@@ -5,8 +5,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, Field
-from src.core.config import settings
-from src.core.logging import get_logger
+from clusterpulse.core.config import settings
+from clusterpulse.core.logging import get_logger
 
 logger = get_logger(__name__)
 

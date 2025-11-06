@@ -11,11 +11,11 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements
-COPY ./api/requirements.txt .
+# Copy the entire api directory
+COPY ./api /app
 
-# Install Python dependencies to a specific location
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# Install the package in editable mode
+RUN pip install --no-cache-dir -e .
 
 # Final stage
 FROM python:3.11.9-slim
@@ -35,11 +35,9 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Copy Python dependencies from builder
-COPY --from=builder --chown=1001:0 /install /usr/local
-
-# Copy application code with proper permissions
-COPY --chown=1001:0 ./api ./src
+# Copy installed package from builder
+COPY --from=builder --chown=1001:0 /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder --chown=1001:0 /app/clusterpulse /app/clusterpulse
 
 # Create directories that might need write access
 RUN mkdir -p /app/logs /app/tmp && \
@@ -54,7 +52,6 @@ ENV PATH=/usr/local/bin:$PATH \
     PORT=8080 \
     HOME=/app
 
-
 # Use numeric UID
 USER 1001
 
@@ -66,5 +63,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
 # Run the application
-CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]
-
+CMD ["python", "-m", "uvicorn", "clusterpulse.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]

@@ -8,8 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 import redis
-from src.core.logging import get_logger
-from src.core.rbac_engine import Principal, RBACEngine, ResourceType
+from clusterpulse.core.logging import get_logger
+from clusterpulse.core.rbac_engine import Principal, RBACEngine, ResourceType
 
 logger = get_logger(__name__)
 
