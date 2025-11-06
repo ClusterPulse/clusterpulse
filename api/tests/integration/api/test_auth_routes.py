@@ -10,6 +10,7 @@ class TestAuthStatusEndpoint:
 
     def test_auth_status_authenticated(self, authenticated_client):
         """Test authentication status for authenticated user."""
+
         def mock_resolve_groups(username, email=None):
             return ["developers", "cluster-viewers"]
 
@@ -42,6 +43,7 @@ class TestAuthMeEndpoint:
 
     def test_get_current_user(self, authenticated_client):
         """Test getting current user information."""
+
         def mock_resolve_groups(username, email=None):
             return ["developers", "cluster-viewers"]
 
@@ -60,6 +62,7 @@ class TestAuthMeEndpoint:
 
     def test_get_current_user_with_groups(self, authenticated_client):
         """Test that groups are resolved."""
+
         def mock_resolve_groups(username, email=None):
             return ["developers", "platform-team", "cluster-viewers"]
 
@@ -209,6 +212,7 @@ class TestAuthCacheClearEndpoint:
 
     def test_clear_cache(self, authenticated_client, fake_redis):
         """Test clearing user's RBAC cache."""
+
         def mock_resolve_groups(username, email=None):
             return ["developers"]
 
@@ -231,6 +235,7 @@ class TestAuthLogoutEndpoint:
 
     def test_logout(self, authenticated_client):
         """Test logout endpoint."""
+
         def mock_resolve_groups(username, email=None):
             return ["developers"]
 
@@ -252,6 +257,7 @@ class TestGroupResolution:
 
     def test_group_resolution_success(self, authenticated_client):
         """Test successful group resolution."""
+
         def mock_resolve_groups(username, email=None):
             # Simulate successful group lookup
             return ["developers", "platform-team", "sre"]
@@ -269,6 +275,7 @@ class TestGroupResolution:
 
     def test_group_resolution_empty(self, authenticated_client):
         """Test user with no groups."""
+
         def mock_resolve_groups(username, email=None):
             return []
 
@@ -284,6 +291,7 @@ class TestGroupResolution:
 
     def test_group_resolution_by_email(self, authenticated_client):
         """Test group resolution using email identifier."""
+
         def mock_resolve_groups(username, email=None):
             # Simulate that email is used for group lookup
             if email == "john.doe@example.com":

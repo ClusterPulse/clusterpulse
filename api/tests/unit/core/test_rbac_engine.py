@@ -1,22 +1,12 @@
 """Unit tests for RBAC Engine - the most critical security component."""
 
 import json
-from datetime import datetime, timezone
 
 import pytest
 
-from clusterpulse.core.rbac_engine import (
-    Action,
-    Decision,
-    Filter,
-    Principal,
-    RBACDecision,
-    RBACEngine,
-    Request,
-    Resource,
-    ResourceType,
-    Visibility,
-)
+from clusterpulse.core.rbac_engine import (Action, Decision, Filter, Principal,
+                                           RBACEngine, Request, Resource,
+                                           ResourceType, Visibility)
 
 
 class TestPrincipal:
@@ -42,9 +32,7 @@ class TestPrincipal:
 
     def test_principal_cache_key(self):
         """Test principal cache key generation."""
-        principal = Principal(
-            username="john.doe", groups=["developers", "testers"]
-        )
+        principal = Principal(username="john.doe", groups=["developers", "testers"])
 
         # Cache key should include sorted groups
         cache_key = principal.cache_key
@@ -58,9 +46,7 @@ class TestResource:
     def test_cluster_resource(self):
         """Test cluster resource creation."""
         resource = Resource(
-            type=ResourceType.CLUSTER,
-            name="prod-cluster",
-            cluster="prod-cluster"
+            type=ResourceType.CLUSTER, name="prod-cluster", cluster="prod-cluster"
         )
 
         assert resource.type == ResourceType.CLUSTER
@@ -73,7 +59,7 @@ class TestResource:
             type=ResourceType.POD,
             name="my-pod",
             namespace="default",
-            cluster="prod-cluster"
+            cluster="prod-cluster",
         )
 
         assert resource.namespace == "default"
@@ -102,8 +88,7 @@ class TestFilter:
     def test_filter_include_list(self):
         """Test filter with include list."""
         filter_obj = Filter(
-            visibility=Visibility.FILTERED,
-            include={"namespace-1", "namespace-2"}
+            visibility=Visibility.FILTERED, include={"namespace-1", "namespace-2"}
         )
 
         assert filter_obj.matches("namespace-1")
@@ -113,8 +98,7 @@ class TestFilter:
     def test_filter_exclude_list(self):
         """Test filter with exclude list."""
         filter_obj = Filter(
-            visibility=Visibility.ALL,
-            exclude={"kube-system", "kube-public"}
+            visibility=Visibility.ALL, exclude={"kube-system", "kube-public"}
         )
 
         assert filter_obj.matches("my-namespace")
@@ -128,15 +112,17 @@ class TestFilter:
         filter_obj = Filter(
             visibility=Visibility.FILTERED,
             include={"resource-1", "resource-2"},  # Only include these two
-            labels={"env": "production", "team": "platform"}
+            labels={"env": "production", "team": "platform"},
         )
 
         # resource-1 is in include list AND has matching labels
-        assert filter_obj.matches("resource-1", {"env": "production", "team": "platform"})
+        assert filter_obj.matches(
+            "resource-1", {"env": "production", "team": "platform"}
+        )
 
         # resource-2 is in include list but WRONG labels - should not match
         assert not filter_obj.matches("resource-2", {"env": "development"})
-        
+
         # resource-3 is NOT in include list - should not match regardless of labels
         assert not filter_obj.matches("resource-3", {})
 
@@ -311,9 +297,7 @@ class TestRBACEngine:
 
         # Should only see team-a namespaces
         assert len(filtered) == 2
-        assert all(
-            pod["namespace"].startswith("team-a") for pod in filtered
-        )
+        assert all(pod["namespace"].startswith("team-a") for pod in filtered)
 
     @pytest.mark.rbac
     def test_filter_operators_by_namespace(
@@ -344,9 +328,7 @@ class TestRBACEngine:
         assert len(filtered) >= 2  # At least the cluster-wide ones
 
     @pytest.mark.rbac
-    def test_get_accessible_clusters(
-        self, rbac_engine, fake_redis, basic_dev_policy
-    ):
+    def test_get_accessible_clusters(self, rbac_engine, fake_redis, basic_dev_policy):
         """Test getting accessible clusters for a principal."""
         # Store policy
         policy_key = f"policy:{basic_dev_policy['policy_name']}"
@@ -393,7 +375,7 @@ class TestRBACEngine:
         # Should have permissions defined in basic_dev_policy
         assert Action.VIEW in permissions
         assert Action.VIEW_METRICS in permissions
-        
+
         # The get_permissions method tests all actions, so we can't reliably
         # assert what's NOT there without knowing the exact policy evaluation logic.
         # Just verify the key permissions are present.
@@ -660,9 +642,7 @@ class TestComplexScenarios:
         assert "policy:high-priority" in decision.applied_policies
 
     @pytest.mark.rbac
-    def test_namespace_and_node_filtering_combined(
-        self, rbac_engine, fake_redis
-    ):
+    def test_namespace_and_node_filtering_combined(self, rbac_engine, fake_redis):
         """Test combining namespace and node filters."""
         policy = {
             "policy_name": "combined-filter-policy",

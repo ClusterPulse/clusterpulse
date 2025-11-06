@@ -5,8 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import pytest
-import redis
-from fakeredis import FakeRedis, FakeStrictRedis
+from fakeredis import FakeStrictRedis
 from fastapi.testclient import TestClient
 
 from clusterpulse.core.rbac_engine import RBACEngine
@@ -397,7 +396,7 @@ def populate_redis_with_policies(fake_redis):
 
             # Store policy data
             fake_redis.hset(policy_key, "data", json.dumps(policy))
-            fake_redis.sadd("policies:all", policy['policy_name'])
+            fake_redis.sadd("policies:all", policy["policy_name"])
 
             # Index by subjects
             for subject in policy.get("subjects", []):
@@ -487,36 +486,26 @@ def test_client(monkeypatch, fake_redis, rbac_engine):
     monkeypatch.setattr(
         "clusterpulse.api.dependencies.auth.get_redis_client", lambda: fake_redis
     )
-    
+
     # Mock RBAC engine to use our fake_redis
-    monkeypatch.setattr(
-        "clusterpulse.api.dependencies.auth.rbac_engine", rbac_engine
-    )
-    
+    monkeypatch.setattr("clusterpulse.api.dependencies.auth.rbac_engine", rbac_engine)
+
     # Create metrics calculator with our instances
-    from clusterpulse.api.routes.cluster_metrics import FilteredMetricsCalculator
+    from clusterpulse.api.routes.cluster_metrics import \
+        FilteredMetricsCalculator
+
     metrics_calc = FilteredMetricsCalculator(fake_redis, rbac_engine)
-    
-    monkeypatch.setattr(
-        "clusterpulse.api.routes.clusters.rbac_engine", rbac_engine
-    )
+
+    monkeypatch.setattr("clusterpulse.api.routes.clusters.rbac_engine", rbac_engine)
     monkeypatch.setattr(
         "clusterpulse.api.routes.clusters.metrics_calculator", metrics_calc
     )
-    monkeypatch.setattr(
-        "clusterpulse.api.routes.clusters.redis_client", fake_redis
-    )
-    monkeypatch.setattr(
-        "clusterpulse.api.routes.auth.rbac_engine", rbac_engine
-    )
-    monkeypatch.setattr(
-        "clusterpulse.api.routes.auth.redis_client", fake_redis
-    )
+    monkeypatch.setattr("clusterpulse.api.routes.clusters.redis_client", fake_redis)
+    monkeypatch.setattr("clusterpulse.api.routes.auth.rbac_engine", rbac_engine)
+    monkeypatch.setattr("clusterpulse.api.routes.auth.redis_client", fake_redis)
 
     # Mock Kubernetes client (optional)
-    monkeypatch.setattr(
-        "clusterpulse.api.dependencies.auth.k8s_dynamic_client", None
-    )
+    monkeypatch.setattr("clusterpulse.api.dependencies.auth.k8s_dynamic_client", None)
 
     # Import after mocking
     from clusterpulse.main import app

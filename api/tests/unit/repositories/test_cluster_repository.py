@@ -22,7 +22,7 @@ class TestClusterRepository:
         # Patch the redis client creation to use fake
         import clusterpulse.repositories.cluster as repo_module
 
-        original_init = repo_module.ClusterRepository.__init__
+        repo_module.ClusterRepository.__init__
 
         def mock_init(self):
             self.redis = fake_redis
@@ -83,9 +83,7 @@ class TestClusterRepository:
         cluster = repository.get_cluster("nonexistent")
         assert cluster is None
 
-    def test_get_cluster_status(
-        self, repository, fake_redis, sample_cluster_status
-    ):
+    def test_get_cluster_status(self, repository, fake_redis, sample_cluster_status):
         """Test getting cluster status."""
         cluster_name = "test-cluster"
         fake_redis.set(
@@ -95,9 +93,7 @@ class TestClusterRepository:
         status = repository.get_cluster_status(cluster_name)
         assert status == sample_cluster_status
 
-    def test_get_cluster_metrics(
-        self, repository, fake_redis, sample_cluster_metrics
-    ):
+    def test_get_cluster_metrics(self, repository, fake_redis, sample_cluster_metrics):
         """Test getting cluster metrics."""
         cluster_name = "test-cluster"
         fake_redis.set(
@@ -308,9 +304,7 @@ class TestClusterRepository:
             "by_namespace": {"openshift-operators": 3, "custom": 2},
         }
 
-        fake_redis.set(
-            f"cluster:{cluster_name}:operators_summary", json.dumps(summary)
-        )
+        fake_redis.set(f"cluster:{cluster_name}:operators_summary", json.dumps(summary))
 
         retrieved_summary = repository.get_cluster_operators_summary(cluster_name)
 
@@ -342,18 +336,22 @@ class TestRepositoryErrorHandling:
     @pytest.fixture
     def repository_with_errors(self, monkeypatch):
         """Create repository that simulates errors."""
+
         # Create a mock Redis that raises errors
         class ErrorRedis:
             def get(self, key):
                 from redis.exceptions import RedisError
+
                 raise RedisError("Redis connection failed")
 
             def smembers(self, key):
                 from redis.exceptions import RedisError
+
                 raise RedisError("Redis connection failed")
 
             def ping(self):
                 from redis.exceptions import RedisError
+
                 raise RedisError("Redis connection failed")
 
         error_redis = ErrorRedis()
