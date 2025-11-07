@@ -179,11 +179,11 @@ class TestAuthMiddlewareOAuthHeaders:
     ):
         """Should log OAuth headers when debug is enabled."""
         # Mock settings directly (env vars don't work after import)
-        from clusterpulse.core import config
+        from clusterpulse.config.settings import settings
 
-        monkeypatch.setattr(config.settings, "debug", True)
-        monkeypatch.setattr(config.settings, "oauth_header_user", "X-Forwarded-User")
-        monkeypatch.setattr(config.settings, "oauth_header_email", "X-Forwarded-Email")
+        monkeypatch.setattr(settings, "debug", True)
+        monkeypatch.setattr(settings, "oauth_header_user", "X-Forwarded-User")
+        monkeypatch.setattr(settings, "oauth_header_email", "X-Forwarded-Email")
 
         client = TestClient(app_with_auth_middleware)
 
@@ -208,9 +208,9 @@ class TestAuthMiddlewareOAuthHeaders:
     ):
         """Should not log OAuth headers when debug is disabled."""
         # Mock settings directly
-        from clusterpulse.core import config
+        from clusterpulse.config.settings import settings
 
-        monkeypatch.setattr(config.settings, "debug", False)
+        monkeypatch.setattr(settings, "debug", False)
 
         client = TestClient(app_with_auth_middleware)
 

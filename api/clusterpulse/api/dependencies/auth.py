@@ -5,11 +5,12 @@ from typing import List, Optional
 from fastapi import Depends, HTTPException, Request, status
 from kubernetes import client, config
 from kubernetes.dynamic import DynamicClient
-from clusterpulse.core.config import settings
+
+from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger
-from clusterpulse.core.rbac_engine import create_rbac_engine
-from clusterpulse.core.redis_client import get_redis_client
+from clusterpulse.db.redis import get_redis_client
 from clusterpulse.models.auth import User
+from clusterpulse.services.rbac import create_rbac_engine
 
 logger = get_logger(__name__)
 

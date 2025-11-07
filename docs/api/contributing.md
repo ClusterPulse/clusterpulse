@@ -28,30 +28,254 @@ API docs available at `http://localhost:8080/api/v1/docs`
 pip install pytest pytest-cov pytest-asyncio black ruff mypy
 ```
 
-## Architecture Overview
+## Project Structure
+
+Here's what goes where and why it's organized this way.
+
+### Directory Layout
 
 ```
-Request → OAuth Headers → Auth Middleware → Route Handler
-                                                ↓
-                                         Check RBAC Engine
-                                                ↓
-                                         Get Data from Redis
-                                                ↓
-                                         Filter Through RBAC
-                                                ↓
-                                         Return Filtered Response
+clusterpulse/
+├── config/              Configuration settings
+├── core/                Core utilities (logging, etc.)
+├── db/                  Database and cache connections
+├── models/              Pydantic models for data validation
+├── repositories/        Data access layer (talks to Redis)
+├── services/            Business logic (RBAC, metrics)
+└── api/                 HTTP layer
+    ├── dependencies/    FastAPI dependencies
+    ├── middleware/      Request/response middleware
+    └── v1/              API version 1
+        ├── endpoints/   Route handlers
+        └── router.py    Router assembly
 ```
 
-**Key Components:**
-- **RBAC Engine** (`core/rbac_engine.py`): Authorization decisions
-- **Redis Client** (`core/redis_client.py`): Connection management
-- **Auth Dependencies** (`api/dependencies/auth.py`): User extraction and group resolution
-- **Routes** (`api/routes/`): API endpoints
-- **Repositories** (`repositories/`): Data access layer
+### What Each Directory Does
+
+#### `config/`
+Application configuration. Just settings, environment variables, that sort of thing.
+
+**Files:**
+- `settings.py` - All configuration (Redis host, OAuth settings, etc.)
+
+**When to edit:**
+- Adding a new feature flag
+- Adding a new environment variable
+- Changing default values
+
+```python
+# Example: Adding a new setting
+class Settings(BaseSettings):
+    new_feature_enabled: bool = Field(False, env="NEW_FEATURE_ENABLED")
+```
+
+#### `core/`
+Utilities used throughout the app. Keep it minimal - only truly shared utilities go here.
+
+**Files:**
+- `logging.py` - Logging setup and helpers
+
+**When to add here:**
+- Shared utility functions
+- Common helpers
+- Framework setup code
+
+**Don't put here:**
+- Business logic (goes in `services/`)
+- Data access (goes in `repositories/`)
+- HTTP handlers (goes in `api/`)
+
+#### `db/`
+Database and cache connections. Currently just Redis, but could expand.
+
+**Files:**
+- `redis.py` - Redis connection pool and client
+
+**When to edit:**
+- Changing Redis connection logic
+- Adding connection health checks
+- Adding a new database (Postgres, etc.)
+
+```python
+# Example: Using the Redis client
+from clusterpulse.db.redis import get_redis_client
+
+redis = get_redis_client()
+data = redis.get("some:key")
+```
+
+#### `models/`
+Pydantic models for request/response validation and data structures.
+
+**Files:**
+- `auth.py` - User, AuthStatus
+- `cluster.py` - Cluster, Node, Metrics, etc.
+
+**When to add here:**
+- New API request/response models
+- Data structures shared across layers
+
+```python
+# Example: Adding a new model
+class Workload(BaseModel):
+    name: str
+    namespace: str
+    replicas: int
+```
+
+#### `repositories/`
+Data access layer. These talk to Redis (or any datastore) and return Python objects.
+
+**Files:**
+- `cluster.py` - ClusterRepository with all cluster data operations
+
+**When to add here:**
+- New data access patterns
+- New CRUD operations
+- Complex Redis queries
+
+**Pattern:**
+```python
+class SomeRepository:
+    def __init__(self):
+        self.redis = get_redis_client()
+    
+    def get_something(self, id: str) -> Optional[Dict]:
+        data = self.redis.get(f"key:{id}")
+        return json.loads(data) if data else None
+```
+
+#### `services/`
+Business logic goes here. This is where you implement features, algorithms, calculations, etc.
+
+**Files:**
+- `rbac.py` - RBACEngine for authorization
+- `metrics.py` - FilteredMetricsCalculator for calculating filtered metrics
+
+**When to add here:**
+- Authorization logic
+- Complex calculations
+- Business rules
+- Data transformation
+
+**Pattern:**
+```python
+class MyService:
+    def __init__(self, redis_client, other_deps):
+        self.redis = redis_client
+        self.other = other_deps
+    
+    def do_complex_thing(self, params):
+        # Business logic here
+        pass
+```
+
+#### `api/v1/endpoints/`
+HTTP route handlers. Keep these thin - they should mostly just coordinate between services.
+
+**Files:**
+- `auth.py` - Authentication endpoints
+- `clusters.py` - Cluster management endpoints
+- `health.py` - Health check endpoints
+- `public.py` - Public API endpoints
+- `registries.py` - Registry endpoints
+
+**When to add here:**
+- New API endpoints
+- New HTTP handlers
+
+**Pattern:**
+```python
+@router.get("/{id}")
+async def get_something(
+    id: str,
+    user: User = Depends(get_current_user)
+):
+    # 1. Check authorization
+    await check_access(id, user)
+    
+    # 2. Get data from service
+    result = service.get_filtered_data(id, user)
+    
+    # 3. Return it
+    return result
+```
+
+**Keep endpoints thin:**
+- Don't put business logic here
+- Don't do complex calculations
+- Don't directly access Redis
+- Delegate to services
+
+#### `api/dependencies/`
+FastAPI dependency injection functions.
+
+**Files:**
+- `auth.py` - User extraction, group resolution
+
+**When to add here:**
+- Reusable dependencies
+- Common parameter validation
+- Shared authorization checks
+
+#### `api/middleware/`
+Request/response middleware.
+
+**Files:**
+- `auth.py` - AuthMiddleware
+- `logging.py` - LoggingMiddleware
+
+**When to add here:**
+- Request preprocessing
+- Response post-processing
+- Cross-cutting concerns
+
+### Data Flow Example
+
+Here's how a request flows through the layers:
+
+```python
+# 1. HTTP Request comes in
+GET /api/v1/clusters/prod-cluster/metrics
+
+# 2. Middleware processes it
+# - LoggingMiddleware logs the request
+# - AuthMiddleware checks OAuth headers
+
+# 3. Endpoint handler (api/v1/endpoints/clusters.py)
+@router.get("/{cluster_name}/metrics")
+async def get_cluster_metrics(cluster_name: str, user: User = Depends(get_current_user)):
+    # Thin handler - just coordinates
+    decision = await check_cluster_access(cluster_name, user)
+    principal = Principal(username=user.username, groups=user.groups)
+    
+    # 4. Service layer (services/metrics.py)
+    metrics = metrics_calculator.get_filtered_cluster_metrics(
+        cluster_name, principal
+    )
+    
+    return metrics
+
+# Inside metrics_calculator (service layer):
+def get_filtered_cluster_metrics(self, cluster_name, principal):
+    # 5. Repository layer (repositories/cluster.py)
+    base_metrics = self.repo.get_metrics(cluster_name)
+    
+    # Business logic - filtering
+    filtered = self.rbac.filter_resources(...)
+    
+    return self._calculate_metrics(filtered)
+
+# Inside repository:
+def get_metrics(self, cluster_name):
+    # 6. Database layer (db/redis.py)
+    data = self.redis.get(f"cluster:{cluster_name}:metrics")
+    return json.loads(data) if data else None
+```
 
 ## Understanding RBAC
 
-This is the most important part of the system. Every data access goes through RBAC filtering.
+RBAC is the most important part of the system. Every data access goes through RBAC filtering.
 
 ### Core Concepts
 
@@ -79,7 +303,7 @@ if decision.allowed:
 
 ### Filtering Resources
 
-**Always filter resources through the engine:**
+Always filter resources through the engine:
 
 ```python
 # DON'T do this:
@@ -103,15 +327,15 @@ The engine applies filters from policies (namespace patterns, node selectors, et
 
 ### Adding a New Endpoint
 
-1. **Create the route handler:**
+1. **Create the endpoint:**
 
 ```python
-# api/routes/clusters.py
+# api/v1/endpoints/clusters.py
 
 @router.get("/{cluster_name}/workloads")
 async def get_cluster_workloads(
     cluster_name: str,
-    user: User = Depends(get_user_with_groups)  # Gets user + groups
+    user: User = Depends(get_user_with_groups)
 ) -> List[Dict[str, Any]]:
     """Get workloads for a cluster."""
     
@@ -140,18 +364,9 @@ async def get_cluster_workloads(
     return filtered_workloads
 ```
 
-2. **Register the route** (if new router file):
+2. **Register the route** (if needed):
 
-```python
-# main.py
-from clusterpulse.api.routes import workloads
-
-app.include_router(
-    workloads.router,
-    prefix=f"{settings.api_prefix}/workloads",
-    tags=["workloads"]
-)
-```
+The route is already registered since it's in `api/v1/endpoints/clusters.py`. If you create a new router file, add it to `api/v1/router.py`.
 
 ### Adding a New Resource Type
 
@@ -160,7 +375,7 @@ If you need a new resource type (e.g., `ConfigMap`):
 1. **Add to `ResourceType` enum:**
 
 ```python
-# core/rbac_engine.py
+# services/rbac.py
 class ResourceType(str, Enum):
     CLUSTER = "cluster"
     NODE = "node"
@@ -168,14 +383,7 @@ class ResourceType(str, Enum):
     CONFIGMAP = "configmap"  # Add this
 ```
 
-2. **Add filter support in policies** (if needed):
-
-```python
-# In policy structure, add configmap_filter support
-# Update _extract_permissions_and_filters() if needed
-```
-
-3. **Use in routes:**
+2. **Use in endpoints:**
 
 ```python
 filtered_configmaps = rbac_engine.filter_resources(
@@ -186,36 +394,14 @@ filtered_configmaps = rbac_engine.filter_resources(
 )
 ```
 
-### Modifying RBAC Filtering Logic
-
-The filtering happens in `_should_show_resource()` in `rbac_engine.py`. 
-
-**Example: Add label-based filtering:**
-
-```python
-# rbac_engine.py
-
-def _should_show_resource(self, resource, resource_type, primary_filter, namespace_filter):
-    # Existing checks...
-    
-    # Add label filtering
-    if primary_filter and primary_filter.labels:
-        resource_labels = resource.get("labels", {})
-        for key, value in primary_filter.labels.items():
-            if resource_labels.get(key) != value:
-                return False  # Label mismatch
-    
-    return True
-```
-
 ### Adding Metrics Calculations
 
-Metrics are calculated in `api/routes/cluster_metrics.py`. The `FilteredMetricsCalculator` class handles this.
+Metrics are calculated in `services/metrics.py`. The `FilteredMetricsCalculator` class handles this.
 
 **Example: Add new metric:**
 
 ```python
-# cluster_metrics.py
+# services/metrics.py
 
 def _calculate_filtered_metrics_via_rbac(self, cluster_name, principal, base_metrics, include_details):
     filtered = base_metrics.copy()
@@ -254,7 +440,7 @@ def get_cluster_workloads(self, cluster_name: str) -> List[Dict[str, Any]]:
         return []
 ```
 
-Then use in routes:
+Then use in endpoints:
 
 ```python
 from clusterpulse.repositories.cluster import ClusterRepository
@@ -273,7 +459,7 @@ For new endpoints, create a test file:
 # tests/integration/api/test_workloads.py
 
 import pytest
-from clusterpulse.core.rbac_engine import Principal
+from clusterpulse.services.rbac import Principal
 
 @pytest.mark.integration
 class TestWorkloadsEndpoint:
@@ -386,7 +572,7 @@ results = pipeline.execute()
 
 ## Code Style
 
-We use `black` for formatting and `ruff` for linting:
+We use `black` for formatting, `autoflake` for removing unused imports and `pylint` for linting:
 
 ```bash
 # Format code
@@ -395,10 +581,7 @@ autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in
 isort <path>
 
 # Check linting
-pylint check <path>
-
-# Type checking
-mypy <path>
+pylint clusterpulse/
 ```
 
 **Import order:**
@@ -414,8 +597,9 @@ from typing import List, Dict
 from fastapi import APIRouter, Depends
 from redis import Redis
 
-from clusterpulse.core.rbac_engine import RBACEngine
-from clusterpulse.models.cluster import ClusterMetrics
+from clusterpulse.config.settings import settings
+from clusterpulse.services.rbac import RBACEngine
+from clusterpulse.models.cluster import Cluster
 ```
 
 ## Pull Request Process
@@ -429,11 +613,9 @@ from clusterpulse.models.cluster import ClusterMetrics
 3. **Before submitting:**
    ```bash
    # Format and lint
-   black <path>
-   autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place <path>
-   isort <path>
-
-   ruff check . --fix
+   black clusterpulse/
+   autoflake...
+   isort...
    
    # Run tests
    pytest
@@ -523,10 +705,9 @@ class WorkloadFilter(BaseModel):
 
 ## Getting Help
 
-- Check existing code in `api/routes/clusters.py` for patterns
+- Check existing code in `api/v1/endpoints/clusters.py` for patterns
 - Look at tests in `tests/integration/api/` for examples
-- Read the RBAC engine code in `core/rbac_engine.py` to understand filtering
-- Review the test guide in `docs/api/tests.md`
+- Read the RBAC engine code in `services/rbac.py` to understand filtering
 
 ## Project-Specific Notes
 

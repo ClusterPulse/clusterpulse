@@ -6,12 +6,14 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
 from clusterpulse.api.middleware.auth import AuthMiddleware
 from clusterpulse.api.middleware.logging import LoggingMiddleware
-from clusterpulse.api.routes import auth, clusters, health, public, registries
-from clusterpulse.core.config import settings
+from clusterpulse.api.v1.endpoints import (auth, clusters, health, public,
+                                           registries)
+from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger, setup_logging
-from clusterpulse.core.redis_client import close_redis_connection, get_redis_client
+from clusterpulse.db.redis import close_redis_connection, get_redis_client
 
 setup_logging()
 logger = get_logger(__name__)

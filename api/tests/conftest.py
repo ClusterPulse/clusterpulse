@@ -8,8 +8,8 @@ import pytest
 from fakeredis import FakeStrictRedis
 from fastapi.testclient import TestClient
 
-from clusterpulse.core.rbac_engine import RBACEngine
 from clusterpulse.models.auth import User
+from clusterpulse.services.rbac import RBACEngine
 
 
 @pytest.fixture
@@ -480,9 +480,7 @@ def populate_redis_with_cluster(fake_redis):
 def test_client(monkeypatch, fake_redis, rbac_engine):
     """Provide a test client with mocked dependencies."""
     # Mock Redis client everywhere
-    monkeypatch.setattr(
-        "clusterpulse.core.redis_client.get_redis_client", lambda: fake_redis
-    )
+    monkeypatch.setattr("clusterpulse.db.redis.get_redis_client", lambda: fake_redis)
     monkeypatch.setattr(
         "clusterpulse.api.dependencies.auth.get_redis_client", lambda: fake_redis
     )
@@ -491,18 +489,21 @@ def test_client(monkeypatch, fake_redis, rbac_engine):
     monkeypatch.setattr("clusterpulse.api.dependencies.auth.rbac_engine", rbac_engine)
 
     # Create metrics calculator with our instances
-    from clusterpulse.api.routes.cluster_metrics import \
-        FilteredMetricsCalculator
+    from clusterpulse.services.metrics import FilteredMetricsCalculator
 
     metrics_calc = FilteredMetricsCalculator(fake_redis, rbac_engine)
 
-    monkeypatch.setattr("clusterpulse.api.routes.clusters.rbac_engine", rbac_engine)
     monkeypatch.setattr(
-        "clusterpulse.api.routes.clusters.metrics_calculator", metrics_calc
+        "clusterpulse.api.v1.endpoints.clusters.rbac_engine", rbac_engine
     )
-    monkeypatch.setattr("clusterpulse.api.routes.clusters.redis_client", fake_redis)
-    monkeypatch.setattr("clusterpulse.api.routes.auth.rbac_engine", rbac_engine)
-    monkeypatch.setattr("clusterpulse.api.routes.auth.redis_client", fake_redis)
+    monkeypatch.setattr(
+        "clusterpulse.api.v1.endpoints.clusters.metrics_calculator", metrics_calc
+    )
+    monkeypatch.setattr(
+        "clusterpulse.api.v1.endpoints.clusters.redis_client", fake_redis
+    )
+    monkeypatch.setattr("clusterpulse.api.v1.endpoints.auth.rbac_engine", rbac_engine)
+    monkeypatch.setattr("clusterpulse.api.v1.endpoints.auth.redis_client", fake_redis)
 
     # Mock Kubernetes client (optional)
     monkeypatch.setattr("clusterpulse.api.dependencies.auth.k8s_dynamic_client", None)
@@ -563,8 +564,8 @@ def mock_datetime(monkeypatch):
 @pytest.fixture(autouse=True)
 def reset_lru_caches():
     """Reset LRU caches between tests."""
-    from clusterpulse.core.config import get_settings
-    from clusterpulse.core.redis_client import get_redis_client, get_redis_pool
+    from clusterpulse.config.settings import get_settings
+    from clusterpulse.db.redis import get_redis_client, get_redis_pool
 
     get_settings.cache_clear()
     get_redis_client.cache_clear()

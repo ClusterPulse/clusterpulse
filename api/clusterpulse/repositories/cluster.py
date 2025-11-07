@@ -7,7 +7,8 @@ from typing import Any, Dict, List, Optional
 
 import redis
 from redis.exceptions import RedisError
-from clusterpulse.core.config import settings
+
+from clusterpulse.config.settings import settings
 
 logger = logging.getLogger(__name__)
 

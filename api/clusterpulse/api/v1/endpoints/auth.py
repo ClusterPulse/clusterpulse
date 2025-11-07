@@ -9,14 +9,16 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import RedirectResponse
+
 from clusterpulse.api.dependencies.auth import (get_current_user,
-                                       get_optional_current_user,
-                                       get_user_with_groups, rbac_engine)
-from clusterpulse.core.config import settings
+                                                get_optional_current_user,
+                                                get_user_with_groups,
+                                                rbac_engine)
+from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger
-from clusterpulse.core.rbac_engine import Principal, Resource, ResourceType
-from clusterpulse.core.redis_client import get_redis_client
+from clusterpulse.db.redis import get_redis_client
 from clusterpulse.models.auth import AuthStatus, User
+from clusterpulse.services.rbac import Principal, Resource, ResourceType
 
 logger = get_logger(__name__)
 redis_client = get_redis_client()

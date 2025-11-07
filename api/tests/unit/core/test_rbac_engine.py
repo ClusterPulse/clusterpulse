@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from clusterpulse.core.rbac_engine import (Action, Decision, Filter, Principal,
-                                           RBACEngine, Request, Resource,
-                                           ResourceType, Visibility)
+from clusterpulse.services.rbac import (Action, Decision, Filter, Principal,
+                                        RBACEngine, Request, Resource,
+                                        ResourceType, Visibility)
 
 
 class TestPrincipal:

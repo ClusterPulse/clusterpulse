@@ -7,15 +7,17 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+
 from clusterpulse.api.dependencies.auth import (AuthorizationError,
-                                       get_user_with_groups, rbac_engine)
-from clusterpulse.api.routes.cluster_metrics import create_metrics_calculator
+                                                get_user_with_groups,
+                                                rbac_engine)
 from clusterpulse.core.logging import get_logger
-from clusterpulse.core.rbac_engine import Action, Principal, RBACDecision
-from clusterpulse.core.rbac_engine import Request as RBACRequest
-from clusterpulse.core.rbac_engine import Resource, ResourceType
-from clusterpulse.core.redis_client import get_redis_client
+from clusterpulse.db.redis import get_redis_client
 from clusterpulse.models.auth import User
+from clusterpulse.services.metrics import create_metrics_calculator
+from clusterpulse.services.rbac import Action, Principal, RBACDecision
+from clusterpulse.services.rbac import Request as RBACRequest
+from clusterpulse.services.rbac import Resource, ResourceType
 
 logger = get_logger(__name__)
 redis_client = get_redis_client()

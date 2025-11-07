@@ -4,8 +4,8 @@ from functools import lru_cache
 
 import redis
 
-from .config import settings
-from .logging import get_logger
+from clusterpulse.config.settings import settings
+from clusterpulse.core.logging import get_logger
 
 logger = get_logger(__name__)
 

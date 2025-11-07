@@ -4,8 +4,9 @@ import time
 from typing import Callable
 
 from fastapi import Request, Response
-from clusterpulse.core.logging import get_logger, log_event
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from clusterpulse.core.logging import get_logger, log_event
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 "request_completed",
                 status_code=response.status_code,
                 duration_seconds=duration,
-                **request_info
+                **request_info,
             )
 
             # Add timing header
@@ -65,6 +66,6 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 error=str(e),
                 error_type=type(e).__name__,
                 duration_seconds=duration,
-                **request_info
+                **request_info,
             )
             raise
