@@ -8,8 +8,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 import redis
+
 from clusterpulse.core.logging import get_logger
-from clusterpulse.core.rbac_engine import Principal, RBACEngine, ResourceType
+from clusterpulse.services.rbac import Principal, RBACEngine, ResourceType
 
 logger = get_logger(__name__)
 
@@ -45,9 +46,9 @@ class FilteredMetricsCalculator:
         if not has_detailed:
             # No detailed data - return base metrics with a note
             base_metrics["filtered"] = False
-            base_metrics["filter_note"] = (
-                "Detailed filtering not available - showing total counts"
-            )
+            base_metrics[
+                "filter_note"
+            ] = "Detailed filtering not available - showing total counts"
             return base_metrics
 
         # Calculate filtered metrics using RBAC engine

@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     """Application settings with RBAC configuration."""
 
     # Application
-    app_name: str = "OpenShift Cluster Monitor"
-    app_version: str = "0.1.0"
+    app_name: str = "ClusterPulse"
+    app_version: str = "0.2.1"
     environment: Environment = Field(Environment.DEVELOPMENT, env="ENVIRONMENT")
     debug: bool = Field(False, env="DEBUG")
 

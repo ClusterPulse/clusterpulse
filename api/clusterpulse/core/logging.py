@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Any, Dict
 
 from pythonjsonlogger import jsonlogger
-from clusterpulse.core.config import settings
+
+from clusterpulse.config.settings import settings
 
 
 class CustomJsonFormatter(jsonlogger.JsonFormatter):

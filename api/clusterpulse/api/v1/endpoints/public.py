@@ -6,14 +6,16 @@ Returns minimal cluster information for anonymous users.
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from clusterpulse.api.dependencies.auth import get_optional_current_user, rbac_engine
-from clusterpulse.core.config import settings
+
+from clusterpulse.api.dependencies.auth import (get_optional_current_user,
+                                                rbac_engine)
+from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger
-from clusterpulse.core.rbac_engine import Action, Principal
-from clusterpulse.core.rbac_engine import Request as RBACRequest
-from clusterpulse.core.rbac_engine import Resource, ResourceType
-from clusterpulse.core.redis_client import get_redis_client
+from clusterpulse.db.redis import get_redis_client
 from clusterpulse.models.auth import User
+from clusterpulse.services.rbac import Action, Principal
+from clusterpulse.services.rbac import Request as RBACRequest
+from clusterpulse.services.rbac import Resource, ResourceType
 
 logger = get_logger(__name__)
 redis_client = get_redis_client()

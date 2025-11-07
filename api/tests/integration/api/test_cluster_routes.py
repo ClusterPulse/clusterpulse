@@ -191,6 +191,7 @@ class TestClusterDetailEndpoint:
 
     def test_get_cluster_not_found(self, authenticated_client, fake_redis):
         """Test getting non-existent cluster returns 404."""
+
         def mock_resolve_groups(username, email=None):
             return ["developers"]
 
@@ -406,9 +407,7 @@ class TestClusterNamespacesEndpoint:
 
         auth_module.resolve_groups_realtime = mock_resolve_groups
 
-        response = authenticated_client.get(
-            "/api/v1/clusters/dev-cluster-1/namespaces"
-        )
+        response = authenticated_client.get("/api/v1/clusters/dev-cluster-1/namespaces")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -502,9 +501,7 @@ class TestClusterOperatorsEndpoint:
 
         auth_module.resolve_groups_realtime = mock_resolve_groups
 
-        response = authenticated_client.get(
-            "/api/v1/clusters/dev-cluster-1/operators"
-        )
+        response = authenticated_client.get("/api/v1/clusters/dev-cluster-1/operators")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -612,7 +609,9 @@ class TestClusterMetricsEndpoint:
             "subjects": [{"type": "Group", "name": "limited"}],
             "cluster_rules": [
                 {
-                    "cluster_selector": {"matchPattern": "other-.*"},  # Doesn't match dev-cluster-1
+                    "cluster_selector": {
+                        "matchPattern": "other-.*"
+                    },  # Doesn't match dev-cluster-1
                     "permissions": {"view": True},
                 }
             ],
@@ -663,7 +662,10 @@ class TestAuthenticationFlow:
         response = test_client.get("/api/v1/clusters")
 
         # Development mode provides default user
-        assert response.status_code in [status.HTTP_200_OK, status.HTTP_401_UNAUTHORIZED]
+        assert response.status_code in [
+            status.HTTP_200_OK,
+            status.HTTP_401_UNAUTHORIZED,
+        ]
 
     def test_authenticated_but_no_groups(self, test_client, fake_redis):
         """Test authenticated user with no group memberships."""
