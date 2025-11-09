@@ -1,6 +1,5 @@
 """
-Authentication routes with direct RBAC engine integration.
-No compatibility wrappers - clean implementation.
+Authentication routes
 """
 
 import json
@@ -12,13 +11,14 @@ from fastapi.responses import RedirectResponse
 
 from clusterpulse.api.dependencies.auth import (get_current_user,
                                                 get_optional_current_user,
-                                                get_user_with_groups,
-                                                rbac_engine)
+                                                get_user_with_groups)
+from clusterpulse.api.dependencies.rbac import (RBACContext, get_rbac_context,
+                                                get_rbac_engine)
 from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger
 from clusterpulse.db.redis import get_redis_client
 from clusterpulse.models.auth import AuthStatus, User
-from clusterpulse.services.rbac import Principal, Resource, ResourceType
+from clusterpulse.services.rbac import Resource, ResourceType
 
 logger = get_logger(__name__)
 redis_client = get_redis_client()
@@ -70,16 +70,12 @@ async def get_me(user: User = Depends(get_user_with_groups)) -> User:
     description="Get current user's effective permissions",
 )
 async def get_user_permissions(
-    user: User = Depends(get_user_with_groups),
+    rbac: RBACContext = Depends(get_rbac_context),
 ) -> Dict[str, Any]:
-    """
-    Get current user's permissions using the RBAC engine.
-    """
-    # Create principal for RBAC engine
-    principal = Principal(username=user.username, email=user.email, groups=user.groups)
+    """Get current user's permissions using the RBAC engine."""
 
     # Get accessible clusters
-    accessible_clusters = rbac_engine.get_accessible_clusters(principal)
+    accessible_clusters = rbac.get_accessible_clusters()
 
     # Build detailed permissions for each cluster
     cluster_permissions = {}
@@ -90,8 +86,8 @@ async def get_user_permissions(
             type=ResourceType.CLUSTER, name=cluster_name, cluster=cluster_name
         )
 
-        # Get all permissions for this cluster
-        permissions = rbac_engine.get_permissions(principal, resource)
+        # Get all permissions for this cluster using RBAC engine
+        permissions = get_rbac_engine().get_permissions(rbac.principal, resource)
 
         cluster_permissions[cluster_name] = {
             "permissions": [action.value for action in permissions],
@@ -99,7 +95,11 @@ async def get_user_permissions(
         }
 
     response = {
-        "user": {"username": user.username, "email": user.email, "groups": user.groups},
+        "user": {
+            "username": rbac.user.username,
+            "email": rbac.user.email,
+            "groups": rbac.user.groups,
+        },
         "summary": {
             "total_clusters": len(accessible_clusters),
             "accessible_clusters": len(accessible_clusters),
@@ -111,7 +111,10 @@ async def get_user_permissions(
 
     logger.info(
         "User permissions retrieved",
-        extra={"user_id": user.id, "accessible_clusters": len(accessible_clusters)},
+        extra={
+            "user_id": rbac.user.id,
+            "accessible_clusters": len(accessible_clusters),
+        },
     )
 
     return response
@@ -125,9 +128,8 @@ async def get_user_permissions(
 async def get_applied_policies(
     user: User = Depends(get_user_with_groups),
 ) -> Dict[str, Any]:
-    """
-    Get detailed information about all policies that apply to the user.
-    """
+    """Get detailed information about all policies that apply to the user."""
+
     applicable_policies = []
 
     # Get user-specific policies
@@ -175,29 +177,23 @@ async def get_applied_policies(
 
 @router.post("/logout", summary="Logout", description="Logout the current user")
 async def logout(
-    response: Response, user: Optional[User] = Depends(get_optional_current_user)
+    response: Response,
+    rbac: RBACContext = Depends(get_rbac_context),
 ) -> dict:
     """
     Logout endpoint.
 
     With OAuth proxy, this typically redirects to the OAuth provider's logout URL.
     """
-    if user:
-        # Clear cached data for the user
-        principal = Principal(
-            username=user.username,
-            email=user.email,
-            groups=user.groups if user.groups else [],
-        )
 
-        # Clear RBAC cache for this user
-        rbac_engine.clear_cache(principal)
+    # Clear RBAC cache for this user
+    get_rbac_engine().clear_cache(rbac.principal)
 
-        # Clear group cache
-        redis_client.delete(f"user:groups:{user.username}")
-        redis_client.delete(f"user:permissions:{user.username}")
+    # Clear group cache
+    redis_client.delete(f"user:groups:{rbac.user.username}")
+    redis_client.delete(f"user:permissions:{rbac.user.username}")
 
-        logger.info("User logout", extra={"user_id": user.id})
+    logger.info("User logout", extra={"user_id": rbac.user.id})
 
     # In production with OAuth proxy, redirect to OAuth logout
     if settings.oauth_proxy_enabled and settings.environment == "production":
@@ -236,25 +232,22 @@ async def login_redirect():
     summary="Clear Cache",
     description="Clear RBAC cache for the current user",
 )
-async def clear_user_cache(user: User = Depends(get_current_user)) -> Dict[str, Any]:
+async def clear_user_cache(
+    rbac: RBACContext = Depends(get_rbac_context),
+) -> Dict[str, Any]:
     """Clear RBAC and group cache for the current user."""
-    principal = Principal(
-        username=user.username,
-        email=user.email,
-        groups=user.groups if user.groups else [],
-    )
 
     # Clear RBAC cache
-    rbac_count = rbac_engine.clear_cache(principal)
+    rbac_count = get_rbac_engine().clear_cache(rbac.principal)
 
     # Clear group cache
-    redis_client.delete(f"user:groups:{user.username}")
-    redis_client.delete(f"user:permissions:{user.username}")
+    redis_client.delete(f"user:groups:{rbac.user.username}")
+    redis_client.delete(f"user:permissions:{rbac.user.username}")
 
-    logger.info(f"Cleared cache for user {user.username}")
+    logger.info(f"Cleared cache for user {rbac.user.username}")
 
     return {
         "message": "Cache cleared successfully",
         "rbac_entries_cleared": rbac_count,
-        "user": user.username,
+        "user": rbac.user.username,
     }
