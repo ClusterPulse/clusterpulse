@@ -45,6 +45,7 @@ clusterpulse/
 └── api/                 HTTP layer
     ├── dependencies/    FastAPI dependencies
     ├── middleware/      Request/response middleware
+    ├── responses/       Response builders for consistent API responses
     └── v1/              API version 1
         ├── endpoints/   Route handlers
         └── router.py    Router assembly
@@ -127,7 +128,11 @@ class Workload(BaseModel):
 Data access layer. These talk to Redis (or any datastore) and return Python objects.
 
 **Files:**
-- `cluster.py` - ClusterRepository with all cluster data operations
+- `cluster.py` - Legacy ClusterRepository
+- `redis_base.py` - Base repository classes with optimized patterns
+  - `RedisRepository` - Base class with common Redis operations
+  - `ClusterDataRepository` - Cluster-specific data access
+  - `RegistryDataRepository` - Registry-specific data access
 
 **When to add here:**
 - New data access patterns
@@ -136,13 +141,21 @@ Data access layer. These talk to Redis (or any datastore) and return Python obje
 
 **Pattern:**
 ```python
-class SomeRepository:
-    def __init__(self):
-        self.redis = get_redis_client()
-    
-    def get_something(self, id: str) -> Optional[Dict]:
-        data = self.redis.get(f"key:{id}")
-        return json.loads(data) if data else None
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+
+# Use the repository
+repo = ClusterDataRepository(redis_client)
+
+# Get all cluster data in one batch operation
+bundle = repo.get_cluster_bundle(cluster_name)
+spec = bundle['spec']
+status = bundle['status']
+metrics = bundle['metrics']
+info = bundle['info']
+
+# Get specific resources
+nodes = repo.get_cluster_nodes(cluster_name)
+operators = repo.get_cluster_operators(cluster_name)
 ```
 
 #### `services/`
@@ -164,7 +177,7 @@ class MyService:
     def __init__(self, redis_client, other_deps):
         self.redis = redis_client
         self.other = other_deps
-    
+
     def do_complex_thing(self, params):
         # Business logic here
         pass
@@ -186,37 +199,66 @@ HTTP route handlers. Keep these thin - they should mostly just coordinate betwee
 
 **Pattern:**
 ```python
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+from clusterpulse.api.responses.cluster import ClusterResponseBuilder
+
+repo = ClusterDataRepository(redis_client)
+
 @router.get("/{id}")
 async def get_something(
     id: str,
-    user: User = Depends(get_current_user)
+    rbac: RBACContext = Depends(get_rbac_context)
 ):
-    # 1. Check authorization
-    await check_access(id, user)
+    # 1. Check authorization (1 line)
+    rbac.check_cluster_access(id)
     
-    # 2. Get data from service
-    result = service.get_filtered_data(id, user)
+    # 2. Get data from repository (1 line)
+    bundle = repo.get_cluster_bundle(id)
     
-    # 3. Return it
-    return result
+    # 3. Build and return response (3-5 lines)
+    return (ClusterResponseBuilder(id)
+        .with_spec(bundle['spec'])
+        .with_status(bundle['status'])
+        .build())
 ```
 
 **Keep endpoints thin:**
 - Don't put business logic here
 - Don't do complex calculations
 - Don't directly access Redis
-- Delegate to services
+- Delegate to repositories and services
 
 #### `api/dependencies/`
 FastAPI dependency injection functions.
 
 **Files:**
 - `auth.py` - User extraction, group resolution
+- `rbac.py` - RBAC context and utilities
 
 **When to add here:**
 - Reusable dependencies
 - Common parameter validation
 - Shared authorization checks
+
+**Key Components:**
+- `RBACContext` - Provides all RBAC operations for endpoints
+- `get_rbac_context()` - FastAPI dependency that injects RBAC context
+- `get_rbac_engine()` - Singleton RBAC engine
+
+```python
+# Using RBACContext in endpoints
+@router.get("/resource")
+async def get_resource(rbac: RBACContext = Depends(get_rbac_context)):
+    # Check access
+    rbac.check_cluster_access(cluster_name)
+    
+    # Filter resources
+    filtered = rbac.filter_resources(items, ResourceType.NODE, cluster_name)
+    
+    # Get accessible clusters
+    clusters = rbac.get_accessible_clusters()
+```
 
 #### `api/middleware/`
 Request/response middleware.
@@ -229,6 +271,37 @@ Request/response middleware.
 - Request preprocessing
 - Response post-processing
 - Cross-cutting concerns
+
+#### `api/responses/`
+Response builder classes for consistent API responses.
+
+**Files:**
+- `cluster.py` - Cluster response builders
+- `registry.py` - Registry response builders
+
+**When to add here:**
+- New response builders for new resource types
+- Shared response formatting logic
+
+**Pattern:**
+```python
+from clusterpulse.api.responses.cluster import ClusterResponseBuilder
+
+# Build a cluster detail response
+return (ClusterResponseBuilder(cluster_name)
+    .with_spec(spec)
+    .with_status(status)
+    .with_info(info)
+    .with_metrics(metrics, decision)
+    .with_operator_count(count)
+    .build())
+```
+
+**Benefits:**
+- Consistent response format across endpoints
+- Easy to add new fields
+- Handles fallbacks and normalization
+- Type-safe and IDE-friendly
 
 ### Data Flow Example
 
@@ -244,22 +317,24 @@ GET /api/v1/clusters/prod-cluster/metrics
 
 # 3. Endpoint handler (api/v1/endpoints/clusters.py)
 @router.get("/{cluster_name}/metrics")
-async def get_cluster_metrics(cluster_name: str, user: User = Depends(get_current_user)):
-    # Thin handler - just coordinates
-    decision = await check_cluster_access(cluster_name, user)
-    principal = Principal(username=user.username, groups=user.groups)
+async def get_cluster_metrics(
+    cluster_name: str, 
+    rbac: RBACContext = Depends(get_rbac_context)
+):
+    # Check access (1 line - RBAC context handles everything)
+    decision = rbac.check_cluster_access(cluster_name, Action.VIEW_METRICS)
     
     # 4. Service layer (services/metrics.py)
     metrics = metrics_calculator.get_filtered_cluster_metrics(
-        cluster_name, principal
+        cluster_name, rbac.principal
     )
     
     return metrics
 
 # Inside metrics_calculator (service layer):
 def get_filtered_cluster_metrics(self, cluster_name, principal):
-    # 5. Repository layer (repositories/cluster.py)
-    base_metrics = self.repo.get_metrics(cluster_name)
+    # 5. Repository layer (repositories/redis_base.py)
+    base_metrics = self.repo.get_cluster_metrics(cluster_name)
     
     # Business logic - filtering
     filtered = self.rbac.filter_resources(...)
@@ -267,10 +342,9 @@ def get_filtered_cluster_metrics(self, cluster_name, principal):
     return self._calculate_metrics(filtered)
 
 # Inside repository:
-def get_metrics(self, cluster_name):
+def get_cluster_metrics(self, cluster_name):
     # 6. Database layer (db/redis.py)
-    data = self.redis.get(f"cluster:{cluster_name}:metrics")
-    return json.loads(data) if data else None
+    return self.get_json(f"cluster:{cluster_name}:metrics")
 ```
 
 ## Understanding RBAC
@@ -301,6 +375,45 @@ if decision.allowed:
     # Proceed
 ```
 
+### Using RBACContext
+
+The `RBACContext` class simplifies RBAC operations in endpoints:
+
+```python
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+
+@router.get("/{cluster_name}")
+async def get_cluster(
+    cluster_name: str,
+    rbac: RBACContext = Depends(get_rbac_context)
+):
+    # Check access - raises AuthorizationError if denied
+    decision = rbac.check_cluster_access(cluster_name)
+    
+    # Check specific permissions
+    if not decision.can(Action.VIEW_METRICS):
+        # Handle case where metrics viewing is not allowed
+        pass
+    
+    # Filter resources
+    nodes = get_all_nodes()
+    filtered_nodes = rbac.filter_resources(nodes, ResourceType.NODE, cluster_name)
+    
+    # Get accessible clusters
+    accessible = rbac.get_accessible_clusters()
+    
+    return filtered_nodes
+```
+
+**RBACContext provides:**
+- `check_cluster_access(cluster_name, action=Action.VIEW)` - Check and raise if denied
+- `filter_resources(resources, resource_type, cluster)` - Filter resources through RBAC
+- `get_accessible_clusters()` - Get all accessible cluster names
+- `has_permission(action, resource)` - Check specific permission
+- `principal` - The user's Principal object
+- `user` - The authenticated User object
+- `rbac` - The RBAC engine instance
+
 ### Filtering Resources
 
 Always filter resources through the engine:
@@ -310,15 +423,21 @@ Always filter resources through the engine:
 all_nodes = get_all_nodes()
 return all_nodes  # ❌ Bypasses RBAC
 
-# DO this:
+# DO this with RBACContext:
 all_nodes = get_all_nodes()
+filtered_nodes = rbac.filter_resources(all_nodes, ResourceType.NODE, cluster_name)
+return filtered_nodes  # ✅ RBAC enforced
+
+# Or without RBACContext (when not in an endpoint):
+from clusterpulse.api.dependencies.rbac import get_rbac_engine
+
+rbac_engine = get_rbac_engine()
 filtered_nodes = rbac_engine.filter_resources(
     principal=principal,
     resources=all_nodes,
     resource_type=ResourceType.NODE,
     cluster=cluster_name
 )
-return filtered_nodes  # ✅ RBAC enforced
 ```
 
 The engine applies filters from policies (namespace patterns, node selectors, etc.) and removes resources the user shouldn't see.
@@ -327,46 +446,180 @@ The engine applies filters from policies (namespace patterns, node selectors, et
 
 ### Adding a New Endpoint
 
-1. **Create the endpoint:**
+1. **Create the endpoint using the new patterns:**
 
 ```python
 # api/v1/endpoints/clusters.py
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+from clusterpulse.api.responses.cluster import ClusterResponseBuilder
+
+repo = ClusterDataRepository(redis_client)
 
 @router.get("/{cluster_name}/workloads")
 async def get_cluster_workloads(
     cluster_name: str,
-    user: User = Depends(get_user_with_groups)
+    rbac: RBACContext = Depends(get_rbac_context)
 ) -> List[Dict[str, Any]]:
     """Get workloads for a cluster."""
     
-    # 1. Check cluster access
-    await check_cluster_access(cluster_name, user, Action.VIEW)
+    # 1. Check cluster access (1 line)
+    rbac.check_cluster_access(cluster_name)
     
-    # 2. Create principal for RBAC
-    principal = Principal(
-        username=user.username,
-        email=user.email,
-        groups=user.groups
-    )
+    # 2. Get raw data from repository (1 line)
+    workloads = repo.get_cluster_resource_list(cluster_name, "workloads")
     
-    # 3. Get raw data from Redis
-    workloads_data = redis_client.get(f"cluster:{cluster_name}:workloads")
-    workloads = json.loads(workloads_data) if workloads_data else []
-    
-    # 4. Filter through RBAC
-    filtered_workloads = rbac_engine.filter_resources(
-        principal=principal,
-        resources=workloads,
-        resource_type=ResourceType.POD,  # Use POD for namespace-scoped resources
-        cluster=cluster_name
+    # 3. Filter through RBAC (1 line)
+    filtered_workloads = rbac.filter_resources(
+        workloads, 
+        ResourceType.POD,  # Use POD for namespace-scoped resources
+        cluster_name
     )
     
     return filtered_workloads
 ```
 
+**Total: ~10 lines of actual logic**
+
 2. **Register the route** (if needed):
 
 The route is already registered since it's in `api/v1/endpoints/clusters.py`. If you create a new router file, add it to `api/v1/router.py`.
+
+### Using Response Builders
+
+Response builders provide consistent formatting and handle fallbacks:
+
+```python
+from clusterpulse.api.responses.cluster import ClusterResponseBuilder
+
+@router.get("/{cluster_name}")
+async def get_cluster(
+    cluster_name: str,
+    rbac: RBACContext = Depends(get_rbac_context)
+):
+    decision = rbac.check_cluster_access(cluster_name)
+    
+    # Get data in one batch
+    bundle = repo.get_cluster_bundle(cluster_name)
+    
+    # Build response with builder pattern
+    builder = ClusterResponseBuilder(cluster_name)
+    builder.with_spec(bundle['spec'])
+    builder.with_status(bundle['status'])
+    builder.with_info(bundle['info'])
+    
+    # Conditionally add metrics
+    if decision.can(Action.VIEW_METRICS):
+        builder.with_metrics(bundle['metrics'], decision)
+    
+    return builder.build()
+```
+
+**Or using method chaining:**
+
+```python
+return (ClusterResponseBuilder(cluster_name)
+    .with_spec(bundle['spec'])
+    .with_status(bundle['status'])
+    .with_info(bundle['info'])
+    .with_metrics(bundle['metrics'], decision)
+    .with_operator_count(operator_count)
+    .build())
+```
+
+**Benefits:**
+- Automatic fallbacks (missing spec/status gets defaults)
+- Consistent field naming (displayName normalization)
+- Easy to extend (add new methods)
+- Type-safe
+- Self-documenting code
+
+### Creating a New Response Builder
+
+If you need a builder for a new resource type:
+
+```python
+# api/responses/workload.py
+
+class WorkloadResponseBuilder:
+    """Builder for workload response objects."""
+    
+    def __init__(self, workload_name: str):
+        self.data = {"name": workload_name}
+    
+    def with_spec(self, spec: Optional[Dict]) -> "WorkloadResponseBuilder":
+        """Add spec data."""
+        if spec:
+            self.data["spec"] = spec
+            self.data["replicas"] = spec.get("replicas", 1)
+        return self
+    
+    def with_status(self, status: Optional[Dict]) -> "WorkloadResponseBuilder":
+        """Add status with fallback."""
+        self.data["status"] = status or {"state": "unknown"}
+        return self
+    
+    def build(self) -> Dict[str, Any]:
+        """Build and return the final response."""
+        return self.data
+```
+
+### Using Repositories
+
+Repositories provide optimized data access with batch operations:
+
+```python
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+
+repo = ClusterDataRepository(redis_client)
+
+# Get all cluster data in one optimized batch operation
+bundle = repo.get_cluster_bundle(cluster_name)
+# Returns: {'spec': ..., 'status': ..., 'metrics': ..., 'info': ...}
+
+# Get specific resources
+nodes = repo.get_cluster_nodes(cluster_name)
+operators = repo.get_cluster_operators(cluster_name)
+namespaces = repo.get_cluster_namespaces(cluster_name)
+
+# Get specific resource types (pods, deployments, etc.)
+pods = repo.get_cluster_resource_list(cluster_name, "pods")
+deployments = repo.get_cluster_resource_list(cluster_name, "deployments")
+
+# Get node details
+node = repo.get_cluster_node(cluster_name, node_name)
+conditions = repo.get_node_conditions(cluster_name, node_name)
+```
+
+**Repository Methods:**
+
+**ClusterDataRepository:**
+- `get_cluster_bundle(cluster_name)` - Get spec/status/metrics/info in one batch
+- `get_cluster_spec(cluster_name)` - Get cluster specification
+- `get_cluster_status(cluster_name)` - Get cluster status
+- `get_cluster_metrics(cluster_name)` - Get cluster metrics
+- `get_cluster_info(cluster_name)` - Get cluster info (version, console URL, etc.)
+- `get_cluster_operators(cluster_name)` - Get operators list
+- `get_cluster_namespaces(cluster_name)` - Get namespace list
+- `get_cluster_nodes(cluster_name)` - Get all nodes
+- `get_cluster_node(cluster_name, node_name)` - Get specific node
+- `get_cluster_resource_list(cluster_name, resource_type)` - Get pods/deployments/etc.
+- `get_cluster_alerts(cluster_name)` - Get alerts
+- `get_cluster_events(cluster_name, limit)` - Get events
+
+**RegistryDataRepository:**
+- `batch_get_registry_bundles(registry_names)` - Get multiple registry bundles in one batch
+- `get_registry_bundle(registry_name)` - Get status and spec
+- `get_all_registry_names()` - Get all registry names
+- `get_registry_status(registry_name)` - Get registry status
+- `get_registry_spec(registry_name)` - Get registry spec
+
+**Why use repositories:**
+- Optimized batch operations (1 Redis call instead of N)
+- Consistent error handling
+- Type hints for return values
+- Centralized data access patterns
+- Easy to test (mock the repository)
 
 ### Adding a New Resource Type
 
@@ -386,11 +639,10 @@ class ResourceType(str, Enum):
 2. **Use in endpoints:**
 
 ```python
-filtered_configmaps = rbac_engine.filter_resources(
-    principal=principal,
-    resources=configmaps,
-    resource_type=ResourceType.CONFIGMAP,
-    cluster=cluster_name
+filtered_configmaps = rbac.filter_resources(
+    configmaps, 
+    ResourceType.CONFIGMAP, 
+    cluster_name
 )
 ```
 
@@ -423,30 +675,24 @@ def _calculate_filtered_metrics_via_rbac(self, cluster_name, principal, base_met
     return filtered
 ```
 
-### Working with Redis
+### Adding New Repository Methods
 
-Use the repository pattern in `repositories/cluster.py`:
-
-```python
-# repositories/cluster.py
-
-def get_cluster_workloads(self, cluster_name: str) -> List[Dict[str, Any]]:
-    """Get workloads for a cluster."""
-    try:
-        data = self.redis.get(f"cluster:{cluster_name}:workloads")
-        return json.loads(data) if data else []
-    except Exception as e:
-        logger.error(f"Error getting workloads: {e}")
-        return []
-```
-
-Then use in endpoints:
+To add a new data access pattern:
 
 ```python
-from clusterpulse.repositories.cluster import ClusterRepository
+# repositories/redis_base.py
 
-repo = ClusterRepository()
-workloads = repo.get_cluster_workloads(cluster_name)
+class ClusterDataRepository(RedisRepository):
+    # ... existing methods
+    
+    def get_cluster_configmaps(self, cluster_name: str) -> List[Dict]:
+        """Get configmaps for cluster."""
+        return self.get_json_list(f"cluster:{cluster_name}:configmaps")
+    
+    def get_cluster_secrets_count(self, cluster_name: str) -> int:
+        """Get count of secrets (not actual secret data)."""
+        data = self.get_json(f"cluster:{cluster_name}:secrets_summary")
+        return data.get("count", 0) if data else 0
 ```
 
 ## Testing
@@ -497,6 +743,28 @@ class TestWorkloadsEndpoint:
         assert len(data) > 0  # Should see some workloads based on policy
 ```
 
+### Testing with Repositories
+
+Mock repositories for cleaner tests:
+
+```python
+from unittest.mock import Mock
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+
+def test_endpoint_with_mocked_repo(mocker):
+    # Mock the repository
+    mock_repo = Mock(spec=ClusterDataRepository)
+    mock_repo.get_cluster_bundle.return_value = {
+        'spec': {'displayName': 'Test Cluster'},
+        'status': {'health': 'healthy'},
+        'metrics': {'nodes': 3},
+        'info': {'version': '4.12'}
+    }
+    
+    # Inject mock into endpoint
+    # ... test logic
+```
+
 ### Running Tests
 
 ```bash
@@ -528,7 +796,7 @@ raise HTTPException(
     detail="Resource not found"
 )
 
-# Authorization failed
+# Authorization failed (RBACContext.check_cluster_access raises this automatically)
 raise AuthorizationError(f"Access denied to {resource_name}")
 ```
 
@@ -556,18 +824,28 @@ log_event(
 
 ### Redis Operations
 
-Use pipelines for batch operations:
+Use repositories instead of direct Redis calls:
 
 ```python
-# DON'T do this (N separate round trips):
-for item in items:
-    data = redis_client.get(f"key:{item}")
+# DON'T do this:
+data = redis_client.get(f"cluster:{name}:spec")
+spec = json.loads(data) if data else None
 
-# DO this (1 round trip):
-pipeline = redis_client.pipeline()
-for item in items:
-    pipeline.get(f"key:{item}")
-results = pipeline.execute()
+# DO this:
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+
+repo = ClusterDataRepository(redis_client)
+spec = repo.get_cluster_spec(name)
+```
+
+**For batch operations, repositories use pipelines automatically:**
+
+```python
+# This uses a single Redis pipeline internally
+bundle = repo.get_cluster_bundle(cluster_name)
+
+# This batches all registries in one pipeline
+bundles = repo.batch_get_registry_bundles(registry_names)
 ```
 
 ## Code Style
@@ -598,6 +876,9 @@ from fastapi import APIRouter, Depends
 from redis import Redis
 
 from clusterpulse.config.settings import settings
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+from clusterpulse.api.responses.cluster import ClusterResponseBuilder
 from clusterpulse.services.rbac import RBACEngine
 from clusterpulse.models.cluster import Cluster
 ```
@@ -636,6 +917,9 @@ from clusterpulse.models.cluster import Cluster
    - Tests cover new functionality
    - Error handling is appropriate
    - Logging added for important operations
+   - Using repositories instead of direct Redis calls
+   - Using RBACContext instead of manual RBAC operations
+   - Using response builders for consistency
 
 ## Security Considerations
 
@@ -648,20 +932,19 @@ async def get_nodes():
     nodes = get_all_nodes()
     return nodes  # Security issue!
 
-# ✅ ALWAYS filter through RBAC
+# ✅ ALWAYS filter through RBAC using RBACContext
 @router.get("/nodes")
-async def get_nodes(user: User = Depends(get_user_with_groups)):
-    nodes = get_all_nodes()
-    principal = Principal(username=user.username, email=user.email, groups=user.groups)
-    filtered = rbac_engine.filter_resources(principal, nodes, ResourceType.NODE, cluster)
+async def get_nodes(rbac: RBACContext = Depends(get_rbac_context)):
+    nodes = repo.get_cluster_nodes(cluster_name)
+    filtered = rbac.filter_resources(nodes, ResourceType.NODE, cluster_name)
     return filtered  # Safe
 ```
 
 ### Check Permissions for Sensitive Actions
 
 ```python
-# Check specific permissions
-decision = await check_cluster_access(cluster_name, user, Action.VIEW_SENSITIVE)
+# Check specific permissions using RBACContext
+decision = rbac.check_cluster_access(cluster_name, Action.VIEW_SENSITIVE)
 
 if not decision.can(Action.VIEW_SENSITIVE):
     raise AuthorizationError("Cannot view sensitive data")
@@ -686,7 +969,7 @@ class WorkloadFilter(BaseModel):
 
 ## Common Pitfalls
 
-1. **Forgetting to filter resources:** Always use `rbac_engine.filter_resources()`
+1. **Forgetting to filter resources:** Always use `rbac.filter_resources()` or `rbac_engine.filter_resources()`
 
 2. **Not mocking group resolution in tests:** Tests will fail without it
    ```python
@@ -699,13 +982,20 @@ class WorkloadFilter(BaseModel):
 
 3. **Using wrong `ResourceType` for filtering:** Namespace-scoped resources should use `ResourceType.POD` for filtering
 
-4. **N+1 Redis queries:** Use pipelines for batch operations
+4. **Direct Redis access instead of repositories:** Use `ClusterDataRepository` methods for type safety and batching
 
-5. **Not handling Redis failures:** Wrap Redis calls in try/except
+5. **Manual dict building instead of response builders:** Use builder classes for consistent formatting
+
+6. **Not using RBACContext:** Use `RBACContext` dependency instead of manually creating Principal/Request objects
+
+7. **N+1 queries:** Repositories handle batching automatically, but be aware when making multiple repository calls
 
 ## Getting Help
 
 - Check existing code in `api/v1/endpoints/clusters.py` for patterns
+- Look at `api/responses/cluster.py` for response builder examples
+- Look at `repositories/redis_base.py` for data access patterns
+- Check `api/dependencies/rbac.py` for RBAC utilities
 - Look at tests in `tests/integration/api/` for examples
 - Read the RBAC engine code in `services/rbac.py` to understand filtering
 
@@ -715,3 +1005,52 @@ class WorkloadFilter(BaseModel):
 - **Caching is disabled by default:** RBAC decisions are not cached (security over speed)
 - **Policies are in Redis:** The Policy Controller manages them, but you can inspect with `redis-cli`
 - **Metrics are pre-calculated:** The Cluster Controller writes metrics to Redis, we just filter them
+- **Use repositories for data access:** Don't access Redis directly - use `ClusterDataRepository` or `RegistryDataRepository`
+- **Use RBACContext in endpoints:** Simplifies authorization checks and resource filtering
+- **Use response builders:** Ensures consistent API responses and handles fallbacks
+
+## Quick Reference
+
+### Typical Endpoint Structure
+
+```python
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+from clusterpulse.api.responses.cluster import ClusterResponseBuilder
+
+repo = ClusterDataRepository(redis_client)
+
+@router.get("/{cluster_name}/resource")
+async def get_resource(
+    cluster_name: str,
+    rbac: RBACContext = Depends(get_rbac_context)
+):
+    # 1. Check access
+    rbac.check_cluster_access(cluster_name)
+    
+    # 2. Get data
+    data = repo.get_cluster_resource_list(cluster_name, "resource")
+    
+    # 3. Filter
+    filtered = rbac.filter_resources(data, ResourceType.POD, cluster_name)
+    
+    # 4. Return
+    return filtered
+```
+
+### Common Imports
+
+```python
+# Dependencies
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+
+# Repositories
+from clusterpulse.repositories.redis_base import ClusterDataRepository, RegistryDataRepository
+
+# Response builders
+from clusterpulse.api.responses.cluster import ClusterResponseBuilder, ClusterListItemBuilder
+from clusterpulse.api.responses.registry import RegistryStatusBuilder
+
+# RBAC types
+from clusterpulse.services.rbac import Action, ResourceType, Principal, Resource
+```
