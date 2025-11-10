@@ -11,11 +11,27 @@ from fastapi.testclient import TestClient
 from clusterpulse.models.auth import User
 from clusterpulse.services.rbac import RBACEngine
 
+# ============================================================================
+# Redis Fixtures
+# ============================================================================
 
-@pytest.fixture
-def fake_redis():
-    """Provide a fake Redis client for testing."""
+
+@pytest.fixture(scope="session")
+def fake_redis_session():
+    """Single FakeRedis instance for entire test session."""
     return FakeStrictRedis(decode_responses=True)
+
+
+@pytest.fixture(autouse=True)
+def fake_redis(fake_redis_session):
+    """
+    Function-scoped fixture that clears session redis before each test.
+    This ensures test isolation while using a single redis instance.
+    """
+    # Clear all data before each test
+    fake_redis_session.flushdb()
+    yield fake_redis_session
+    # Could also clear after, but before is sufficient
 
 
 @pytest.fixture
@@ -391,6 +407,7 @@ def populate_redis_with_policies(fake_redis):
     """Helper to populate Redis with policies."""
 
     def _populate(policies: List[Dict[str, Any]]):
+        """Populate policies into the test's fake_redis instance."""
         for policy in policies:
             policy_key = f"policy:{policy['policy_name']}"
 
@@ -431,6 +448,7 @@ def populate_redis_with_cluster(fake_redis):
         namespaces: List[str] = None,
         operators: List[Dict] = None,
     ):
+        """Populate cluster data into the test's fake_redis instance."""
         # Store cluster in set
         fake_redis.sadd("clusters:all", cluster_name)
 
@@ -450,7 +468,7 @@ def populate_redis_with_cluster(fake_redis):
                     json.dumps(node),
                 )
 
-        # Store namespaces in new format
+        # Store namespaces
         if namespaces:
             namespace_data = {
                 "namespaces": namespaces,
@@ -460,7 +478,6 @@ def populate_redis_with_cluster(fake_redis):
             fake_redis.set(
                 f"cluster:{cluster_name}:namespaces", json.dumps(namespace_data)
             )
-            # Also store in set for quick membership checks
             for ns in namespaces:
                 fake_redis.sadd(f"cluster:{cluster_name}:namespaces:set", ns)
 
@@ -479,37 +496,57 @@ def populate_redis_with_cluster(fake_redis):
 @pytest.fixture
 def test_client(monkeypatch, fake_redis, rbac_engine):
     """Provide a test client with mocked dependencies."""
-    # Mock Redis client everywhere
+    # Clear LRU caches FIRST
+    from clusterpulse.config.settings import get_settings
+    from clusterpulse.db.redis import get_redis_client as _get_redis
+    from clusterpulse.db.redis import get_redis_pool
+
+    get_settings.cache_clear()
+    _get_redis.cache_clear()
+    get_redis_pool.cache_clear()
+
+    # Patch Redis everywhere to use fake_redis
     monkeypatch.setattr("clusterpulse.db.redis.get_redis_client", lambda: fake_redis)
     monkeypatch.setattr(
         "clusterpulse.api.dependencies.auth.get_redis_client", lambda: fake_redis
     )
 
-    # Mock RBAC engine to use our fake_redis
-    monkeypatch.setattr("clusterpulse.api.dependencies.auth.rbac_engine", rbac_engine)
+    # Mock the RBAC engine
+    monkeypatch.setattr(
+        "clusterpulse.api.dependencies.rbac.get_rbac_engine", lambda: rbac_engine
+    )
 
-    # Create metrics calculator with our instances
+    from clusterpulse.repositories.redis_base import ClusterDataRepository
+
+    test_repo = ClusterDataRepository(fake_redis)
+
+    monkeypatch.setattr("clusterpulse.api.v1.endpoints.clusters.repo", test_repo)
+
+    monkeypatch.setattr(
+        "clusterpulse.repositories.redis_base.ClusterDataRepository",
+        lambda redis_client=None: test_repo,
+    )
+
     from clusterpulse.services.metrics import FilteredMetricsCalculator
 
     metrics_calc = FilteredMetricsCalculator(fake_redis, rbac_engine)
 
     monkeypatch.setattr(
-        "clusterpulse.api.v1.endpoints.clusters.rbac_engine", rbac_engine
-    )
-    monkeypatch.setattr(
         "clusterpulse.api.v1.endpoints.clusters.metrics_calculator", metrics_calc
     )
+
     monkeypatch.setattr(
         "clusterpulse.api.v1.endpoints.clusters.redis_client", fake_redis
     )
-    monkeypatch.setattr("clusterpulse.api.v1.endpoints.auth.rbac_engine", rbac_engine)
-    monkeypatch.setattr("clusterpulse.api.v1.endpoints.auth.redis_client", fake_redis)
 
-    # Mock Kubernetes client (optional)
     monkeypatch.setattr("clusterpulse.api.dependencies.auth.k8s_dynamic_client", None)
 
-    # Import after mocking
+    # Import app AFTER all patching
+    # Set auth module's redis_client to the same instance
+    import clusterpulse.api.v1.endpoints.auth as auth_module
     from clusterpulse.main import app
+
+    auth_module.redis_client = fake_redis
 
     return TestClient(app)
 

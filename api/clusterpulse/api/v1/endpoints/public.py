@@ -1,5 +1,5 @@
 """
-Public API routes - No authentication required (when enabled).
+Public API routes
 Returns minimal cluster information for anonymous users.
 """
 
@@ -7,18 +7,23 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from clusterpulse.api.dependencies.auth import (get_optional_current_user,
-                                                rbac_engine)
+from clusterpulse.api.dependencies.auth import get_optional_current_user
+from clusterpulse.api.dependencies.rbac import get_rbac_context, user_to_principal
 from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger
 from clusterpulse.db.redis import get_redis_client
 from clusterpulse.models.auth import User
-from clusterpulse.services.rbac import Action, Principal
-from clusterpulse.services.rbac import Request as RBACRequest
-from clusterpulse.services.rbac import Resource, ResourceType
+from clusterpulse.repositories.redis_base import ClusterDataRepository
+from clusterpulse.services.rbac import Action, Resource, ResourceType
+
+# Import RBAC engine
+from clusterpulse.api.dependencies.rbac import get_rbac_engine
 
 logger = get_logger(__name__)
 redis_client = get_redis_client()
+repo = ClusterDataRepository(redis_client)
+rbac_engine = get_rbac_engine()
+
 router = APIRouter()
 
 
@@ -29,36 +34,6 @@ def check_anonymous_access_enabled():
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Anonymous access is not enabled on this instance",
         )
-
-
-def get_cluster_health_data(cluster_name: str) -> dict:
-    """Get minimal cluster data for public view."""
-    import json
-
-    # Get basic cluster info
-    spec_data = redis_client.get(f"cluster:{cluster_name}:spec")
-    status_data = redis_client.get(f"cluster:{cluster_name}:status")
-
-    if not spec_data:
-        return None
-
-    spec = json.loads(spec_data)
-    status = (
-        json.loads(status_data)
-        if status_data
-        else {"health": "unknown", "message": "Status unavailable", "last_check": None}
-    )
-
-    return {
-        "name": cluster_name,
-        "displayName": spec.get("displayName", spec.get("display_name", cluster_name)),
-        "status": {
-            "health": status.get("health", "unknown"),
-            "message": status.get("message", ""),
-            "last_check": status.get("last_check"),
-        },
-        "anonymous_view": True,
-    }
 
 
 @router.get(
@@ -93,14 +68,9 @@ async def get_public_cluster_health(
     if not cluster_names:
         return []
 
-    # If user is authenticated, check their permissions
-    # If not authenticated, use anonymous principal
+    # Determine principal
     if user:
-        principal = Principal(
-            username=user.username,
-            email=user.email,
-            groups=user.groups if user.groups else [],
-        )
+        principal = user_to_principal(user)
         logger.info(f"Authenticated user {user.username} accessing public endpoint")
     else:
         principal = rbac_engine.create_anonymous_principal()
@@ -118,6 +88,8 @@ async def get_public_cluster_health(
         # Check authorization
         if user:
             # Authenticated user - use normal RBAC
+            from clusterpulse.services.rbac import Request as RBACRequest
+
             rbac_request = RBACRequest(
                 principal=principal, action=Action.VIEW, resource=resource
             )
@@ -127,9 +99,33 @@ async def get_public_cluster_health(
             decision = rbac_engine.authorize_anonymous(Action.VIEW, resource)
 
         if decision.allowed:
-            cluster_data = get_cluster_health_data(cluster_name)
-            if cluster_data:
-                accessible_clusters.append(cluster_data)
+            # Get minimal cluster data
+            bundle = repo.get_cluster_bundle(cluster_name)
+            spec = bundle.get("spec")
+            status_data = bundle.get("status")
+
+            # Build minimal response
+            display_name = cluster_name
+            if spec:
+                display_name = (
+                    spec.get("displayName")
+                    or spec.get("display_name")
+                    or cluster_name
+                )
+
+            cluster_health = {
+                "name": cluster_name,
+                "displayName": display_name,
+                "status": status_data
+                or {
+                    "health": "unknown",
+                    "message": "Status unavailable",
+                    "last_check": None,
+                },
+                "anonymous_view": not user,
+            }
+
+            accessible_clusters.append(cluster_health)
 
     logger.info(
         f"{'Anonymous' if not user else user.username} accessed "

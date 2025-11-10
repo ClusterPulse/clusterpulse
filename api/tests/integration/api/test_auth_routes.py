@@ -149,7 +149,6 @@ class TestAuthPoliciesEndpoint:
     def test_get_applied_policies(
         self,
         authenticated_client,
-        fake_redis,
         populate_redis_with_policies,
         basic_dev_policy,
     ):
@@ -159,9 +158,9 @@ class TestAuthPoliciesEndpoint:
         def mock_resolve_groups(username, email=None):
             return ["developers"]
 
-        import clusterpulse.api.dependencies.auth as auth_module
+        import clusterpulse.api.dependencies.auth as auth_dep
 
-        auth_module.resolve_groups_realtime = mock_resolve_groups
+        auth_dep.resolve_groups_realtime = mock_resolve_groups
 
         response = authenticated_client.get("/api/v1/auth/policies")
 
@@ -170,8 +169,6 @@ class TestAuthPoliciesEndpoint:
         assert "user" in data
         assert "total_policies" in data
         assert "policies" in data
-
-        # Should have the dev policy
         assert data["total_policies"] >= 1
         policy_names = [p["policy"]["policy_name"] for p in data["policies"]]
         assert "developers-policy" in policy_names
@@ -179,7 +176,6 @@ class TestAuthPoliciesEndpoint:
     def test_get_policies_multiple_groups(
         self,
         authenticated_client,
-        fake_redis,
         populate_redis_with_policies,
         basic_dev_policy,
         readonly_policy,
@@ -190,16 +186,14 @@ class TestAuthPoliciesEndpoint:
         def mock_resolve_groups(username, email=None):
             return ["developers", "cluster-viewers"]
 
-        import clusterpulse.api.dependencies.auth as auth_module
+        import clusterpulse.api.dependencies.auth as auth_dep
 
-        auth_module.resolve_groups_realtime = mock_resolve_groups
+        auth_dep.resolve_groups_realtime = mock_resolve_groups
 
         response = authenticated_client.get("/api/v1/auth/policies")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-
-        # Should have policies from both groups
         assert data["total_policies"] >= 2
         policy_names = [p["policy"]["policy_name"] for p in data["policies"]]
         assert "developers-policy" in policy_names
