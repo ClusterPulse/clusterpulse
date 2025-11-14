@@ -102,20 +102,16 @@ class PolicyError(Exception):
     """Base exception for policy-related errors"""
 
 
-
 class PolicyCompilationError(PolicyError):
     """Error during policy compilation"""
-
 
 
 class PolicyValidationError(PolicyError):
     """Policy validation failure"""
 
 
-
 class PolicyStorageError(PolicyError):
     """Error storing/retrieving policy from storage"""
-
 
 
 # ============================================================================
@@ -1259,7 +1255,7 @@ async def periodic_cache_cleanup():
             count = 0
             cursor = 0
             pattern = "policy:eval:*"
-            now = time.time()
+            time.time()
 
             while True:
                 cursor, keys = redis_client.scan(
