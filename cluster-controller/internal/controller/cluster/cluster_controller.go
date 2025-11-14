@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/api/v1alpha1"
-	"github.com/clusterpulse/cluster-controller/internal/config"
 	"github.com/clusterpulse/cluster-controller/internal/client/cluster"
 	"github.com/clusterpulse/cluster-controller/internal/client/pool"
+	"github.com/clusterpulse/cluster-controller/internal/config"
 	"github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/clusterpulse/cluster-controller/pkg/types"
 	"github.com/sirupsen/logrus"
@@ -133,7 +133,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request
 
 	// Calculate time taken
 	duration := time.Since(startTime)
-	
+
 	// Only log at Info level for significant events or slow reconciliations
 	if duration > 5*time.Second {
 		log.Infof("Cluster %s reconciled (took %v)", clusterConn.Name, duration)
@@ -257,9 +257,9 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		if len(clusterOperators) > 0 {
 			available := countAvailable(clusterOperators)
 			degraded := countDegraded(clusterOperators)
-			log.Debugf("ClusterOperators: %d total, %d available, %d degraded", 
+			log.Debugf("ClusterOperators: %d total, %d available, %d degraded",
 				len(clusterOperators), available, degraded)
-			
+
 			// Only log at Info if there are issues
 			if degraded > 0 {
 				log.Warnf("Cluster has %d degraded operators", degraded)
@@ -416,11 +416,11 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		"namespaces":   clusterMetrics.Namespaces,
 		"display_name": clusterConn.Spec.DisplayName,
 	})
-	
+
 	// Log health status changes at Info level
 	if originalClusterConn.Status.Health != string(health) {
 		if health == types.HealthHealthy {
-			log.Infof("Cluster %s is healthy (%d nodes, %d namespaces)", 
+			log.Infof("Cluster %s is healthy (%d nodes, %d namespaces)",
 				clusterConn.Name, clusterMetrics.Nodes, clusterMetrics.Namespaces)
 		} else if health == types.HealthDegraded {
 			log.Warnf("Cluster %s is degraded: %s", clusterConn.Name, message)
@@ -565,7 +565,7 @@ func (r *ClusterReconciler) updateClusterStatus(ctx context.Context, name string
 
 func (r *ClusterReconciler) handleDeletion(ctx context.Context, name string) (reconcile.Result, error) {
 	log := logrus.WithField("cluster", name)
-	
+
 	// Clean up Redis data
 	if err := r.RedisClient.DeleteClusterData(ctx, name); err != nil {
 		log.WithError(err).Debug("Failed to delete cluster data from Redis")
@@ -576,7 +576,7 @@ func (r *ClusterReconciler) handleDeletion(ctx context.Context, name string) (re
 
 	// Publish deletion event
 	r.RedisClient.PublishEvent("cluster.deleted", name, nil)
-	
+
 	log.Info("Cluster connection removed")
 
 	return reconcile.Result{}, nil
