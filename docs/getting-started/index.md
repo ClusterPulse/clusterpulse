@@ -4,7 +4,7 @@ Get ClusterPulse running and monitoring a cluster in 5 minutes.
 
 ## Prerequisites
 
-- Kubernetes cluster with `kubectl` access
+- Kubernetes cluster with `oc` access
 - Helm 3.x installed
 - Redis instance (or use the bundled one)
 
@@ -38,7 +38,7 @@ spec:
     interval: 30
 ```
 ```bash
-kubectl apply -f cluster-connection.yaml
+oc apply -f cluster-connection.yaml
 ```
 
 ## Step 3: Create an Access Policy
@@ -69,7 +69,7 @@ spec:
             viewMetrics: true
 ```
 ```bash
-kubectl apply -f policy.yaml
+oc apply -f policy.yaml
 ```
 
 ## Step 4: Access the UI

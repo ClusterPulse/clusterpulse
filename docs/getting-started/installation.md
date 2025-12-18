@@ -143,7 +143,7 @@ Helm installation is suitable for any Kubernetes cluster, including OpenShift.
 5. Verify the installation:
 
     ```bash
-    kubectl get pods -n clusterpulse
+    oc get pods -n clusterpulse
     ```
 
 ### Helm Configuration

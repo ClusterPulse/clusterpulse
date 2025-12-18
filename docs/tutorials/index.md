@@ -13,7 +13,7 @@ This section contains step-by-step tutorials for learning ClusterPulse concepts 
 Before starting these tutorials, ensure you have:
 
 - A running ClusterPulse installation
-- `kubectl` access to the cluster where ClusterPulse is deployed
+- `oc` access to the cluster where ClusterPulse is deployed
 - At least one monitored cluster configured
 - Administrative access to create `MonitorAccessPolicy` resources
 
@@ -47,5 +47,5 @@ Each tutorial follows a consistent structure:
 If you encounter issues while following these tutorials:
 
 1. Check the troubleshooting section at the end of each tutorial
-2. Review the policy controller logs: `kubectl logs -n clusterpulse deployment/policy-controller`
+2. Review the policy controller logs: `oc logs -n clusterpulse deployment/policy-controller`
 3. Verify your policy syntax against the [RBAC Model](../concepts/rbac-model.md) reference

@@ -14,7 +14,7 @@ By the end of this tutorial, you will:
 ## Prerequisites
 
 - ClusterPulse deployed and accessible
-- `kubectl` configured with cluster access
+- `oc` configured with cluster access
 - At least one cluster being monitored by ClusterPulse
 - A test user or group to apply policies to
 
@@ -46,7 +46,7 @@ flowchart TB
 Check existing policies in your cluster:
 
 ```bash
-kubectl get monitoraccesspolicies -n clusterpulse
+oc get monitoraccesspolicies -n clusterpulse
 ```
 
 Expected output:
@@ -60,7 +60,7 @@ example-readonly      Active   2d
 View details of a policy:
 
 ```bash
-kubectl get monitoraccesspolicy default-admin -n clusterpulse -o yaml
+oc get monitoraccesspolicy default-admin -n clusterpulse -o yaml
 ```
 
 ## Step 3: Create Your First Policy
@@ -97,7 +97,7 @@ spec:
 Apply the policy:
 
 ```bash
-kubectl apply -f tutorial-policy.yaml
+oc apply -f tutorial-policy.yaml
 ```
 
 ## Step 4: Verify Policy Compilation
@@ -105,7 +105,7 @@ kubectl apply -f tutorial-policy.yaml
 The policy controller compiles policies into optimized structures stored in Redis. Check the status:
 
 ```bash
-kubectl get monitoraccesspolicy tutorial-viewers -n clusterpulse -o jsonpath='{.status}'
+oc get monitoraccesspolicy tutorial-viewers -n clusterpulse -o jsonpath='{.status}'
 ```
 
 Expected output:
@@ -123,7 +123,7 @@ Expected output:
 If the state is `Error`, check the policy controller logs:
 
 ```bash
-kubectl logs -n clusterpulse deployment/policy-controller | grep tutorial-viewers
+oc logs -n clusterpulse deployment/policy-controller | grep tutorial-viewers
 ```
 
 ## Step 5: Test Policy via API
@@ -204,7 +204,7 @@ spec:
 Apply the updated policy:
 
 ```bash
-kubectl apply -f tutorial-policy.yaml
+oc apply -f tutorial-policy.yaml
 ```
 
 The change takes effect immediately. Users in `tutorial-group` now only see clusters with the label `environment: development`.
@@ -251,7 +251,7 @@ spec:
 Apply and verify:
 
 ```bash
-kubectl apply -f tutorial-policy.yaml
+oc apply -f tutorial-policy.yaml
 
 # Check the namespace list for a development cluster
 curl -s https://clusterpulse.example.com/api/v1/clusters/dev-cluster/namespaces | jq
@@ -264,7 +264,7 @@ Only namespaces matching `tutorial-*` or `default` should be returned.
 Remove the tutorial policy:
 
 ```bash
-kubectl delete monitoraccesspolicy tutorial-viewers -n clusterpulse
+oc delete monitoraccesspolicy tutorial-viewers -n clusterpulse
 ```
 
 ## Key Concepts Summary

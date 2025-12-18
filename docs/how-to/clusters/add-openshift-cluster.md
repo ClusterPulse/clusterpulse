@@ -90,7 +90,7 @@ echo $API_SERVER
 Switch to the cluster where ClusterPulse is deployed and create a secret containing the credentials:
 
 ```bash
-kubectl create secret generic my-openshift-cluster-creds \
+oc create secret generic my-openshift-cluster-creds \
   --namespace clusterpulse \
   --from-literal=token="$TOKEN" \
   --from-file=ca.crt=ca.crt
@@ -123,7 +123,7 @@ spec:
 Apply the resource:
 
 ```bash
-kubectl apply -f clusterconnection.yaml
+oc apply -f clusterconnection.yaml
 ```
 
 ## Step 8: Verify the Connection
@@ -131,7 +131,7 @@ kubectl apply -f clusterconnection.yaml
 Check the status of the ClusterConnection:
 
 ```bash
-kubectl get clusterconnection my-openshift-cluster -n clusterpulse
+oc get clusterconnection my-openshift-cluster -n clusterpulse
 ```
 
 Expected output:
@@ -144,7 +144,7 @@ my-openshift-cluster   Production OpenShift  https://api.cluster.example.com:644
 For detailed status:
 
 ```bash
-kubectl describe clusterconnection my-openshift-cluster -n clusterpulse
+oc describe clusterconnection my-openshift-cluster -n clusterpulse
 ```
 
 ## Configuration Reference

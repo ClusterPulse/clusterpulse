@@ -5,7 +5,7 @@ This guide demonstrates how to create a `MonitorAccessPolicy` that grants read-o
 ## Prerequisites
 
 - ClusterPulse installed and running
-- `kubectl` access to the cluster
+- `oc` access to the cluster
 - Appropriate RBAC permissions to create `MonitorAccessPolicy` resources
 
 ## Basic Read-Only Policy
@@ -46,7 +46,7 @@ spec:
 Apply the policy:
 
 ```bash
-kubectl apply -f readonly-viewers.yaml
+oc apply -f readonly-viewers.yaml
 ```
 
 ## Read-Only Policy for Specific Users
@@ -121,7 +121,7 @@ The `default: none` setting ensures users only see clusters that explicitly matc
 After applying the policy, verify it was compiled successfully:
 
 ```bash
-kubectl get monitoraccesspolicy readonly-viewers -n clusterpulse -o yaml
+oc get monitoraccesspolicy readonly-viewers -n clusterpulse -o yaml
 ```
 
 Check the `status` section:
@@ -141,12 +141,12 @@ status:
 
 1. Verify the policy state is `Active`:
    ```bash
-   kubectl get monitoraccesspolicy -n clusterpulse
+   oc get monitoraccesspolicy -n clusterpulse
    ```
 
 2. Check the policy controller logs:
    ```bash
-   kubectl logs -n clusterpulse deployment/policy-controller
+   oc logs -n clusterpulse deployment/policy-controller
    ```
 
 3. Verify the user's group membership matches the policy subjects.
