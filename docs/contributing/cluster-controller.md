@@ -82,7 +82,7 @@ Custom Resource Definitions. These define the API schema for ClusterConnection a
 - Adding new fields to CRDs
 - Changing validation rules
 - Adding new status fields
-- Modifying kubebuilder markers for kubectl output columns
+- Modifying kubebuilder markers for oc output columns
 
 **Pattern:**
 ```go
@@ -941,10 +941,10 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 
 ```bash
 # Apply updated CRD
-kubectl apply -f config/crd/bases/clusterpulse.io_clusterconnections.yaml
+oc apply -f config/crd/bases/clusterpulse.io_clusterconnections.yaml
 
 # Create a test resource
-kubectl apply -f - <<EOF
+oc apply -f - <<EOF
 apiVersion: clusterpulse.io/v1alpha1
 kind: ClusterConnection
 metadata:
@@ -1673,7 +1673,7 @@ func (c *ClusterClient) GetNodeMetrics(ctx context.Context) ([]types.NodeMetrics
    controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
    
    # Verify CRDs compile
-   kubectl apply --dry-run=client -f config/crd/bases/
+   oc apply --dry-run=client -f config/crd/bases/
    ```
 
 4. **PR description should include:**
@@ -1973,7 +1973,7 @@ go build -o bin/manager cmd/manager/main.go
 docker build -t cluster-controller:latest .
 
 # Applying CRDs
-kubectl apply -f config/crd/bases/
+oc apply -f config/crd/bases/
 ```
 
 ## Getting Help

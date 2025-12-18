@@ -58,6 +58,7 @@ def test_example(authenticated_client, basic_dev_policy, sample_cluster_metrics)
 ```
 
 **Available Fixtures:**
+
 - **Users:** `dev_user`, `admin_user`, `readonly_user`, `no_access_user`
 - **Policies:** `basic_dev_policy`, `admin_policy`, `readonly_policy`, `namespace_filtered_policy`
 - **Data:** `sample_cluster_spec`, `sample_cluster_metrics`, `sample_nodes`, `sample_operators`
@@ -76,6 +77,7 @@ def test_something(fake_redis):
 ```
 
 **Benefits:**
+
 - No external dependencies
 - Fast execution (in-memory)
 - Isolated - tests don't interfere with each other
@@ -125,6 +127,7 @@ def test_with_mock_groups(authenticated_client):
 **Why it matters:** This is our security boundary. A bug here could expose unauthorized data.
 
 **What we test:**
+
 - Policy matching and evaluation
 - Permission calculation
 - Resource filtering (namespaces, nodes, operators)
@@ -149,6 +152,7 @@ def test_authorize_with_deny_policy(rbac_engine, fake_redis):
 **Why it matters:** All cluster data flows through this layer.
 
 **What we test:**
+
 - CRUD operations on cluster data
 - Node management
 - Metrics retrieval
@@ -161,6 +165,7 @@ def test_authorize_with_deny_policy(rbac_engine, fake_redis):
 **Why it matters:** Authentication is the entry point for all API access.
 
 **What we test:**
+
 - Authentication status
 - User information with groups
 - Permission calculation
@@ -174,6 +179,7 @@ def test_authorize_with_deny_policy(rbac_engine, fake_redis):
 **Why it matters:** Main API surface - this is what users interact with.
 
 **What we test:**
+
 - Listing clusters with RBAC filtering
 - Getting cluster details
 - Node listing and filtering
@@ -422,6 +428,7 @@ pytest -m "integration or rbac"
 ## Coverage Goals
 
 Current coverage focuses on:
+
 - ✅ RBAC engine (security critical)
 - ✅ Repository layer (data access)
 - ✅ Main API endpoints
@@ -429,6 +436,7 @@ Current coverage focuses on:
 - ✅ Middleware configs
 
 **Next priorities:**
+
 - ⚠️ Health endpoints
 - ⚠️ Public API routes
 - ⚠️ Metrics calculator

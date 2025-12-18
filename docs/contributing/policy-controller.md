@@ -1105,7 +1105,7 @@ def store_policy(self, policy: CompiledPolicy):
    mypy policy_controller.py
    
    # Test with real CRD
-   kubectl apply -f examples/policy.yaml
+   oc apply -f examples/policy.yaml
    ```
 
 4. **PR description should include:**
@@ -1209,7 +1209,7 @@ redis-cli
 > SMEMBERS policy:user:john.doe
 
 # Watch logs
-kubectl logs -f -n clusterpulse deployment/policy-controller
+oc logs -f -n clusterpulse deployment/policy-controller
 ```
 
 ### Kopf Commands
@@ -1240,5 +1240,5 @@ kopf run policy_controller.py --namespace=clusterpulse
 - **Batch everything:** Redis operations should use pipelines
 - **Cache invalidation is critical:** Stale caches cause incorrect authorization
 - **Pattern compilation is cached:** Same patterns reused across policies
-- **Status updates in CRD:** Users see compilation errors/success in kubectl
+- **Status updates in CRD:** Users see compilation errors/success in oc
 - **Metrics for observability:** All operations instrumented with Prometheus
