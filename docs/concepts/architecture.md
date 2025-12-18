@@ -4,7 +4,7 @@ ClusterPulse consists of three main components that work together to provide
 secure multi-cluster monitoring.
 
 ## System Overview
-![Diagram](../screenshots/architecture.jpg)
+![Diagram](../assets/architecture.jpg)
 
 ## Components
 

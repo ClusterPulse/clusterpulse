@@ -31,9 +31,8 @@ resources while ensuring users only see what they're authorized to access.
     ---
 
     CRD specifications, API docs, and configuration
-    {TO DO - WILL BE AUTOMATED}
 
-    [Reference](reference/index.md)
+    [References](references/index.md)
 
 -   **Contributing**
 

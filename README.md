@@ -25,7 +25,7 @@ ClusterPulse addresses these challenges by providing:
 
 ## 🏗️ Architecture
 
-![architecture](/docs/screenshots/architecture.jpg)
+![architecture](/docs/assets/architecture.jpg)
 
 ClusterPulse follows a microservices architecture with four core components:
 
