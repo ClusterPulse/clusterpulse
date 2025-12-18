@@ -1,0 +1,105 @@
+site_name: ClusterPulse Documentation
+site_description: Multi-cluster Kubernetes monitoring with RBAC
+
+repo_name: ClusterPulse/clusterpulse
+repo_url: https://github.com/ClusterPulse/clusterpulse
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    # Light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mermaid2
+  - mike:
+      version_selector: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ClusterPulse/clusterpulse
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - getting-started/index.md
+    - Installation: getting-started/installation.md
+  - Tutorials:
+    - tutorials/index.md
+    - RBAC Basics: tutorials/rbac-basics.md
+  - How-To Guides:
+    - how-to/index.md
+    - Clusters:
+      - Add OpenShift Cluster: how-to/clusters/add-openshift-cluster.md
+    - Policies:
+      - Create Read-Only Policy: how-to/policies/create-readonly-policy.md
+      - Filter by Namespace: how-to/policies/filter-by-namespace.md
+  - Concepts:
+    #- concepts/index.md
+    - Architecture: concepts/architecture.md
+    - RBAC Model: concepts/rbac-model.md
+    - Policy Evaluation: concepts/policy-evaluation.md
+  #- Reference:
+    #- reference/index.md
+    #- CRDs:
+      #- ClusterConnection: reference/crds/clusterconnection.md
+      #- MonitorAccessPolicy: reference/crds/monitoraccesspolicy.md
+    #- API: reference/api/overview.md
+  - Contributing:
+    #- contributing/index.md
+    - API Development: contributing/api.md
+    - Cluster Controller: contributing/cluster-controller.md
+    - Policy Controller: contributing/policy-controller.md
+  - Testing:
+    - API Tests: tests/api.md
