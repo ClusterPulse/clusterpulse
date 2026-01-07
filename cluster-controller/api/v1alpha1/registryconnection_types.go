@@ -4,7 +4,6 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // RegistryConnectionSpec defines the desired state of RegistryConnection
@@ -116,33 +115,4 @@ type RegistryConnectionList struct {
 
 func init() {
 	SchemeBuilder.Register(&RegistryConnection{}, &RegistryConnectionList{})
-}
-
-// SetupWebhookWithManager sets up the webhook for RegistryConnection
-func (r *RegistryConnection) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
-		Complete()
-}
-
-// Default implements webhook.Defaulter so a webhook will be registered for the type
-func (r *RegistryConnection) Default() {
-	// Set default values
-	// Note: type field is optional and has no default
-
-	if r.Spec.Monitoring.Interval == 0 {
-		r.Spec.Monitoring.Interval = 60
-	}
-
-	if r.Spec.Monitoring.Timeout == 0 {
-		r.Spec.Monitoring.Timeout = 10
-	}
-
-	if r.Spec.Monitoring.MaxCatalogEntries == 0 {
-		r.Spec.Monitoring.MaxCatalogEntries = 100
-	}
-
-	if len(r.Spec.HealthCheckPaths) == 0 {
-		r.Spec.HealthCheckPaths = []string{"/v2/"}
-	}
 }

@@ -20,7 +20,6 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 // ClusterClient manages connection to a remote cluster
@@ -30,7 +29,6 @@ type ClusterClient struct {
 	config         *rest.Config
 	clientset      kubernetes.Interface
 	dynamicClient  dynamic.Interface
-	metricsClient  metricsv1beta1.Interface
 	circuitBreaker *utils.CircuitBreaker
 	mu             sync.RWMutex
 	lastUsed       time.Time
@@ -68,18 +66,12 @@ func NewClusterClient(name, endpoint, token string, caCert []byte) (*ClusterClie
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
-	metricsClient, err := metricsv1beta1.NewForConfig(config)
-	if err != nil {
-		logrus.Warnf("Failed to create metrics client for %s: %v", name, err)
-	}
-
 	return &ClusterClient{
 		Name:           name,
 		Endpoint:       endpoint,
 		config:         config,
 		clientset:      clientset,
 		dynamicClient:  dynamicClient,
-		metricsClient:  metricsClient,
 		circuitBreaker: utils.NewCircuitBreaker(5, 60*time.Second),
 		lastUsed:       time.Now(),
 	}, nil
