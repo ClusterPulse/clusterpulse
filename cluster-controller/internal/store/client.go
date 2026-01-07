@@ -45,27 +45,6 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}, nil
 }
 
-// GetTTL returns the TTL for a key in seconds
-func (c *Client) GetTTL(ctx context.Context, key string) (int64, error) {
-	ttl := c.client.TTL(ctx, key)
-	if err := ttl.Err(); err != nil {
-		return -1, err
-	}
-
-	// Convert to seconds
-	seconds := int64(ttl.Val().Seconds())
-	return seconds, nil
-}
-
-// KeyExists checks if a key exists
-func (c *Client) KeyExists(ctx context.Context, key string) (bool, error) {
-	exists := c.client.Exists(ctx, key)
-	if err := exists.Err(); err != nil {
-		return false, err
-	}
-	return exists.Val() > 0, nil
-}
-
 // StoreOperators stores operator information in Redis (Python-compatible format)
 func (c *Client) StoreOperators(ctx context.Context, clusterName string, operators []types.OperatorInfo) error {
 	// Convert to Python-compatible format
@@ -544,26 +523,6 @@ func (c *Client) StoreNamespaces(ctx context.Context, clusterName string, namesp
 
 	logrus.Debugf("Stored %d namespaces for cluster %s", len(namespaces), clusterName)
 	return nil
-}
-
-// GetNamespaceCount returns the number of namespaces in a cluster
-func (c *Client) GetNamespaceCount(ctx context.Context, clusterName string) (int, error) {
-	key := fmt.Sprintf("cluster:%s:namespaces", clusterName)
-	data, err := c.client.Get(ctx, key).Result()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get namespace count: %w", err)
-	}
-
-	var namespaceData map[string]interface{}
-	if err := json.Unmarshal([]byte(data), &namespaceData); err != nil {
-		return 0, fmt.Errorf("failed to unmarshal namespace data: %w", err)
-	}
-
-	if count, ok := namespaceData["count"].(float64); ok {
-		return int(count), nil
-	}
-
-	return 0, nil
 }
 
 // StoreClusterInfo stores cluster info

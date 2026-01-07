@@ -22,7 +22,6 @@ type Config struct {
 	ReconciliationInterval int
 	NodeMetricsInterval    int
 	OperatorScanInterval   int
-	FullScanInterval       int
 	CacheTTL               int
 	MetricsRetention       int
 	ConnectTimeout         int
@@ -34,7 +33,7 @@ type Config struct {
 	MemoryCriticalThreshold float64
 	NodeUnhealthyThreshold  float64
 
-	// Resource Collection Settings (NEW)
+	// Resource Collection Settings
 	ResourceCollection types.CollectionConfig
 }
 
@@ -49,7 +48,6 @@ func Load() *Config {
 		ReconciliationInterval:  getEnvIntWithMin("RECONCILIATION_INTERVAL", 30, 30),
 		NodeMetricsInterval:     getEnvIntWithMin("NODE_METRICS_INTERVAL", 15, 15),
 		OperatorScanInterval:    getEnvIntWithMin("OPERATOR_SCAN_INTERVAL", 300, 60),
-		FullScanInterval:        getEnvIntWithMin("FULL_SCAN_INTERVAL", 300, 60),
 		CacheTTL:                getEnvIntWithMin("CACHE_TTL", 600, 60),
 		MetricsRetention:        getEnvIntWithMin("METRICS_RETENTION", 3600, 300),
 		ConnectTimeout:          getEnvIntWithMin("CONNECT_TIMEOUT", 10, 5),

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -170,30 +169,6 @@ func (c *DockerV2Client) CheckCatalog(ctx context.Context, maxEntries int) (*Cat
 	return &catalog, nil
 }
 
-// CheckRepository checks if a specific repository exists and is accessible
-func (c *DockerV2Client) CheckRepository(ctx context.Context, repository string) (bool, error) {
-	// Check repository tags to verify it exists
-	tagsURL := fmt.Sprintf("%s/v2/%s/tags/list", c.endpoint, repository)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", tagsURL, nil)
-	if err != nil {
-		return false, fmt.Errorf("failed to create tags request: %w", err)
-	}
-
-	if c.authHeader != "" {
-		req.Header.Set("Authorization", c.authHeader)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	return resp.StatusCode == http.StatusOK, nil
-}
-
 // detectRegistryInfo attempts to detect registry type and version from response headers
 func (c *DockerV2Client) detectRegistryInfo(resp *http.Response, result *HealthCheckResult) {
 	// Check for Docker-Distribution-Api-Version header (standard for all Docker v2 registries)
@@ -258,35 +233,4 @@ func (c *DockerV2Client) ExtendedHealthCheck(ctx context.Context, checkCatalog b
 	}
 
 	return result, nil
-}
-
-// TestAuthentication tests if the provided credentials are valid
-func (c *DockerV2Client) TestAuthentication(ctx context.Context) error {
-	// Try to access the catalog endpoint which typically requires auth
-	_, err := c.CheckCatalog(ctx, 1)
-	return err
-}
-
-// ParseEndpoint validates and normalizes a registry endpoint
-func ParseEndpoint(endpoint string) (*url.URL, error) {
-	// Add protocol if missing
-	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		endpoint = "https://" + endpoint
-	}
-
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("invalid endpoint URL: %w", err)
-	}
-
-	// Validate the URL
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("unsupported protocol: %s", u.Scheme)
-	}
-
-	if u.Host == "" {
-		return nil, fmt.Errorf("missing host in URL")
-	}
-
-	return u, nil
 }

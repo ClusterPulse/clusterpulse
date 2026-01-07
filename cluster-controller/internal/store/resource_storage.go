@@ -101,26 +101,3 @@ func (c *Client) StoreResourceCollection(ctx context.Context, clusterName string
 
 	return nil
 }
-
-// GetResourceCollectionMetadata retrieves metadata about stored resources
-func (c *Client) GetResourceCollectionMetadata(ctx context.Context, clusterName string) (map[string]interface{}, error) {
-	key := fmt.Sprintf("cluster:%s:resource_metadata", clusterName)
-	data, err := c.client.Get(ctx, key).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	var metadata map[string]interface{}
-	if err := json.Unmarshal([]byte(data), &metadata); err != nil {
-		return nil, err
-	}
-
-	return metadata, nil
-}
-
-// HasResourceCollection checks if resource collection data exists for a cluster
-func (c *Client) HasResourceCollection(ctx context.Context, clusterName string) bool {
-	key := fmt.Sprintf("cluster:%s:resource_metadata", clusterName)
-	exists, _ := c.client.Exists(ctx, key).Result()
-	return exists > 0
-}

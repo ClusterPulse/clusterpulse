@@ -108,32 +108,6 @@ func (c *Client) GetAllRegistries(ctx context.Context) ([]string, error) {
 	return members, nil
 }
 
-// GetRegistryMetricsRange retrieves registry metrics for a time range
-func (c *Client) GetRegistryMetricsRange(ctx context.Context, name string, start, end time.Time) ([]map[string]interface{}, error) {
-	key := fmt.Sprintf("registry:%s:metrics", name)
-
-	results, err := c.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
-		Min: fmt.Sprintf("%d", start.Unix()),
-		Max: fmt.Sprintf("%d", end.Unix()),
-	}).Result()
-
-	if err != nil {
-		return nil, err
-	}
-
-	metrics := make([]map[string]interface{}, 0, len(results))
-	for _, result := range results {
-		var m map[string]interface{}
-		if err := json.Unmarshal([]byte(result), &m); err != nil {
-			logrus.WithError(err).Debug("Failed to unmarshal metric entry")
-			continue
-		}
-		metrics = append(metrics, m)
-	}
-
-	return metrics, nil
-}
-
 // DeleteRegistryData deletes all data for a registry
 func (c *Client) DeleteRegistryData(ctx context.Context, name string) error {
 	pattern := fmt.Sprintf("registry:%s:*", name)
@@ -169,60 +143,4 @@ func (c *Client) DeleteRegistryData(ctx context.Context, name string) error {
 	logrus.Debugf("Deleted %d keys for registry %s", count, name)
 
 	return iter.Err()
-}
-
-// GetRegistrySummary returns a summary of all registries
-func (c *Client) GetRegistrySummary(ctx context.Context) (map[string]interface{}, error) {
-	registries, err := c.GetAllRegistries(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	summary := map[string]interface{}{
-		"total":       len(registries),
-		"available":   0,
-		"unavailable": 0,
-		"registries":  []map[string]interface{}{},
-	}
-
-	registryList := []map[string]interface{}{}
-
-	for _, name := range registries {
-		status, err := c.GetRegistryStatus(ctx, name)
-		if err != nil {
-			logrus.WithError(err).Debugf("Failed to get status for registry %s", name)
-			continue
-		}
-
-		// Get spec for display name
-		specKey := fmt.Sprintf("registry:%s:spec", name)
-		specData, _ := c.client.Get(ctx, specKey).Result()
-
-		var spec map[string]interface{}
-		if specData != "" {
-			json.Unmarshal([]byte(specData), &spec)
-		}
-
-		regInfo := map[string]interface{}{
-			"name":          name,
-			"display_name":  spec["display_name"],
-			"endpoint":      spec["endpoint"],
-			"type":          spec["type"],
-			"available":     status["available"],
-			"response_time": status["response_time"],
-			"last_check":    status["last_check"],
-		}
-
-		if available, ok := status["available"].(bool); ok && available {
-			summary["available"] = summary["available"].(int) + 1
-		} else {
-			summary["unavailable"] = summary["unavailable"].(int) + 1
-		}
-
-		registryList = append(registryList, regInfo)
-	}
-
-	summary["registries"] = registryList
-
-	return summary, nil
 }

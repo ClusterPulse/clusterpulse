@@ -8,7 +8,7 @@ import (
 	"github.com/clusterpulse/cluster-controller/api/v1alpha1"
 	"github.com/clusterpulse/cluster-controller/internal/client/registry"
 	"github.com/clusterpulse/cluster-controller/internal/config"
-	"github.com/clusterpulse/cluster-controller/internal/store"
+	redis "github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/clusterpulse/cluster-controller/pkg/types"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -293,8 +293,8 @@ func (r *RegistryReconciler) shouldUpdateStatus(regConn *v1alpha1.RegistryConnec
 		return true
 	}
 
-	// Update if message changed significantly (not just response time)
-	if regConn.Status.Message != message && !isJustResponseTimeChange(regConn.Status.Message, message) {
+	// Update if message changed
+	if regConn.Status.Message != message {
 		return true
 	}
 
@@ -328,19 +328,6 @@ func (r *RegistryReconciler) shouldUpdateStatus(regConn *v1alpha1.RegistryConnec
 }
 
 // Helper functions
-func isJustResponseTimeChange(old, new string) bool {
-	// Check if the only difference is the response time number
-	// This is a simple heuristic - you might want to make it more sophisticated
-	if old == "" || new == "" {
-		return false
-	}
-
-	// If both contain "response time" and are otherwise similar
-	return len(old) == len(new) &&
-		(old[:20] == new[:20] || // Check if beginning is same
-			(len(old) > 20 && old[:20] == new[:20]))
-}
-
 func abs(x int) int {
 	if x < 0 {
 		return -x
