@@ -68,9 +68,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/clusterpulse/clusterpulse-api
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern=v{{major}}
             type=sha,prefix=sha-
             type=raw,value=latest
       - uses: docker/build-push-action@v6
@@ -104,9 +104,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/clusterpulse/clusterpulse-cluster-controller
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern=v{{major}}
             type=sha,prefix=sha-
             type=raw,value=latest
       - uses: docker/build-push-action@v6
@@ -140,9 +140,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/clusterpulse/clusterpulse-policy-controller
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern=v{{major}}
             type=sha,prefix=sha-
             type=raw,value=latest
       - uses: docker/build-push-action@v6
