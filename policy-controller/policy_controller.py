@@ -1,6 +1,8 @@
 """
 Policy Controller for MonitorAccessPolicy CRDs
-Compiles and manages RBAC policies in Redis for fast evaluation
+
+Extended to support dynamic resource access control via resourceAccess field
+while maintaining full backward compatibility with legacy resources section.
 """
 
 import asyncio
@@ -25,22 +27,25 @@ from kubernetes.dynamic import DynamicClient
 from prometheus_client import Counter, Gauge, Histogram
 from redis.exceptions import RedisError
 
+from resource_access_types import (
+    CompiledResourceAccess,
+    compile_all_resource_access,
+)
+
 # ============================================================================
 # CONSTANTS
 # ============================================================================
 
-# Environment configuration
 OPERATOR_NAMESPACE = os.getenv("NAMESPACE", "clusterpulse")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
-# Policy settings
 POLICY_CACHE_TTL = int(os.getenv("POLICY_CACHE_TTL", 300))
 GROUP_CACHE_TTL = int(os.getenv("GROUP_CACHE_TTL", 300))
 MAX_POLICIES_PER_USER = int(os.getenv("MAX_POLICIES_PER_USER", 100))
-POLICY_VALIDATION_INTERVAL = 300  # 5 minutes
+POLICY_VALIDATION_INTERVAL = 300
 
 # Redis key patterns
 POLICY_KEY_PATTERN = "policy:{namespace}:{name}"
@@ -51,7 +56,6 @@ EVAL_CACHE_KEY_PATTERN = "policy:eval:{identity}:{cluster}"
 USER_GROUPS_KEY_PATTERN = "user:groups:{username}"
 GROUP_MEMBERS_KEY_PATTERN = "group:members:{group}"
 
-# Batch processing
 REDIS_SCAN_BATCH_SIZE = 100
 REDIS_PIPELINE_BATCH_SIZE = 1000
 CACHE_CLEAR_BATCH_SIZE = 500
@@ -81,9 +85,7 @@ cache_operations = Counter(
     ["operation", "result"],
 )
 
-active_policies_gauge = Gauge(
-    "active_policies_total", "Total number of active policies"
-)
+active_policies_gauge = Gauge("active_policies_total", "Total number of active policies")
 
 policy_errors = Counter(
     "policy_errors_total", "Total number of policy errors", ["error_type"]
@@ -144,7 +146,7 @@ class PolicyState(str, Enum):
 
 @dataclass
 class CompiledResourceFilter:
-    """Compiled resource filter for efficient evaluation"""
+    """Compiled resource filter for efficient evaluation (legacy format)."""
 
     visibility: str = "all"
     allowed_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
@@ -167,26 +169,21 @@ class CompiledResourceFilter:
 
     @classmethod
     def from_dict(cls, data: Dict) -> "CompiledResourceFilter":
-        """Reconstruct from dictionary"""
         obj = cls(visibility=data.get("visibility", "all"))
-
         for pattern_str, regex_str in data.get("allowed_patterns", []):
             obj.allowed_patterns.append((pattern_str, re.compile(regex_str)))
-
         for pattern_str, regex_str in data.get("denied_patterns", []):
             obj.denied_patterns.append((pattern_str, re.compile(regex_str)))
-
         obj.allowed_literals = set(data.get("allowed_literals", []))
         obj.denied_literals = set(data.get("denied_literals", []))
         obj.label_selectors = data.get("label_selectors", {})
         obj.additional_filters = data.get("additional_filters", {})
-
         return obj
 
 
 @dataclass
 class CompiledClusterRule:
-    """Compiled cluster access rule"""
+    """Compiled cluster access rule."""
 
     cluster_selector: Dict[str, Any]
     permissions: Dict[str, bool]
@@ -200,19 +197,15 @@ class CompiledClusterRule:
             "cluster_selector": self.cluster_selector,
             "permissions": self.permissions,
             "node_filter": self.node_filter.to_dict() if self.node_filter else None,
-            "operator_filter": (
-                self.operator_filter.to_dict() if self.operator_filter else None
-            ),
-            "namespace_filter": (
-                self.namespace_filter.to_dict() if self.namespace_filter else None
-            ),
+            "operator_filter": self.operator_filter.to_dict() if self.operator_filter else None,
+            "namespace_filter": self.namespace_filter.to_dict() if self.namespace_filter else None,
             "pod_filter": self.pod_filter.to_dict() if self.pod_filter else None,
         }
 
 
 @dataclass
 class CompiledPolicy:
-    """Compiled policy for efficient evaluation"""
+    """Compiled policy for efficient evaluation."""
 
     policy_name: str
     namespace: str
@@ -243,9 +236,12 @@ class CompiledPolicy:
     compiled_at: str
     hash: str
 
+    # NEW: Dynamic resource access rules
+    resource_access: List[CompiledResourceAccess] = field(default_factory=list)
+
     def to_dict(self):
-        """This format MUST remain unchanged for Redis compatibility"""
-        return {
+        """Redis-compatible format. Extended with resource_access."""
+        result = {
             "policy_name": self.policy_name,
             "namespace": self.namespace,
             "priority": self.priority,
@@ -264,6 +260,12 @@ class CompiledPolicy:
             "hash": self.hash,
         }
 
+        # Only include resource_access if present (backward compatible)
+        if self.resource_access:
+            result["resource_access"] = [r.to_dict() for r in self.resource_access]
+
+        return result
+
 
 # ============================================================================
 # UTILITIES
@@ -271,7 +273,7 @@ class CompiledPolicy:
 
 
 class RedisBatchProcessor:
-    """Efficiently batch Redis operations"""
+    """Efficiently batch Redis operations."""
 
     def __init__(self, redis_client, batch_size=REDIS_PIPELINE_BATCH_SIZE):
         self.redis = redis_client
@@ -290,7 +292,6 @@ class RedisBatchProcessor:
     def add_operation(self, operation, *args, **kwargs):
         getattr(self.pipeline, operation)(*args, **kwargs)
         self.operation_count += 1
-
         if self.operation_count >= self.batch_size:
             self.pipeline.execute()
             self.pipeline = self.redis.pipeline()
@@ -305,7 +306,7 @@ class RedisBatchProcessor:
 
 
 class ResourceManager:
-    """Manage resource cleanup on shutdown"""
+    """Manage resource cleanup on shutdown."""
 
     def __init__(self):
         self.resources = []
@@ -351,7 +352,7 @@ redis_client = redis.Redis(connection_pool=redis_pool)
 try:
     config.load_incluster_config()
     logger.info("Loaded in-cluster Kubernetes config")
-except:
+except Exception:
     config.load_kube_config()
     logger.info("Loaded local Kubernetes config")
 
@@ -365,42 +366,35 @@ v1 = client.CoreV1Api()
 
 
 class PolicyCompiler:
-    """Compiles MonitorAccessPolicy CRDs into efficient structures"""
+    """Compiles MonitorAccessPolicy CRDs into efficient structures."""
 
     def compile_policy(
         self, name: str, namespace: str, spec: Dict[str, Any]
     ) -> CompiledPolicy:
-        """Compile a policy spec into an efficient structure"""
+        """Compile a policy spec into an efficient structure."""
         logger.info(f"Compiling policy {namespace}/{name}")
 
         with policy_compilation_duration.labels(namespace=namespace, name=name).time():
             try:
-                # Validate the new format spec
                 self._validate_spec(spec)
 
-                # Extract components from new format
                 identity = spec.get("identity", {})
                 access = spec.get("access", {})
                 scope = spec.get("scope", {})
                 lifecycle = spec.get("lifecycle", {})
                 operations = spec.get("operations", {})
 
-                # Extract subjects
                 subjects = self._extract_subjects(identity.get("subjects", {}))
-
-                # Compile cluster rules
                 cluster_rules = self._compile_cluster_rules(scope.get("clusters", {}))
-
-                # Extract validity
                 validity = self._extract_validity(lifecycle.get("validity", {}))
-
-                # Extract audit config
                 audit_config = self._extract_audit_config(operations.get("audit", {}))
-
-                # Generate policy hash
                 policy_hash = self._generate_hash(spec)
 
-                # Return the EXACT SAME compiled format for Redis compatibility
+                # NEW: Compile resourceAccess rules from cluster rules
+                resource_access = self._compile_resource_access(
+                    scope.get("clusters", {}).get("rules", [])
+                )
+
                 return CompiledPolicy(
                     policy_name=name,
                     namespace=namespace,
@@ -410,9 +404,7 @@ class PolicyCompiler:
                     users=subjects["users"],
                     groups=subjects["groups"],
                     service_accounts=subjects["service_accounts"],
-                    default_cluster_access=scope.get("clusters", {}).get(
-                        "default", "none"
-                    ),
+                    default_cluster_access=scope.get("clusters", {}).get("default", "none"),
                     cluster_rules=cluster_rules,
                     global_restrictions=scope.get("restrictions", {}),
                     not_before=validity["not_before"],
@@ -420,6 +412,7 @@ class PolicyCompiler:
                     audit_config=audit_config,
                     compiled_at=datetime.now(timezone.utc).isoformat(),
                     hash=policy_hash,
+                    resource_access=resource_access,
                 )
 
             except Exception as e:
@@ -427,42 +420,94 @@ class PolicyCompiler:
                 raise PolicyCompilationError(f"Failed to compile policy: {str(e)}")
 
     def _validate_spec(self, spec: Dict[str, Any]):
-        """Validate policy specification (new format)"""
+        """Validate policy specification."""
         if not isinstance(spec, dict):
             raise PolicyValidationError("Policy spec must be a dictionary")
 
-        # Check required sections
         if "identity" not in spec:
             raise PolicyValidationError("Policy must have an 'identity' section")
-
         if "access" not in spec:
             raise PolicyValidationError("Policy must have an 'access' section")
-
         if "scope" not in spec:
             raise PolicyValidationError("Policy must have a 'scope' section")
 
-        # Validate identity section
         identity = spec.get("identity", {})
         if "subjects" not in identity:
             raise PolicyValidationError("Identity section must specify subjects")
 
-        # Validate access section
         access = spec.get("access", {})
         effect = access.get("effect", "Allow")
         if effect not in ["Allow", "Deny"]:
             raise PolicyValidationError(f"Invalid effect: {effect}")
 
-        # Validate priority
         priority = identity.get("priority", 100)
         if not isinstance(priority, int) or priority < 0:
             raise PolicyValidationError(f"Invalid priority: {priority}")
 
+        # Validate resourceAccess if present
+        self._validate_resource_access(spec)
+
+    def _validate_resource_access(self, spec: Dict[str, Any]):
+        """Validate resourceAccess rules."""
+        clusters = spec.get("scope", {}).get("clusters", {})
+        for rule_idx, rule in enumerate(clusters.get("rules", [])):
+            for access_idx, access in enumerate(rule.get("resourceAccess", [])):
+                if "monitor" not in access:
+                    raise PolicyValidationError(
+                        f"rules[{rule_idx}].resourceAccess[{access_idx}]: 'monitor' is required"
+                    )
+
+                visibility = access.get("visibility", "none")
+                if visibility not in ["all", "none", "filtered"]:
+                    raise PolicyValidationError(
+                        f"rules[{rule_idx}].resourceAccess[{access_idx}]: "
+                        f"invalid visibility '{visibility}'"
+                    )
+
+                # Validate filter structure if visibility is filtered
+                if visibility == "filtered" and "filter" in access:
+                    self._validate_filter(
+                        access["filter"],
+                        f"rules[{rule_idx}].resourceAccess[{access_idx}].filter",
+                    )
+
+    def _validate_filter(self, filter_spec: Dict[str, Any], path: str):
+        """Validate a filter specification."""
+        valid_keys = {"namespaces", "names", "labels", "fields"}
+        for key in filter_spec:
+            if key not in valid_keys:
+                raise PolicyValidationError(f"{path}: unknown filter key '{key}'")
+
+        # Validate pattern lists
+        for key in ["namespaces", "names"]:
+            if key in filter_spec:
+                section = filter_spec[key]
+                if not isinstance(section, dict):
+                    raise PolicyValidationError(f"{path}.{key}: must be an object")
+                for list_key in ["include", "exclude"]:
+                    if list_key in section:
+                        if not isinstance(section[list_key], list):
+                            raise PolicyValidationError(
+                                f"{path}.{key}.{list_key}: must be an array"
+                            )
+
+        # Validate labels
+        if "labels" in filter_spec:
+            labels = filter_spec["labels"]
+            if "matchLabels" in labels and not isinstance(labels["matchLabels"], dict):
+                raise PolicyValidationError(f"{path}.labels.matchLabels: must be an object")
+            if "matchExpressions" in labels and not isinstance(
+                labels["matchExpressions"], list
+            ):
+                raise PolicyValidationError(
+                    f"{path}.labels.matchExpressions: must be an array"
+                )
+
     def _extract_subjects(self, subjects: Dict[str, Any]) -> Dict[str, Set[str]]:
-        """Extract and process subjects"""
+        """Extract and process subjects."""
         users = set(subjects.get("users", []))
         groups = set(subjects.get("groups", []))
 
-        # Process service accounts
         service_accounts = set()
         for sa in subjects.get("serviceAccounts", []):
             sa_namespace = sa.get("namespace", "default")
@@ -471,46 +516,38 @@ class PolicyCompiler:
 
         return {"users": users, "groups": groups, "service_accounts": service_accounts}
 
-    def _compile_cluster_rules(
-        self, clusters: Dict[str, Any]
-    ) -> List[CompiledClusterRule]:
-        """Compile cluster access rules from new format"""
+    def _compile_cluster_rules(self, clusters: Dict[str, Any]) -> List[CompiledClusterRule]:
+        """Compile cluster access rules (legacy resources section)."""
         rules = []
 
         for rule in clusters.get("rules", []):
-            # Extract selector, permissions, and resources
             selector = rule.get("selector", {})
             permissions = rule.get("permissions", {"view": True})
             resources = rule.get("resources", {})
 
-            # Compile resource filters
             node_filter = None
             operator_filter = None
             namespace_filter = None
             pod_filter = None
 
-            # Process nodes
             if "nodes" in resources:
                 node_config = resources["nodes"]
                 node_filter = self._compile_node_filter(
                     node_config.get("visibility", "all"), node_config.get("filters", {})
                 )
 
-            # Process operators
             if "operators" in resources:
                 op_config = resources["operators"]
                 operator_filter = self._compile_operator_filter(
                     op_config.get("visibility", "all"), op_config.get("filters", {})
                 )
 
-            # Process namespaces
             if "namespaces" in resources:
                 ns_config = resources["namespaces"]
                 namespace_filter = self._compile_namespace_filter(
                     ns_config.get("visibility", "all"), ns_config.get("filters", {})
                 )
 
-            # Process pods
             if "pods" in resources:
                 pod_config = resources["pods"]
                 pod_filter = self._compile_pod_filter(
@@ -525,22 +562,25 @@ class PolicyCompiler:
                 namespace_filter=namespace_filter,
                 pod_filter=pod_filter,
             )
-
             rules.append(compiled_rule)
 
         return rules
 
+    def _compile_resource_access(
+        self, rules: List[Dict[str, Any]]
+    ) -> List[CompiledResourceAccess]:
+        """Compile resourceAccess rules from cluster rules."""
+        return compile_all_resource_access(rules)
+
     def _compile_node_filter(
         self, visibility: str, filters: Dict
     ) -> CompiledResourceFilter:
-        """Compile node-specific filters"""
+        """Compile node-specific filters."""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Add label selector
         if "labelSelector" in filters:
             filter_obj.label_selectors = filters["labelSelector"]
 
-        # Add node-specific filters
         if filters.get("hideMasters"):
             filter_obj.additional_filters["hide_masters"] = True
 
@@ -552,10 +592,9 @@ class PolicyCompiler:
     def _compile_operator_filter(
         self, visibility: str, filters: Dict
     ) -> CompiledResourceFilter:
-        """Compile operator-specific filters"""
+        """Compile operator-specific filters."""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Process namespace filters
         for pattern in filters.get("allowedNamespaces", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -570,7 +609,6 @@ class PolicyCompiler:
             else:
                 filter_obj.denied_patterns.append((f"ns:{pattern}", compiled[1]))
 
-        # Process name filters
         for pattern in filters.get("allowedNames", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -590,10 +628,9 @@ class PolicyCompiler:
     def _compile_namespace_filter(
         self, visibility: str, filters: Dict
     ) -> CompiledResourceFilter:
-        """Compile namespace filters"""
+        """Compile namespace filters."""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Process allowed patterns/literals
         for pattern in filters.get("allowed", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -601,7 +638,6 @@ class PolicyCompiler:
             else:
                 filter_obj.allowed_patterns.append((pattern, compiled[1]))
 
-        # Process denied patterns/literals
         for pattern in filters.get("denied", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -614,10 +650,9 @@ class PolicyCompiler:
     def _compile_pod_filter(
         self, visibility: str, filters: Dict
     ) -> CompiledResourceFilter:
-        """Compile pod filters"""
+        """Compile pod filters."""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Process allowed namespaces for pods
         for pattern in filters.get("allowedNamespaces", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -629,9 +664,8 @@ class PolicyCompiler:
 
     @lru_cache(maxsize=1024)
     def _compile_pattern(self, pattern: str) -> Tuple[str, Any]:
-        """Compile a string pattern into regex or literal (cached)"""
+        """Compile a string pattern into regex or literal (cached)."""
         if "*" in pattern or "?" in pattern:
-            # Convert shell-style wildcards to regex
             regex_pattern = pattern.replace(".", r"\.")
             regex_pattern = regex_pattern.replace("*", ".*")
             regex_pattern = regex_pattern.replace("?", ".")
@@ -640,21 +674,21 @@ class PolicyCompiler:
             return ("literal", pattern)
 
     def _extract_validity(self, validity: Dict[str, Any]) -> Dict[str, Optional[str]]:
-        """Extract validity period"""
+        """Extract validity period."""
         return {
             "not_before": validity.get("notBefore"),
             "not_after": validity.get("notAfter"),
         }
 
     def _extract_audit_config(self, audit: Dict[str, Any]) -> Dict[str, bool]:
-        """Extract audit configuration"""
+        """Extract audit configuration."""
         return {
             "log_access": audit.get("logAccess", False),
             "require_reason": audit.get("requireReason", False),
         }
 
     def _generate_hash(self, spec: Dict[str, Any]) -> str:
-        """Generate hash of the policy spec"""
+        """Generate hash of the policy spec."""
         spec_json = json.dumps(spec, sort_keys=True)
         return hashlib.sha256(spec_json.encode()).hexdigest()[:16]
 
@@ -665,20 +699,19 @@ class PolicyCompiler:
 
 
 class PolicyStore:
-    """Manages policy storage and indexing in Redis"""
+    """Manages policy storage and indexing in Redis."""
 
     def __init__(self, redis_client):
         self.redis = redis_client
 
     def store_policy(self, policy: CompiledPolicy):
-        """Store compiled policy in Redis with indexes"""
+        """Store compiled policy in Redis with indexes."""
         policy_key = POLICY_KEY_PATTERN.format(
             namespace=policy.namespace, name=policy.policy_name
         )
 
         with redis_operations.labels(operation="store_policy").time():
             with RedisBatchProcessor(self.redis) as batch:
-                # Store the main policy data
                 policy_data = json.dumps(policy.to_dict())
                 batch.add_operation(
                     "hset",
@@ -692,25 +725,19 @@ class PolicyStore:
                         "compiled_at": policy.compiled_at,
                     },
                 )
-
-                # Create indexes
                 self._create_policy_indexes(batch, policy, policy_key)
 
-        # Clear evaluation caches
         self._invalidate_evaluation_caches(
             policy.users, policy.groups, policy.service_accounts
         )
 
-        # Update metrics
         active_policies_gauge.inc()
-
         logger.info(f"Stored policy {policy_key} and cleared evaluation caches")
 
     def _create_policy_indexes(
         self, batch: RedisBatchProcessor, policy: CompiledPolicy, policy_key: str
     ):
-        """Create all indexes for a policy"""
-        # Index by users
+        """Create all indexes for a policy."""
         for user in policy.users:
             if policy.enabled:
                 batch.add_operation(
@@ -722,7 +749,6 @@ class PolicyStore:
                     {policy_key: policy.priority},
                 )
 
-        # Index by groups
         for group in policy.groups:
             if policy.enabled:
                 batch.add_operation(
@@ -734,23 +760,17 @@ class PolicyStore:
                     {policy_key: policy.priority},
                 )
 
-        # Index by service accounts
         for sa in policy.service_accounts:
             if policy.enabled:
-                batch.add_operation(
-                    "sadd", SA_POLICY_KEY_PATTERN.format(sa=sa), policy_key
-                )
+                batch.add_operation("sadd", SA_POLICY_KEY_PATTERN.format(sa=sa), policy_key)
                 batch.add_operation(
                     "zadd",
                     f"{SA_POLICY_KEY_PATTERN.format(sa=sa)}:sorted",
                     {policy_key: policy.priority},
                 )
 
-        # Global indexes
         batch.add_operation("sadd", "policies:all", policy_key)
-        batch.add_operation(
-            "zadd", "policies:by:priority", {policy_key: policy.priority}
-        )
+        batch.add_operation("zadd", "policies:by:priority", {policy_key: policy.priority})
 
         if policy.enabled:
             batch.add_operation("sadd", "policies:enabled", policy_key)
@@ -760,10 +780,9 @@ class PolicyStore:
         )
 
     def remove_policy(self, namespace: str, name: str):
-        """Remove policy and all its indexes"""
+        """Remove policy and all its indexes."""
         policy_key = POLICY_KEY_PATTERN.format(namespace=namespace, name=name)
 
-        # Get policy data first
         policy_data = self.redis.hget(policy_key, "data")
         if not policy_data:
             logger.warning(f"Policy {policy_key} not found for removal")
@@ -776,26 +795,20 @@ class PolicyStore:
                 self._remove_policy_indexes(batch, policy, policy_key)
                 batch.add_operation("delete", policy_key)
 
-        # Clear evaluation caches
         self._invalidate_evaluation_caches(
             policy.get("users", []),
             policy.get("groups", []),
             policy.get("service_accounts", []),
         )
 
-        # Publish event
         self._publish_policy_event("deleted", namespace, name)
-
-        # Update metrics
         active_policies_gauge.dec()
-
         logger.info(f"Removed policy {policy_key} and cleared evaluation caches")
 
     def _remove_policy_indexes(
         self, batch: RedisBatchProcessor, policy: Dict, policy_key: str
     ):
-        """Remove all indexes for a policy"""
-        # Remove from user indexes
+        """Remove all indexes for a policy."""
         for user in policy.get("users", []):
             batch.add_operation(
                 "srem", USER_POLICY_KEY_PATTERN.format(user=user), policy_key
@@ -806,7 +819,6 @@ class PolicyStore:
                 policy_key,
             )
 
-        # Remove from group indexes
         for group in policy.get("groups", []):
             batch.add_operation(
                 "srem", GROUP_POLICY_KEY_PATTERN.format(group=group), policy_key
@@ -817,14 +829,12 @@ class PolicyStore:
                 policy_key,
             )
 
-        # Remove from service account indexes
         for sa in policy.get("service_accounts", []):
             batch.add_operation("srem", SA_POLICY_KEY_PATTERN.format(sa=sa), policy_key)
             batch.add_operation(
                 "zrem", f"{SA_POLICY_KEY_PATTERN.format(sa=sa)}:sorted", policy_key
             )
 
-        # Remove from global indexes
         batch.add_operation("srem", "policies:all", policy_key)
         batch.add_operation("zrem", "policies:by:priority", policy_key)
         batch.add_operation("srem", "policies:enabled", policy_key)
@@ -837,19 +847,16 @@ class PolicyStore:
     def _invalidate_evaluation_caches(
         self, users: List[str], groups: List[str], service_accounts: List[str]
     ):
-        """Invalidate evaluation caches for affected identities using SCAN"""
+        """Invalidate evaluation caches for affected identities using SCAN."""
         count = 0
 
         with RedisBatchProcessor(self.redis) as batch:
-            # Clear caches for users
             for user in users:
                 pattern = f"policy:eval:{user}:*"
                 count += self._scan_and_delete(batch, pattern)
                 batch.add_operation("delete", f"user:permissions:{user}")
 
-            # Clear caches for groups and their members
             for group in groups:
-                # Get group members
                 members = self.redis.smembers(
                     GROUP_MEMBERS_KEY_PATTERN.format(group=group)
                 )
@@ -858,11 +865,9 @@ class PolicyStore:
                     count += self._scan_and_delete(batch, pattern)
                     batch.add_operation("delete", f"user:permissions:{member}")
 
-                # Clear group-specific caches
                 pattern = f"policy:eval:*:group:{group}:*"
                 count += self._scan_and_delete(batch, pattern)
 
-            # Clear service account caches
             for sa in service_accounts:
                 pattern = f"policy:eval:{sa}:*"
                 count += self._scan_and_delete(batch, pattern)
@@ -871,7 +876,7 @@ class PolicyStore:
         logger.debug(f"Cleared {count} evaluation cache entries")
 
     def _scan_and_delete(self, batch: RedisBatchProcessor, pattern: str) -> int:
-        """Scan for keys matching pattern and delete them"""
+        """Scan for keys matching pattern and delete them."""
         count = 0
         cursor = 0
 
@@ -879,18 +884,16 @@ class PolicyStore:
             cursor, keys = self.redis.scan(
                 cursor, match=pattern, count=REDIS_SCAN_BATCH_SIZE
             )
-
             for key in keys:
                 batch.add_operation("delete", key)
                 count += 1
-
             if cursor == 0:
                 break
 
         return count
 
     def _publish_policy_event(self, action: str, namespace: str, name: str):
-        """Publish policy change event"""
+        """Publish policy change event."""
         event = {
             "action": action,
             "policy": f"{namespace}/{name}",
@@ -910,12 +913,12 @@ class PolicyStore:
         )
 
     def update_policy_status(self, namespace: str, name: str, status: Dict[str, Any]):
-        """Update policy status in Redis"""
+        """Update policy status in Redis."""
         policy_key = POLICY_KEY_PATTERN.format(namespace=namespace, name=name)
         self.redis.hset(policy_key, "status", json.dumps(status))
 
     def get_policy(self, namespace: str, name: str) -> Optional[Dict]:
-        """Retrieve a policy from storage"""
+        """Retrieve a policy from storage."""
         policy_key = POLICY_KEY_PATTERN.format(namespace=namespace, name=name)
 
         try:
@@ -928,7 +931,7 @@ class PolicyStore:
             raise PolicyStorageError(f"Failed to retrieve policy: {str(e)}")
 
     def list_policies(self, enabled_only: bool = False) -> List[str]:
-        """List all policies or only enabled ones"""
+        """List all policies or only enabled ones."""
         key = "policies:enabled" if enabled_only else "policies:all"
         return list(self.redis.smembers(key))
 
@@ -939,7 +942,7 @@ class PolicyStore:
 
 
 class PolicyValidator:
-    """Validates policies for expiration and other conditions"""
+    """Validates policies for expiration and other conditions."""
 
     def __init__(self, policy_store: PolicyStore):
         self.policy_store = policy_store
@@ -947,14 +950,13 @@ class PolicyValidator:
     async def validate_policy(
         self, namespace: str, name: str, spec: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Validate a policy and return its status"""
+        """Validate a policy and return its status."""
         status = {
             "state": PolicyState.ACTIVE,
             "message": "Policy is active",
             "validated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Check validity period from lifecycle section
         lifecycle = spec.get("lifecycle", {})
         validity = lifecycle.get("validity", {})
         now = datetime.now(timezone.utc)
@@ -979,7 +981,6 @@ class PolicyValidator:
                 status["message"] = f'Policy expired at {validity["notAfter"]}'
                 return status
 
-        # Check if enabled from access section
         access = spec.get("access", {})
         if not access.get("enabled", True):
             status["state"] = PolicyState.INACTIVE
@@ -988,23 +989,18 @@ class PolicyValidator:
         return status
 
     async def validate_all_policies(self):
-        """Validate all policies for expiration"""
+        """Validate all policies for expiration."""
         policies = self.policy_store.list_policies()
 
         for policy_key in policies:
             try:
-                # Parse policy key
                 parts = policy_key.split(":")
                 if len(parts) >= 3:
                     namespace = parts[1]
                     name = parts[2]
 
-                    # Get policy data
                     policy_data = self.policy_store.get_policy(namespace, name)
                     if policy_data:
-                        # Note: This retrieves the compiled format from Redis
-                        # May need to reconstruct the spec or store it separately
-                        # For now, validate based on the compiled data
                         status = {
                             "state": PolicyState.ACTIVE,
                             "message": "Policy is active",
@@ -1019,7 +1015,7 @@ class PolicyValidator:
                             )
                             if now < not_before:
                                 status["state"] = PolicyState.INACTIVE
-                                status["message"] = f"Policy not yet valid"
+                                status["message"] = "Policy not yet valid"
 
                         if policy_data.get("not_after"):
                             not_after = datetime.fromisoformat(
@@ -1027,7 +1023,7 @@ class PolicyValidator:
                             )
                             if now > not_after:
                                 status["state"] = PolicyState.EXPIRED
-                                status["message"] = f"Policy expired"
+                                status["message"] = "Policy expired"
 
                         if not policy_data.get("enabled", True):
                             status["state"] = PolicyState.INACTIVE
@@ -1051,7 +1047,7 @@ policy_compiler = PolicyCompiler()
 policy_validator = PolicyValidator(policy_store)
 
 # ============================================================================
-# KOPF HANDLERS (Using new format exclusively)
+# KOPF HANDLERS
 # ============================================================================
 
 
@@ -1065,46 +1061,44 @@ async def policy_changed(
     patch: Dict,
     **kwargs,
 ):
-    """Handle policy creation or updates"""
+    """Handle policy creation or updates."""
     logger.info(f"Policy {namespace}/{name} changed")
 
     try:
-        # Compile the policy (new format only)
         spec_dict = dict(spec)
         compiled = policy_compiler.compile_policy(name, namespace, spec_dict)
-
-        # Store in Redis (exactly the same format as before)
         policy_store.store_policy(compiled)
-
-        # Validate the policy
         status = await policy_validator.validate_policy(namespace, name, spec_dict)
 
-        # Add compilation info to status
+        # Count resourceAccess rules for status
+        resource_access_count = len(compiled.resource_access)
+
         status.update(
             {
                 "compiledAt": compiled.compiled_at,
                 "affectedUsers": len(compiled.users),
                 "affectedGroups": len(compiled.groups),
                 "affectedServiceAccounts": len(compiled.service_accounts),
+                "resourceAccessRules": resource_access_count,
                 "hash": compiled.hash,
             }
         )
 
-        # Update status
         patch["status"] = status
         policy_store.update_policy_status(namespace, name, status)
 
-        logger.info(f"Successfully compiled policy {namespace}/{name}")
+        logger.info(
+            f"Successfully compiled policy {namespace}/{name} "
+            f"(resourceAccess rules: {resource_access_count})"
+        )
 
     except PolicyCompilationError as e:
         logger.error(f"Failed to compile policy {namespace}/{name}: {str(e)}")
-
         patch["status"] = {
             "state": PolicyState.ERROR,
             "message": f"Compilation failed: {str(e)}",
             "error_at": datetime.now(timezone.utc).isoformat(),
         }
-
         policy_store.update_policy_status(namespace, name, patch["status"])
 
     except Exception as e:
@@ -1112,19 +1106,17 @@ async def policy_changed(
             f"Unexpected error handling policy {namespace}/{name}: {str(e)}",
             exc_info=True,
         )
-
         patch["status"] = {
             "state": PolicyState.ERROR,
             "message": f"Unexpected error: {str(e)}",
             "error_at": datetime.now(timezone.utc).isoformat(),
         }
-
         policy_store.update_policy_status(namespace, name, patch["status"])
 
 
 @kopf.on.delete("clusterpulse.io", "v1alpha1", "monitoraccesspolicies")
 async def policy_deleted(name: str, namespace: str, **kwargs):
-    """Handle policy deletion"""
+    """Handle policy deletion."""
     logger.info(f"Policy {namespace}/{name} deleted")
 
     try:
@@ -1150,12 +1142,9 @@ async def periodic_policy_validation(
     patch: Dict,
     **kwargs,
 ):
-    """Periodic validation of policies"""
+    """Periodic validation of policies."""
     try:
-        # Validate the policy
         new_status = await policy_validator.validate_policy(namespace, name, dict(spec))
-
-        # Check if status changed
         current_state = status.get("state")
         new_state = new_status["state"]
 
@@ -1163,12 +1152,9 @@ async def periodic_policy_validation(
             logger.info(
                 f"Policy {namespace}/{name} state changed from {current_state} to {new_state}"
             )
-
-            # Update status
             patch["status"] = new_status
             policy_store.update_policy_status(namespace, name, new_status)
 
-            # If policy became inactive/expired, update indexes
             if new_state in [PolicyState.INACTIVE, PolicyState.EXPIRED]:
                 policy_key = POLICY_KEY_PATTERN.format(namespace=namespace, name=name)
                 redis_client.srem("policies:enabled", policy_key)
@@ -1185,7 +1171,7 @@ async def periodic_policy_validation(
 
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
-    """Configure kopf settings"""
+    """Configure kopf settings."""
     settings.batching.worker_limit = 3
     settings.posting.enabled = False
     settings.watching.server_timeout = 300
@@ -1204,10 +1190,9 @@ def configure(settings: kopf.OperatorSettings, **_):
 
 @kopf.on.startup()
 async def startup_handler(**kwargs):
-    """Startup tasks"""
+    """Startup tasks."""
     logger.info("Policy controller starting up")
 
-    # Initialize resource manager
     global resource_manager
     resource_manager = ResourceManager()
 
@@ -1231,31 +1216,25 @@ async def startup_handler(**kwargs):
                 break
 
         logger.info(f"Cleared {count} evaluation cache entries on startup")
-
-        # Initialize metrics
         active_policies_gauge.set(redis_client.scard("policies:enabled"))
 
     except RedisError as e:
         logger.error(f"Failed to connect to Redis: {str(e)}")
         sys.exit(1)
 
-    # Start background tasks
     asyncio.create_task(periodic_cache_cleanup())
-
     logger.info("Policy controller ready")
 
 
 async def periodic_cache_cleanup():
-    """Periodically clean up expired caches"""
+    """Periodically clean up expired caches."""
     while True:
         try:
-            await asyncio.sleep(3600)  # Run every hour
+            await asyncio.sleep(3600)
 
-            # Clear expired evaluation caches
             count = 0
             cursor = 0
             pattern = "policy:eval:*"
-            time.time()
 
             while True:
                 cursor, keys = redis_client.scan(
@@ -1264,7 +1243,7 @@ async def periodic_cache_cleanup():
 
                 for key in keys:
                     ttl = redis_client.ttl(key)
-                    if ttl == -1:  # No expiry set
+                    if ttl == -1:
                         redis_client.expire(key, POLICY_CACHE_TTL)
                         count += 1
 
@@ -1280,16 +1259,14 @@ async def periodic_cache_cleanup():
 
 @kopf.on.cleanup()
 async def cleanup_handler(**kwargs):
-    """Cleanup tasks"""
+    """Cleanup tasks."""
     logger.info("Policy controller shutting down")
-
-    # Close Redis connection pool
     redis_pool.disconnect()
 
 
 @kopf.on.probe(id="health")
 async def health_probe(**kwargs):
-    """Health check probe"""
+    """Health check probe."""
     try:
         redis_client.ping()
 
@@ -1308,8 +1285,6 @@ async def health_probe(**kwargs):
 # ============================================================================
 
 if __name__ == "__main__":
-    import time
-
     kopf.run(
         namespace=OPERATOR_NAMESPACE, liveness_endpoint="http://0.0.0.0:8080/healthz"
     )

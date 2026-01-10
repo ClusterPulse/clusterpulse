@@ -1,0 +1,301 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.13.0
+  name: resourcemonitors.clusterpulse.io
+spec:
+  group: clusterpulse.io
+  names:
+    kind: ResourceMonitor
+    listKind: ResourceMonitorList
+    plural: resourcemonitors
+    shortNames:
+    - rm
+    - resmon
+    singular: resourcemonitor
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.displayName
+      name: Display Name
+      type: string
+    - jsonPath: .spec.target.apiVersion
+      name: API Version
+      type: string
+    - jsonPath: .spec.target.kind
+      name: Kind
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ResourceMonitor is the Schema for the resourcemonitors API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ResourceMonitorSpec defines a Kubernetes resource type to
+              collect across all connected clusters
+            properties:
+              category:
+                description: Category for grouping in UI (e.g., "Configuration", "Workloads",
+                  "Networking")
+                type: string
+              collection:
+                description: Collection settings control how and when resources are
+                  collected
+                properties:
+                  enabled:
+                    description: 'Enabled controls whether collection is active (default:
+                      true)'
+                    type: boolean
+                  intervalSeconds:
+                    description: 'IntervalSeconds between collection runs (minimum:
+                      30, default: 60)'
+                    format: int32
+                    type: integer
+                  limits:
+                    description: Limits prevent memory issues on large clusters
+                    properties:
+                      perCluster:
+                        description: PerCluster limits total resources collected per
+                          cluster (0 = unlimited)
+                        format: int32
+                        type: integer
+                      perNamespace:
+                        description: PerNamespace limits resources collected per namespace
+                          (0 = unlimited)
+                        format: int32
+                        type: integer
+                    type: object
+                  namespaceSelector:
+                    description: NamespaceSelector filters which namespaces to collect
+                      from
+                    properties:
+                      exclude:
+                        description: Exclude patterns (glob-style) - takes precedence
+                          over include
+                        items:
+                          type: string
+                        type: array
+                      include:
+                        description: Include patterns (glob-style) - empty means include
+                          all
+                        items:
+                          type: string
+                        type: array
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: MatchLabels selects namespaces by labels
+                        type: object
+                    type: object
+                  resourceSelector:
+                    description: ResourceSelector filters which resources to collect
+                      using label selectors
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: A label selector requirement is a selector
+                            that contains values, a key, and an operator that relates
+                            the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: operator represents a key's relationship
+                                to a set of values. Valid operators are In, NotIn,
+                                Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: values is an array of string values. If
+                                the operator is In or NotIn, the values array must
+                                be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced
+                                during a strategic merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: matchLabels is a map of {key,value} pairs. A
+                          single {key,value} in the matchLabels map is equivalent
+                          to an element of matchExpressions, whose key field is "key",
+                          the operator is "In", and the values array contains only
+                          "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              description:
+                description: Description provides additional context about what this
+                  monitor collects
+                type: string
+              displayName:
+                description: DisplayName is a human-friendly name for UI display
+                type: string
+              health:
+                description: Health defines how to determine health status from resource
+                  fields
+                properties:
+                  expression:
+                    description: Expression for complex health evaluation (alternative
+                      to field+mapping)
+                    type: string
+                  field:
+                    description: Field to use for health determination (must be defined
+                      in schema or be a standard field)
+                    type: string
+                  mapping:
+                    description: Mapping of field values to health states
+                    properties:
+                      degraded:
+                        description: Degraded values indicate the resource has issues
+                          but is operational
+                        items:
+                          type: string
+                        type: array
+                      healthy:
+                        description: Healthy values indicate the resource is functioning
+                          correctly
+                        items:
+                          type: string
+                        type: array
+                      unhealthy:
+                        description: Unhealthy values indicate the resource is not
+                          functioning
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                type: object
+              schema:
+                description: Schema defines which fields to extract from each resource
+                  instance
+                properties:
+                  fields:
+                    description: Fields defines custom fields to extract using JSONPath
+                    items:
+                      description: FieldDefinition describes a field to extract from
+                        resources
+                      properties:
+                        default:
+                          description: Default value if the path doesn't match
+                          type: string
+                        name:
+                          description: Name is the field name in the output (must
+                            be unique, cannot be reserved names)
+                          type: string
+                        path:
+                          description: Path is a JSONPath expression to extract the
+                            value
+                          type: string
+                        transform:
+                          description: 'Transform applies a transformation to the
+                            extracted value Supported: keys, count, first, last, join,
+                            exists'
+                          type: string
+                        type:
+                          description: Type hint for storage and display (string,
+                            boolean, integer, object, array, timestamp)
+                          type: string
+                      required:
+                      - name
+                      - path
+                      type: object
+                    type: array
+                  includeAnnotations:
+                    description: IncludeAnnotations controls whether annotations are
+                      collected (can be large)
+                    type: boolean
+                type: object
+              target:
+                description: Target defines the Kubernetes resource to monitor
+                properties:
+                  apiVersion:
+                    description: APIVersion of the resource (e.g., "v1", "apps/v1",
+                      "argoproj.io/v1alpha1")
+                    type: string
+                  kind:
+                    description: Kind of the resource (e.g., "ConfigMap", "Deployment",
+                      "Workflow")
+                    type: string
+                required:
+                - apiVersion
+                - kind
+                type: object
+            required:
+            - target
+            type: object
+          status:
+            description: ResourceMonitorStatus defines the observed state of ResourceMonitor
+            properties:
+              clusters:
+                description: Clusters shows per-cluster collection status
+                items:
+                  description: ClusterCollectionStatus shows collection status for
+                    a specific cluster
+                  properties:
+                    error:
+                      description: Error message if collection failed
+                      type: string
+                    lastCollected:
+                      description: LastCollected is when resources were last collected
+                        from this cluster
+                      format: date-time
+                      type: string
+                    name:
+                      description: Name of the cluster
+                      type: string
+                    resourceCount:
+                      description: ResourceCount is the number of resources collected
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              lastValidated:
+                description: LastValidated is when the monitor spec was last validated
+                format: date-time
+                type: string
+              message:
+                description: Message provides additional status information
+                type: string
+              state:
+                description: State indicates the current state of this monitor
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

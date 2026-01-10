@@ -8,7 +8,8 @@ import (
 	"github.com/clusterpulse/cluster-controller/internal/config"
 	clusterctrl "github.com/clusterpulse/cluster-controller/internal/controller/cluster"
 	registryctrl "github.com/clusterpulse/cluster-controller/internal/controller/registry"
-	"github.com/clusterpulse/cluster-controller/internal/store"
+	resourcemonitorctrl "github.com/clusterpulse/cluster-controller/internal/controller/resourcemonitor"
+	redis "github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -52,13 +53,11 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// Get log level from environment variable (default to "info")
 	logLevel := strings.ToLower(os.Getenv("LOG_LEVEL"))
 	if logLevel == "" {
 		logLevel = "info"
 	}
 
-	// Configure logrus log level
 	switch logLevel {
 	case "debug":
 		logrus.SetLevel(logrus.DebugLevel)
@@ -74,7 +73,6 @@ func main() {
 		logLevel = "info"
 	}
 
-	// Set logrus formatter for cleaner output
 	logrus.SetFormatter(&logrus.TextFormatter{
 		DisableTimestamp: false,
 		TimestampFormat:  "15:04:05",
@@ -84,10 +82,8 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Load configuration
 	cfg := config.Load()
 
-	// Determine namespace to watch
 	if watchNamespace == "" {
 		watchNamespace = cfg.Namespace
 	}
@@ -100,10 +96,9 @@ func main() {
 	logrus.WithFields(logrus.Fields{
 		"namespace": watchNamespace,
 		"logLevel":  logLevel,
-		"version":   "0.1.0",
+		"version":   "0.2.0",
 	}).Info("ClusterPulse Cluster Controller starting")
 
-	// Initialize Redis client
 	redisClient, err := redis.NewClient(cfg)
 	if err != nil {
 		setupLog.Error(err, "unable to create redis client")
@@ -113,7 +108,6 @@ func main() {
 
 	logrus.Info("Connected to Redis successfully")
 
-	// Create manager with namespace scope
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
@@ -155,6 +149,18 @@ func main() {
 		WatchNamespace: watchNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RegistryConnection")
+		os.Exit(1)
+	}
+
+	// Setup resource monitor controller (Phase 1 - basic reconciliation)
+	if err = (&resourcemonitorctrl.ResourceMonitorReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		RedisClient:    redisClient,
+		Config:         cfg,
+		WatchNamespace: watchNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ResourceMonitor")
 		os.Exit(1)
 	}
 
