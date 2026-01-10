@@ -12,7 +12,6 @@ import (
 
 // StoreResourceMonitor stores a ResourceMonitor spec in Redis
 func (c *Client) StoreResourceMonitor(ctx context.Context, name string, spec v1alpha1.ResourceMonitorSpec) error {
-	// Convert to Python-compatible format
 	monitorData := map[string]interface{}{
 		"name":         name,
 		"display_name": spec.DisplayName,
@@ -38,14 +37,11 @@ func (c *Client) StoreResourceMonitor(ctx context.Context, name string, spec v1a
 
 	pipe := c.client.Pipeline()
 
-	// Store the monitor spec
 	specKey := fmt.Sprintf("monitor:%s:spec", name)
-	pipe.Set(ctx, specKey, string(data), 0) // No TTL - monitors are persistent
+	pipe.Set(ctx, specKey, string(data), 0)
 
-	// Add to the set of all monitors
 	pipe.SAdd(ctx, "monitors:all", name)
 
-	// Index by target kind for quick lookups
 	kindKey := fmt.Sprintf("monitors:kind:%s", spec.Target.Kind)
 	pipe.SAdd(ctx, kindKey, name)
 
@@ -214,7 +210,6 @@ func (c *Client) GetActiveResourceMonitors(ctx context.Context) ([]map[string]in
 			continue
 		}
 
-		// Check if enabled
 		if collection, ok := spec["collection"].(map[string]interface{}); ok {
 			if enabled, ok := collection["enabled"].(bool); ok && !enabled {
 				continue
@@ -229,30 +224,24 @@ func (c *Client) GetActiveResourceMonitors(ctx context.Context) ([]map[string]in
 
 // DeleteResourceMonitor removes a ResourceMonitor from Redis
 func (c *Client) DeleteResourceMonitor(ctx context.Context, name string) error {
-	// Get the spec first to know which indexes to clean up
 	spec, err := c.GetResourceMonitor(ctx, name)
 	if err != nil {
-		// Already gone, that's fine
 		logrus.Debugf("Monitor %s not found in Redis, skipping deletion", name)
 		return nil
 	}
 
 	pipe := c.client.Pipeline()
 
-	// Remove spec
 	pipe.Del(ctx, fmt.Sprintf("monitor:%s:spec", name))
-
-	// Remove from monitors set
 	pipe.SRem(ctx, "monitors:all", name)
 
-	// Remove from kind index
 	if target, ok := spec["target"].(map[string]interface{}); ok {
 		if kind, ok := target["kind"].(string); ok {
 			pipe.SRem(ctx, fmt.Sprintf("monitors:kind:%s", kind), name)
 		}
 	}
 
-	// Remove any collected data for this monitor across all clusters
+	// Remove collected data for this monitor across all clusters
 	pattern := fmt.Sprintf("cluster:*:monitor:%s:*", name)
 	iter := c.client.Scan(ctx, 0, pattern, 100).Iterator()
 	for iter.Next(ctx) {
@@ -288,13 +277,42 @@ func (c *Client) UpdateMonitorCollectionStatus(ctx context.Context, monitorName,
 	return c.client.Set(ctx, key, string(data), time.Duration(c.config.CacheTTL)*time.Second).Err()
 }
 
-// StoreMonitoredResources stores collected resources for a monitor
+// StoreMonitoredResources stores collected resources for a monitor with summary data
 func (c *Client) StoreMonitoredResources(ctx context.Context, clusterName, monitorName string, resources []map[string]interface{}, truncated bool) error {
+	now := time.Now().UTC()
+
+	// Build summary statistics
+	byNamespace := make(map[string]int)
+	byLabel := make(map[string]map[string]int)
+
+	for _, res := range resources {
+		if meta, ok := res["_meta"].(map[string]interface{}); ok {
+			// Count by namespace
+			if ns, ok := meta["namespace"].(string); ok && ns != "" {
+				byNamespace[ns]++
+			}
+
+			// Count by common labels
+			if labels, ok := meta["labels"].(map[string]string); ok {
+				for k, v := range labels {
+					// Only track well-known labels to avoid explosion
+					if isCommonLabel(k) {
+						if byLabel[k] == nil {
+							byLabel[k] = make(map[string]int)
+						}
+						byLabel[k][v]++
+					}
+				}
+			}
+		}
+	}
+
+	// Main data payload
 	data := map[string]interface{}{
 		"resources":    resources,
 		"truncated":    truncated,
 		"total_count":  len(resources),
-		"collected_at": time.Now().UTC().Format(time.RFC3339),
+		"collected_at": now.Format(time.RFC3339),
 	}
 
 	jsonData, err := json.Marshal(data)
@@ -302,8 +320,108 @@ func (c *Client) StoreMonitoredResources(ctx context.Context, clusterName, monit
 		return fmt.Errorf("failed to marshal monitored resources: %w", err)
 	}
 
-	key := fmt.Sprintf("cluster:%s:monitor:%s:data", clusterName, monitorName)
+	// Summary payload
+	summary := map[string]interface{}{
+		"count":        len(resources),
+		"truncated":    truncated,
+		"by_namespace": byNamespace,
+		"by_label":     byLabel,
+		"collected_at": now.Format(time.RFC3339),
+	}
+
+	summaryJSON, err := json.Marshal(summary)
+	if err != nil {
+		return fmt.Errorf("failed to marshal summary: %w", err)
+	}
+
+	pipe := c.client.Pipeline()
 	ttl := time.Duration(c.config.CacheTTL) * time.Second
 
-	return c.client.Set(ctx, key, string(jsonData), ttl).Err()
+	// Store main data
+	dataKey := fmt.Sprintf("cluster:%s:monitor:%s:data", clusterName, monitorName)
+	pipe.Set(ctx, dataKey, string(jsonData), ttl)
+
+	// Store summary for quick access
+	summaryKey := fmt.Sprintf("cluster:%s:monitor:%s:summary", clusterName, monitorName)
+	pipe.Set(ctx, summaryKey, string(summaryJSON), ttl)
+
+	// Store metadata
+	metaKey := fmt.Sprintf("cluster:%s:monitor:%s:meta", clusterName, monitorName)
+	pipe.HSet(ctx, metaKey,
+		"collected_at", now.Format(time.RFC3339),
+		"resource_count", len(resources),
+		"truncated", truncated,
+	)
+	pipe.Expire(ctx, metaKey, ttl)
+
+	// Track which monitors have data for this cluster
+	pipe.SAdd(ctx, fmt.Sprintf("cluster:%s:monitors", clusterName), monitorName)
+	pipe.Expire(ctx, fmt.Sprintf("cluster:%s:monitors", clusterName), ttl)
+
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to store monitored resources: %w", err)
+	}
+
+	logrus.Debugf("Stored %d resources for monitor %s on cluster %s", len(resources), monitorName, clusterName)
+	return nil
+}
+
+// GetMonitoredResources retrieves collected resources for a monitor from a cluster
+func (c *Client) GetMonitoredResources(ctx context.Context, clusterName, monitorName string) ([]map[string]interface{}, error) {
+	key := fmt.Sprintf("cluster:%s:monitor:%s:data", clusterName, monitorName)
+	data, err := c.client.Get(ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Resources []map[string]interface{} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(data), &result); err != nil {
+		return nil, err
+	}
+
+	return result.Resources, nil
+}
+
+// GetMonitoredResourcesSummary retrieves the summary for a monitor from a cluster
+func (c *Client) GetMonitoredResourcesSummary(ctx context.Context, clusterName, monitorName string) (map[string]interface{}, error) {
+	key := fmt.Sprintf("cluster:%s:monitor:%s:summary", clusterName, monitorName)
+	data, err := c.client.Get(ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	var summary map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &summary); err != nil {
+		return nil, err
+	}
+
+	return summary, nil
+}
+
+// GetClusterMonitors returns all monitors with data for a cluster
+func (c *Client) GetClusterMonitors(ctx context.Context, clusterName string) ([]string, error) {
+	key := fmt.Sprintf("cluster:%s:monitors", clusterName)
+	return c.client.SMembers(ctx, key).Result()
+}
+
+// isCommonLabel checks if a label is commonly used and worth tracking
+func isCommonLabel(key string) bool {
+	commonLabels := map[string]bool{
+		"app":                          true,
+		"app.kubernetes.io/name":       true,
+		"app.kubernetes.io/instance":   true,
+		"app.kubernetes.io/component":  true,
+		"app.kubernetes.io/part-of":    true,
+		"app.kubernetes.io/managed-by": true,
+		"environment":                  true,
+		"env":                          true,
+		"tier":                         true,
+		"team":                         true,
+		"owner":                        true,
+		"version":                      true,
+	}
+	return commonLabels[key]
 }

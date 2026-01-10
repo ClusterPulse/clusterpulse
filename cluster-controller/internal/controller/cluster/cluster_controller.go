@@ -32,7 +32,7 @@ type ClusterReconciler struct {
 	Config            *config.Config
 	WatchNamespace    string
 	clientPool        *pool.ClientPool
-	lastOperatorFetch map[string]time.Time // Track last operator fetch time per cluster
+	lastOperatorFetch map[string]time.Time
 }
 
 // SetupWithManager sets up the controller with the Manager
@@ -40,26 +40,20 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.clientPool = pool.NewClientPool(30 * time.Minute)
 	r.lastOperatorFetch = make(map[string]time.Time)
 
-	// Build the controller without predicates that might interfere with reconciliation
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.ClusterConnection{}).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 3,
-			// Add a reconcile time to ensure periodic reconciliation
-			// This is a workaround for the RequeueAfter issue
 		}).
 		Complete(r)
 }
 
 // getReconcileInterval determines the reconciliation interval for a cluster
 func (r *ClusterReconciler) getReconcileInterval(clusterConn *v1alpha1.ClusterConnection) int {
-	// Default to config value
 	interval := r.Config.ReconciliationInterval
 
-	// Override with spec value if set and valid
 	if clusterConn.Spec.Monitoring.Interval > 0 {
 		specInterval := int(clusterConn.Spec.Monitoring.Interval)
-		// Enforce minimum interval of 30 seconds
 		if specInterval >= 30 {
 			interval = specInterval
 		} else {
@@ -81,47 +75,41 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		"namespace": req.Namespace,
 	})
 
-	// Fetch the ClusterConnection instance
 	clusterConn := &v1alpha1.ClusterConnection{}
 	err := r.Get(ctx, req.NamespacedName, clusterConn)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			// Object deleted
 			log.Debug("ClusterConnection deleted, cleaning up")
 			delete(r.lastOperatorFetch, clusterConn.Name)
+			r.cleanupMonitorCollection(req.Name)
 			return r.handleDeletion(ctx, req.Name)
 		}
 		return reconcile.Result{}, err
 	}
 
-	// Handle deletion
 	if !clusterConn.DeletionTimestamp.IsZero() {
 		delete(r.lastOperatorFetch, clusterConn.Name)
+		r.cleanupMonitorCollection(clusterConn.Name)
 		return r.handleDeletion(ctx, req.Name)
 	}
 
-	// Determine reconciliation interval
 	interval := r.getReconcileInterval(clusterConn)
 
 	log.Debug("Starting reconciliation")
 
-	// Reconcile the cluster
 	if err := r.reconcileCluster(ctx, clusterConn); err != nil {
 		log.WithError(err).Error("Failed to reconcile cluster")
 
-		// Update status to reflect error
 		clusterConn.Status.Phase = "Error"
 		clusterConn.Status.Health = string(types.HealthUnhealthy)
 		clusterConn.Status.Message = err.Error()
 
-		// Use patch instead of update to avoid triggering reconciliation
 		if patchErr := r.Status().Patch(ctx, clusterConn, k8sclient.MergeFrom(clusterConn)); patchErr != nil {
 			log.WithError(patchErr).Debug("Failed to patch status")
 		}
 
 		r.updateClusterStatus(ctx, req.Name, types.HealthUnhealthy, err.Error())
 
-		// On error, retry after 1 minute or the configured interval, whichever is smaller
 		retryInterval := time.Duration(interval) * time.Second
 		if retryInterval > time.Minute {
 			retryInterval = time.Minute
@@ -131,31 +119,25 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{RequeueAfter: retryInterval}, nil
 	}
 
-	// Calculate time taken
 	duration := time.Since(startTime)
 
-	// Only log at Info level for significant events or slow reconciliations
 	if duration > 5*time.Second {
 		log.Infof("Cluster %s reconciled (took %v)", clusterConn.Name, duration)
 	} else {
 		log.Debugf("Reconciliation completed in %v, next in %ds", duration, interval)
 	}
 
-	// IMPORTANT: Always return RequeueAfter for periodic reconciliation
-	// This ensures the controller continues to reconcile even without external events
 	return reconcile.Result{RequeueAfter: time.Duration(interval) * time.Second}, nil
 }
 
 func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v1alpha1.ClusterConnection) error {
 	log := logrus.WithField("cluster", clusterConn.Name)
 
-	// Get cluster client
 	clusterClient, err := r.getClusterClient(ctx, clusterConn)
 	if err != nil {
 		return fmt.Errorf("failed to get cluster client: %w", err)
 	}
 
-	// Test connection with configured timeout
 	timeout := r.Config.ConnectTimeout
 	if clusterConn.Spec.Monitoring.Timeout > 0 {
 		timeout = int(clusterConn.Spec.Monitoring.Timeout)
@@ -220,13 +202,12 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		return nil
 	})
 
-	// Explicit namespace collection as fallback
+	// Namespace collection
 	g.Go(func() error {
 		var err error
 		namespaceList, err = clusterClient.GetNamespaces(gctx)
 		if err != nil {
 			log.Debug("Failed to get namespaces directly")
-			// Non-critical, don't fail reconciliation
 		} else {
 			log.Debugf("Retrieved %d namespaces", len(namespaceList))
 		}
@@ -239,19 +220,17 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		clusterInfo, err = clusterClient.GetClusterInfo(gctx)
 		if err != nil {
 			log.Debug("Failed to get cluster info")
-			// Non-critical, don't fail reconciliation
 		}
 		return nil
 	})
 
-	// Collect ClusterOperators (for OpenShift clusters)
+	// ClusterOperators (OpenShift)
 	g.Go(func() error {
 		var err error
 		clusterOperators, err = clusterClient.GetClusterOperators(gctx)
 		if err != nil {
-			// Log but don't fail - ClusterOperators are OpenShift-specific
 			log.Debug("ClusterOperators not available (likely not OpenShift)")
-			return nil // Don't fail reconciliation
+			return nil
 		}
 
 		if len(clusterOperators) > 0 {
@@ -260,7 +239,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 			log.Debugf("ClusterOperators: %d total, %d available, %d degraded",
 				len(clusterOperators), available, degraded)
 
-			// Only log at Info if there are issues
 			if degraded > 0 {
 				log.Warnf("Cluster has %d degraded operators", degraded)
 			}
@@ -269,20 +247,17 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		return nil
 	})
 
-	// Collect detailed resources if enabled
+	// Legacy resource collection (for backward compatibility)
 	if r.Config.ResourceCollection.Enabled {
 		g.Go(func() error {
 			var err error
-
-			// Use a shorter timeout for resource collection to prevent blocking
 			collectionCtx, cancel := context.WithTimeout(gctx, 10*time.Second)
 			defer cancel()
 
 			resourceCollection, err = clusterClient.GetResourceCollection(collectionCtx, r.Config.ResourceCollection)
 			if err != nil {
-				// Log but don't fail - this is supplementary data
 				log.Debug("Failed to collect detailed resources")
-				return nil // Don't fail reconciliation
+				return nil
 			}
 
 			if resourceCollection != nil {
@@ -297,9 +272,8 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		})
 	}
 
-	// Operators - check based on operator scan interval
+	// Operators (OLM)
 	g.Go(func() error {
-		// Check if we need to fetch operators based on the operator scan interval
 		lastFetch, exists := r.lastOperatorFetch[clusterConn.Name]
 		needsRefresh := !exists || time.Since(lastFetch) >= time.Duration(r.Config.OperatorScanInterval)*time.Second
 
@@ -308,11 +282,9 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 			var err error
 			operators, err = clusterClient.GetOperators(gctx)
 			if err != nil {
-				// Operators are optional, don't fail reconciliation
 				log.Debug("Failed to get operators (may not be installed)")
 				operators = []types.OperatorInfo{}
 			} else {
-				// Update last fetch time only on successful fetch
 				r.lastOperatorFetch[clusterConn.Name] = time.Now()
 				if len(operators) > 0 {
 					log.Debugf("Found %d operators", len(operators))
@@ -325,19 +297,18 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		return nil
 	})
 
-	// Wait for all operations to complete
 	if err := g.Wait(); err != nil {
 		return err
 	}
 
-	// If cluster metrics namespace list is empty but direct collection succeeded, use that
+	// Merge namespace lists
 	if clusterMetrics != nil && len(clusterMetrics.NamespaceList) == 0 && len(namespaceList) > 0 {
 		log.Debug("Using directly collected namespaces")
 		clusterMetrics.NamespaceList = namespaceList
 		clusterMetrics.Namespaces = len(namespaceList)
 	}
 
-	// Store metrics in Redis
+	// Store all collected data
 	if err := r.RedisClient.StoreNodeMetrics(ctx, clusterConn.Name, nodeMetrics); err != nil {
 		log.WithError(err).Debug("Failed to store node metrics")
 	}
@@ -346,7 +317,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		log.WithError(err).Debug("Failed to store cluster metrics")
 	}
 
-	// Also explicitly store namespaces if we have them
 	if len(namespaceList) > 0 {
 		if err := r.RedisClient.StoreNamespaces(ctx, clusterConn.Name, namespaceList); err != nil {
 			log.WithError(err).Debug("Failed to store namespaces")
@@ -365,30 +335,30 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		}
 	}
 
-	// Store the ClusterOperators
 	if len(clusterOperators) > 0 {
 		if err := r.RedisClient.StoreClusterOperators(ctx, clusterConn.Name, clusterOperators); err != nil {
 			log.WithError(err).Debug("Failed to store ClusterOperators")
 		}
 	}
 
-	// Store resource collection if collected
 	if resourceCollection != nil {
 		if err := r.RedisClient.StoreResourceCollection(ctx, clusterConn.Name, resourceCollection); err != nil {
 			log.WithError(err).Debug("Failed to store resource collection")
 		}
 	}
 
-	// Store cluster labels if present
 	if len(clusterConn.Spec.Labels) > 0 {
 		r.RedisClient.StoreClusterLabels(ctx, clusterConn.Name, clusterConn.Spec.Labels)
 	}
+
+	// Collect dynamic resources from ResourceMonitors
+	r.collectDynamicResources(ctx, clusterConn, clusterClient)
 
 	// Calculate health
 	health := r.calculateClusterHealth(clusterMetrics)
 	message := r.generateHealthMessage(clusterMetrics, health)
 
-	// Update CRD status - use patch to avoid triggering reconciliation
+	// Update CRD status
 	originalClusterConn := clusterConn.DeepCopy()
 	clusterConn.Status.Phase = "Connected"
 	clusterConn.Status.Health = string(health)
@@ -398,17 +368,14 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	clusterConn.Status.Nodes = clusterMetrics.Nodes
 	clusterConn.Status.Namespaces = clusterMetrics.Namespaces
 
-	// Only patch if status actually changed
 	if !r.statusEqual(originalClusterConn.Status, clusterConn.Status) {
 		if err := r.Status().Patch(ctx, clusterConn, k8sclient.MergeFrom(originalClusterConn)); err != nil {
 			log.WithError(err).Debug("Failed to patch ClusterConnection status")
 		}
 	}
 
-	// Update Redis status
 	r.updateClusterStatus(ctx, clusterConn.Name, health, message)
 
-	// Publish event
 	r.RedisClient.PublishEvent("cluster.reconciled", clusterConn.Name, map[string]interface{}{
 		"health":       health,
 		"nodes":        clusterMetrics.Nodes,
@@ -417,7 +384,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		"display_name": clusterConn.Spec.DisplayName,
 	})
 
-	// Log health status changes at Info level
 	if originalClusterConn.Status.Health != string(health) {
 		if health == types.HealthHealthy {
 			log.Infof("Cluster %s is healthy (%d nodes, %d namespaces)",
@@ -432,7 +398,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	return nil
 }
 
-// statusEqual checks if two statuses are equal (excluding timestamp)
 func (r *ClusterReconciler) statusEqual(a, b v1alpha1.ClusterConnectionStatus) bool {
 	return a.Phase == b.Phase &&
 		a.Health == b.Health &&
@@ -442,7 +407,6 @@ func (r *ClusterReconciler) statusEqual(a, b v1alpha1.ClusterConnectionStatus) b
 }
 
 func (r *ClusterReconciler) getClusterClient(ctx context.Context, clusterConn *v1alpha1.ClusterConnection) (*cluster.ClusterClient, error) {
-	// Get credentials from secret
 	secretName := clusterConn.Spec.CredentialsRef.Name
 	secretNamespace := clusterConn.Spec.CredentialsRef.Namespace
 	if secretNamespace == "" {
@@ -456,7 +420,6 @@ func (r *ClusterReconciler) getClusterClient(ctx context.Context, clusterConn *v
 
 	token := string(secret.Data["token"])
 	if token == "" {
-		// Try base64 decoding if needed
 		if tokenB64, ok := secret.Data["token"]; ok {
 			decoded, err := base64.StdEncoding.DecodeString(string(tokenB64))
 			if err == nil {
@@ -471,7 +434,6 @@ func (r *ClusterReconciler) getClusterClient(ctx context.Context, clusterConn *v
 
 	caCert := secret.Data["ca.crt"]
 
-	// Use display name if available, otherwise use resource name
 	clientName := clusterConn.Spec.DisplayName
 	if clientName == "" {
 		clientName = clusterConn.Name
@@ -566,15 +528,12 @@ func (r *ClusterReconciler) updateClusterStatus(ctx context.Context, name string
 func (r *ClusterReconciler) handleDeletion(ctx context.Context, name string) (reconcile.Result, error) {
 	log := logrus.WithField("cluster", name)
 
-	// Clean up Redis data
 	if err := r.RedisClient.DeleteClusterData(ctx, name); err != nil {
 		log.WithError(err).Debug("Failed to delete cluster data from Redis")
 	}
 
-	// Remove from client pool
 	r.clientPool.Remove(name)
 
-	// Publish deletion event
 	r.RedisClient.PublishEvent("cluster.deleted", name, nil)
 
 	log.Info("Cluster connection removed")
