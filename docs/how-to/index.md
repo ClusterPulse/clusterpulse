@@ -1,3 +1,4 @@
 - [Create Read-only Policy](policies/create-readonly-policy.md)
 - [Filter By Namespace](policies/filter-by-namespace.md)
 - [Add an OpenShift Cluster](clusters/add-openshift-cluster.md)
+- [Use an External Redis Instance](external-redis.md)
