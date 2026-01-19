@@ -1,4 +1,4 @@
-FROM python:3.11.9-slim AS builder
+FROM python:3.11.14-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && \
@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY ./policy-controller/policy_controller.py .
 
 # Final stage
-FROM python:3.11.9-slim
+FROM python:3.11.14-slim
 
 # Install runtime dependencies and clean up
 RUN apt-get update && \
