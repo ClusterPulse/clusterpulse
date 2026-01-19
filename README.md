@@ -23,6 +23,9 @@ ClusterPulse addresses these challenges by providing:
 - **🔄 Automatic Discovery**: Automatically discovers and monitors nodes, operators, namespaces, and resources
 - **📈 Scalable Architecture**: Designed to handle hundreds of clusters with thousands of nodes
 
+## 📄 Documentation
+ClusterPulse documentation is deployed via mkdocs. See more [here](https://clusterpulse.github.io/clusterpulse/latest/)
+
 ## 🏗️ Architecture
 
 ![architecture](/docs/assets/architecture.jpg)
