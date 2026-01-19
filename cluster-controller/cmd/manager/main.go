@@ -7,8 +7,9 @@ import (
 
 	"github.com/clusterpulse/cluster-controller/internal/config"
 	clusterctrl "github.com/clusterpulse/cluster-controller/internal/controller/cluster"
+	metricsourcectrl "github.com/clusterpulse/cluster-controller/internal/controller/metricsource"
 	registryctrl "github.com/clusterpulse/cluster-controller/internal/controller/registry"
-	"github.com/clusterpulse/cluster-controller/internal/store"
+	redis "github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -52,13 +53,12 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// Get log level from environment variable (default to "info")
+	// Configure log level from environment
 	logLevel := strings.ToLower(os.Getenv("LOG_LEVEL"))
 	if logLevel == "" {
 		logLevel = "info"
 	}
 
-	// Configure logrus log level
 	switch logLevel {
 	case "debug":
 		logrus.SetLevel(logrus.DebugLevel)
@@ -74,7 +74,6 @@ func main() {
 		logLevel = "info"
 	}
 
-	// Set logrus formatter for cleaner output
 	logrus.SetFormatter(&logrus.TextFormatter{
 		DisableTimestamp: false,
 		TimestampFormat:  "15:04:05",
@@ -100,7 +99,7 @@ func main() {
 	logrus.WithFields(logrus.Fields{
 		"namespace": watchNamespace,
 		"logLevel":  logLevel,
-		"version":   "0.1.0",
+		"version":   "0.2.0",
 	}).Info("ClusterPulse Cluster Controller starting")
 
 	// Initialize Redis client
@@ -155,6 +154,18 @@ func main() {
 		WatchNamespace: watchNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RegistryConnection")
+		os.Exit(1)
+	}
+
+	// Setup MetricSource controller
+	if err = (&metricsourcectrl.MetricSourceReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		RedisClient:    redisClient,
+		Config:         cfg,
+		WatchNamespace: watchNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MetricSource")
 		os.Exit(1)
 	}
 
