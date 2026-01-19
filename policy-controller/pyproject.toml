@@ -1,33 +1,18 @@
 [project]
-name = "clusterpulse"
-version = "0.2.1"
-description = "ClusterPulse API"
+name = "policy-controller"
+version = "0.2.3"
+description = "ClusterPulse Policy Controller - Kubernetes operator for MonitorAccessPolicy CRDs"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.109",
-    "uvicorn[standard]>=0.27",
-    "pydantic[email]>=2.5",
-    "pydantic-settings>=2.1",
-    "python-multipart>=0.0.6",
-    "python-jose[cryptography]>=3.3",
-    "passlib[bcrypt]>=1.7.4",
-    "httpx>=0.26",
-    "kubernetes>=29",
-    "redis>=5",
-    "hiredis>=2.3",
-    "aiofiles>=23.2",
-    "python-json-logger>=2",
+    "kopf>=1.36.1",
+    "redis>=5.0.1",
+    "kubernetes>=29.0.0",
+    "urllib3>=2.1.0",
+    "pydantic>=2.5.3",
     "prometheus-client>=0.19",
-    "opentelemetry-api>=1.22",
-    "opentelemetry-sdk>=1.22",
-    "opentelemetry-instrumentation-fastapi>=0.43b0",
-    "python-dateutil>=2.8",
-    "pytz>=2023.3",
-    "pyyaml>=6",
+    "tenacity>=8.2",
     "setuptools>=78.0.0",
-    "jinja2>=3.1",
-    "websockets>=12",
 ]
 
 [project.optional-dependencies]
@@ -35,18 +20,15 @@ dev = [
     "black>=23",
     "ruff>=0.1",
     "mypy>=1.5",
+    "autoflake>=2.2",
+    "isort>=5.12",
 ]
 test = [
     "pytest>=7.4",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.1",
     "pytest-mock>=3.11",
-    "pytest-xdist>=3.3",
-    "pytest-timeout>=2.1",
-    "pytest-randomly>=3.13",
     "fakeredis>=2.20",
-    "factory-boy>=3.3",
-    "coverage[toml]>=7.3",
 ]
 
 [build-system]
@@ -54,23 +36,21 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["clusterpulse"]
+packages = ["."]
+include = ["policy_controller.py"]
 
 [tool.uv]
 dev-dependencies = [
     "black>=23",
     "ruff>=0.1",
     "mypy>=1.5",
+    "autoflake>=2.2",
+    "isort>=5.12",
     "pytest>=7.4",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.1",
     "pytest-mock>=3.11",
-    "pytest-xdist>=3.3",
-    "pytest-timeout>=2.1",
-    "pytest-randomly>=3.13",
     "fakeredis>=2.20",
-    "factory-boy>=3.3",
-    "coverage[toml]>=7.3",
 ]
 
 [tool.pytest.ini_options]
@@ -83,33 +63,18 @@ python_functions = "test_*"
 markers = [
     "unit: Unit tests (fast, isolated)",
     "integration: Integration tests (require mocked dependencies)",
-    "e2e: End-to-end tests (slowest, full system)",
-    "slow: Mark test as slow running",
-    "rbac: RBAC-specific tests",
     "redis: Tests that require Redis",
 ]
 addopts = "-v --strict-markers --tb=short"
 
 [tool.coverage.run]
-source = ["clusterpulse"]
+source = ["."]
 omit = ["*/tests/*", "*/conftest.py", "*/__pycache__/*"]
 
 [tool.coverage.report]
 precision = 2
 show_missing = true
 skip_covered = false
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
-    "@abstractmethod",
-]
-
-[tool.coverage.html]
-directory = "htmlcov"
 
 [tool.black]
 line-length = 88
@@ -118,6 +83,14 @@ target-version = ['py311']
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
 
 [tool.mypy]
 python_version = "3.11"

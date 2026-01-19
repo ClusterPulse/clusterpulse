@@ -1186,6 +1186,13 @@ async def periodic_policy_validation(
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
     """Configure kopf settings"""
+    # Disable CRD scanning - we already know our CRDs exist
+    settings.scanning.disabled = True
+    
+    # Run in standalone mode - disables peering which requires cluster access
+    settings.peering.standalone = True
+    
+    # Existing settings
     settings.batching.worker_limit = 3
     settings.posting.enabled = False
     settings.watching.server_timeout = 300
@@ -1200,7 +1207,6 @@ def configure(settings: kopf.OperatorSettings, **_):
     settings.batching.batch_window = 0.5
 
     logger.info("Kopf configured with API server protection settings")
-
 
 @kopf.on.startup()
 async def startup_handler(**kwargs):

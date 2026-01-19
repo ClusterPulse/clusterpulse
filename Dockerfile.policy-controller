@@ -2,36 +2,39 @@ FROM python:3.11.9-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends gcc g++ && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 WORKDIR /app
 
-# Copy requirements
-COPY ./policy-controller/requirements.txt ./
+# Copy dependency files first for better caching
+COPY ./policy-controller/pyproject.toml ./policy-controller/uv.lock* ./
 
-# Install Python dependencies to a specific location
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# Install dependencies to system Python
+# Note: uv.lock is optional - if it doesn't exist, uv will resolve dependencies
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r pyproject.toml
+
+# Copy application code
+COPY ./policy-controller/policy_controller.py .
 
 # Final stage
 FROM python:3.11.9-slim
 
 # Install runtime dependencies and clean up
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    apt-get install -y --no-install-recommends curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy Python dependencies from builder
-COPY --from=builder --chown=1001:0 /install /usr/local
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
 # Copy application code with proper permissions
 COPY --chown=1001:0 ./policy-controller/policy_controller.py .
@@ -43,8 +46,7 @@ RUN mkdir -p /app/logs /app/tmp && \
     chmod g+w /app /app/logs /app/tmp
 
 # Set environment variables
-ENV PATH=/usr/local/bin:$PATH \
-    PYTHONPATH=/app \
+ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     HOME=/app
 
@@ -56,7 +58,7 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/healthz || exit 1
 
 # Run the application
 CMD ["python", "policy_controller.py"]
