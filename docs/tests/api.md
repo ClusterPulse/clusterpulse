@@ -8,24 +8,24 @@ This test suite covers the ClusterPulse API with a focus on the RBAC engine (our
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run with coverage
-pytest --cov=clusterpulse --cov-report=html
+uv run pytest --cov=clusterpulse --cov-report=html
 
 # Run specific test categories
-pytest -m unit           # Unit tests only
-pytest -m integration    # Integration tests only
-pytest -m rbac          # RBAC-specific tests
+uv run pytest -m unit           # Unit tests only
+uv run pytest -m integration    # Integration tests only
+uv run pytest -m rbac          # RBAC-specific tests
 
 # Run a specific test file
-pytest tests/unit/core/test_rbac_engine.py
+uv run pytest tests/unit/core/test_rbac_engine.py
 
 # Run with verbose output
-pytest -v
+uv run pytest -v
 
 # Run tests matching a pattern
-pytest -k "test_filter"
+uv run pytest -k "test_filter"
 ```
 
 ## Test Structure
@@ -363,31 +363,31 @@ def test_no_metrics_permission(authenticated_client, fake_redis):
 
 ```bash
 # Run one specific test
-pytest tests/unit/core/test_rbac_engine.py::TestRBACEngine::test_authorize_no_policies -v
+uv run pytest tests/unit/core/test_rbac_engine.py::TestRBACEngine::test_authorize_no_policies -v
 
 # Run with print statements visible
-pytest tests/unit/core/test_rbac_engine.py::TestRBACEngine::test_authorize_no_policies -v -s
+uv run pytest tests/unit/core/test_rbac_engine.py::TestRBACEngine::test_authorize_no_policies -v -s
 ```
 
 ### Inspecting Failures
 
 ```bash
 # Show local variables on failure
-pytest --showlocals
+uv run pytest --showlocals
 
 # Enter debugger on failure
-pytest --pdb
+uv run pytest --pdb
 
 # Show full diff on assertion failures
-pytest -vv
+uv run pytest -vv
 ```
 
 ### Common Issues
 
 **Issue: "No module named 'clusterpulse'"**
 ```bash
-# Solution: Install in development mode
-pip install -e .
+# Solution: Sync dependencies with uv
+uv sync
 ```
 
 **Issue: Redis client not mocked properly**
@@ -421,8 +421,8 @@ We use pytest markers to categorize tests:
 
 Run tests by marker:
 ```bash
-pytest -m "unit and not slow"
-pytest -m "integration or rbac"
+uv run pytest -m "unit and not slow"
+uv run pytest -m "integration or rbac"
 ```
 
 ## Coverage Goals
