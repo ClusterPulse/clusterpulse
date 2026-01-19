@@ -2,65 +2,57 @@ FROM python:3.11.9-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends gcc g++ && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 WORKDIR /app
 
-# Copy the entire api directory
-COPY ./api /app
+# Copy dependency files first for better caching
+COPY ./api/pyproject.toml ./api/uv.lock ./
 
-# Install the package in editable mode
-RUN pip install --no-cache-dir -e .
+# Install dependencies to system Python
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r pyproject.toml
+
+# Copy application and install it
+COPY ./api /app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --no-deps .
 
 # Final stage
 FROM python:3.11.9-slim
 
-# Add metadata labels
-LABEL maintainer="asmoore@redhat.com" \
-      version="1.0.0" \
-      description="Main API Service"
-
-# Install runtime dependencies and clean up
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    apt-get install -y --no-install-recommends curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy installed package from builder
-COPY --from=builder --chown=1001:0 /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder --chown=1001:0 /app/clusterpulse /app/clusterpulse
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /app/clusterpulse /app/clusterpulse
 
-# Create directories that might need write access
+# Create directories with proper permissions
 RUN mkdir -p /app/logs /app/tmp && \
     chgrp -R 0 /app && \
     chmod -R g=u /app && \
     chmod g+w /app /app/logs /app/tmp
 
-# Set environment variables
-ENV PATH=/usr/local/bin:$PATH \
-    PYTHONPATH=/app \
+ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PORT=8080 \
     HOME=/app
 
-# Use numeric UID
 USER 1001
 
-# Expose port
 EXPOSE 8080
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the application
 CMD ["python", "-m", "uvicorn", "clusterpulse.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]

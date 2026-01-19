@@ -5,9 +5,11 @@
 ### Local Setup
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-pip install -e .  # Install in dev mode
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies (uses uv.lock for reproducible builds)
+uv sync
 
 # Set up environment
 cp .env.example .env
@@ -17,15 +19,21 @@ cp .env.example .env
 docker run -d -p 6379:6379 redis:latest
 
 # Run the API
-python -m uvicorn clusterpulse.main:app --reload --host 0.0.0.0 --port 8080
+uv run uvicorn clusterpulse.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
 API docs available at `http://localhost:8080/api/v1/docs`
 
 ### Development Dependencies
 
+Development and test dependencies are included in `pyproject.toml` and managed by uv:
+
 ```bash
-pip install pytest pytest-cov pytest-asyncio black ruff mypy
+# Install all dependencies including dev/test
+uv sync
+
+# Or install only production dependencies
+uv sync --no-dev
 ```
 
 ## Project Structure
@@ -769,17 +777,17 @@ def test_endpoint_with_mocked_repo(mocker):
 
 ```bash
 # All tests
-pytest
+uv run pytest
 
 # Specific category
-pytest -m unit
-pytest -m integration
+uv run pytest -m unit
+uv run pytest -m integration
 
 # With coverage
-pytest --cov=clusterpulse --cov-report=html
+uv run pytest --cov=clusterpulse --cov-report=html
 
 # Single test
-pytest tests/integration/api/test_workloads.py::TestWorkloadsEndpoint::test_get_workloads_success -v
+uv run pytest tests/integration/api/test_workloads.py::TestWorkloadsEndpoint::test_get_workloads_success -v
 ```
 
 ## Code Patterns
@@ -854,12 +862,12 @@ We use `black` for formatting, `autoflake` for removing unused imports and `pyli
 
 ```bash
 # Format code
-black <path>
-autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place <path>
-isort <path>
+uv run black <path>
+uv run autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place <path>
+uv run isort <path>
 
 # Check linting
-pylint clusterpulse/
+uv run pylint clusterpulse/
 ```
 
 **Import order:**
@@ -894,15 +902,15 @@ from clusterpulse.models.cluster import Cluster
 3. **Before submitting:**
    ```bash
    # Format and lint
-   black clusterpulse/
-   autoflake...
-   isort...
+   uv run black clusterpulse/
+   uv run autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place clusterpulse/
+   uv run isort clusterpulse/
    
    # Run tests
-   pytest
+   uv run pytest
    
    # Check coverage
-   pytest --cov=clusterpulse --cov-report=term-missing
+   uv run pytest --cov=clusterpulse --cov-report=term-missing
    ```
 
 4. **PR description should include:**

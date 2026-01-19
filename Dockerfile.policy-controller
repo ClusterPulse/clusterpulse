@@ -20,11 +20,6 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # Final stage
 FROM python:3.11.9-slim
 
-# Add metadata labels
-LABEL maintainer="asmoore@redhat.com" \
-      version="1.0.0" \
-      description="Main API Service"
-
 # Install runtime dependencies and clean up
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
