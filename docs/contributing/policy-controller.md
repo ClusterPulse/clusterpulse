@@ -5,8 +5,12 @@
 ### Local Setup
 
 ```bash
-# Install dependencies
-pip install -r policy-controller/requirements.txt
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies (uses uv.lock for reproducible builds)
+cd policy-controller
+uv sync
 
 # Set up environment
 export NAMESPACE=clusterpulse
@@ -17,14 +21,57 @@ export REDIS_PORT=6379
 docker run -d -p 6379:6379 redis:latest
 
 # Run locally (connects to your current kubeconfig cluster)
-cd policy-controller
-python policy_controller.py
+uv run python policy_controller.py
 ```
+
+### Running Locally
+
+The policy controller can be run locally for development and testing. It will connect to whatever Kubernetes cluster your kubeconfig is pointing to.
+
+**Prerequisites:**
+- A running Kubernetes/OpenShift cluster with the MonitorAccessPolicy CRD installed
+- Redis running and accessible
+- `KUBECONFIG` set or `~/.kube/config` configured
+
+**Running with kopf:**
+
+```bash
+cd policy-controller
+
+# Run with default settings
+uv run python policy_controller.py
+
+# Run with verbose logging
+uv run kopf run policy_controller.py --verbose
+
+# Run in standalone mode (no leader election)
+uv run kopf run policy_controller.py --standalone
+
+# Run watching a specific namespace
+uv run kopf run policy_controller.py --namespace=clusterpulse
+```
+
+**Environment variables for local development:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NAMESPACE` | `clusterpulse` | Namespace to watch for policies |
+| `REDIS_HOST` | `redis` | Redis hostname |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_PASSWORD` | (none) | Redis password if required |
+| `REDIS_DB` | `0` | Redis database number |
+| `POLICY_CACHE_TTL` | `300` | Cache TTL in seconds |
 
 ### Development Dependencies
 
+Development and test dependencies are included in `pyproject.toml` and managed by uv:
+
 ```bash
-pip install pytest pytest-asyncio black ruff mypy
+# Install all dependencies including dev/test
+uv sync
+
+# Or install only production dependencies
+uv sync --no-dev
 ```
 
 ## Project Structure
@@ -36,7 +83,8 @@ The policy-controller is a single Python file organized into logical sections. H
 ```
 policy-controller/
 ├── policy_controller.py    # Main controller (all sections below)
-├── requirements.txt         # Python dependencies
+├── pyproject.toml          # Python project configuration
+├── uv.lock                  # Locked dependencies for reproducible builds
 └── tests/                   # Tests (TODO)
 ```
 
@@ -717,6 +765,23 @@ def test_compile_basic_policy():
 
 See `docs/api/tests.md` for more testing patterns.
 
+### Running Tests
+
+```bash
+# All tests
+uv run pytest
+
+# Specific category
+uv run pytest -m unit
+uv run pytest -m integration
+
+# With coverage
+uv run pytest --cov=. --cov-report=html
+
+# Single test
+uv run pytest tests/test_compiler.py::test_compile_basic_policy -v
+```
+
 ## Code Patterns
 
 ### Error Handling
@@ -1046,19 +1111,19 @@ policy_errors.labels(
 Use `black` for formatting:
 
 ```bash
-black policy_controller.py
+uv run black policy_controller.py
 ```
 
 Use `autoflake` to remove unused imports and variables
 
 ```bash
-autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place policy_controller.py
+uv run autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place policy_controller.py
 ```
 
 Use `isort` to sort imports
 
 ```bash
-isort policy_controller.py
+uv run isort policy_controller.py
 ```
 
 Use type hints:
@@ -1096,13 +1161,13 @@ def store_policy(self, policy: CompiledPolicy):
 3. **Before submitting:**
    ```bash
    # Format code
-   black policy_controller.py
+   uv run black policy_controller.py
    
    # Run tests - TODO
-   pytest tests/
+   uv run pytest tests/
    
    # Check types
-   mypy policy_controller.py
+   uv run mypy policy_controller.py
    
    # Test with real CRD
    oc apply -f examples/policy.yaml
@@ -1188,19 +1253,20 @@ user:groups:{username}                 # User's groups
 
 ```bash
 # Development
-python policy_controller.py
+cd policy-controller
+uv run python policy_controller.py
 
 # Testing - TODO
-pytest tests/
+uv run pytest tests/
 
 # Format
-black policy_controller.py
+uv run black policy_controller.py
 
 # Remove unused imports
-autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place <path>
+uv run autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place <path>
 
 # Sort imports
-isort <path>
+uv run isort <path>
 
 # Check Redis
 redis-cli
@@ -1216,13 +1282,13 @@ oc logs -f -n clusterpulse deployment/policy-controller
 
 ```bash
 # Run with debug logging
-kopf run policy_controller.py --verbose
+uv run kopf run policy_controller.py --verbose
 
 # Run in standalone mode (no leader election)
-kopf run policy_controller.py --standalone
+uv run kopf run policy_controller.py --standalone
 
 # Configure namespace
-kopf run policy_controller.py --namespace=clusterpulse
+uv run kopf run policy_controller.py --namespace=clusterpulse
 ```
 
 ## Getting Help
