@@ -87,6 +87,8 @@ nav:
     - Policies:
       - Create Read-Only Policy: how-to/policies/create-readonly-policy.md
       - Filter by Namespace: how-to/policies/filter-by-namespace.md
+    - Misc:
+      - Use an External Redis Instance: how-to/external-redis.md
   - Concepts:
     #- concepts/index.md
     - Architecture: concepts/architecture.md
