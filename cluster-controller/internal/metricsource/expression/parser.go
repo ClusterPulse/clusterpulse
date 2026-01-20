@@ -69,7 +69,7 @@ func (p *Parser) precedence(t TokenType) int {
 	case TokenLParen:
 		return precCall
 	default:
-		return precLowest
+		return -1
 	}
 }
 
