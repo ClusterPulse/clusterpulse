@@ -18,20 +18,20 @@ type CompiledMetricSource struct {
 	RBAC              CompiledRBAC           `json:"rbac"`
 	CompiledAt        string                 `json:"compiledAt"`
 	Hash              string                 `json:"hash"`
-	FieldNameToIndex  map[string]int         `json:"-"` // Runtime lookup, not stored
-	NamespacePatterns *CompiledPatterns      `json:"-"` // Compiled regex, not stored
+	FieldNameToIndex  map[string]int         `json:"-"`
+	NamespacePatterns *CompiledPatterns      `json:"-"`
 }
 
 // CompiledSourceTarget contains the parsed source configuration
 type CompiledSourceTarget struct {
-	APIVersion    string            `json:"apiVersion"`
-	Kind          string            `json:"kind"`
-	Scope         string            `json:"scope"`
-	Group         string            `json:"group"`   // Parsed from APIVersion
-	Version       string            `json:"version"` // Parsed from APIVersion
-	Resource      string            `json:"resource"`
-	LabelSelector string            `json:"labelSelector,omitempty"`
-	Namespaces    *NamespaceConfig  `json:"namespaces,omitempty"`
+	APIVersion    string           `json:"apiVersion"`
+	Kind          string           `json:"kind"`
+	Scope         string           `json:"scope"`
+	Group         string           `json:"group"`
+	Version       string           `json:"version"`
+	Resource      string           `json:"resource"`
+	LabelSelector string           `json:"labelSelector,omitempty"`
+	Namespaces    *NamespaceConfig `json:"namespaces,omitempty"`
 }
 
 // NamespaceConfig holds namespace include/exclude patterns
@@ -50,28 +50,28 @@ type CompiledPatterns struct {
 type CompiledField struct {
 	Name         string   `json:"name"`
 	Path         string   `json:"path"`
-	PathSegments []string `json:"pathSegments"` // Pre-parsed path components
+	PathSegments []string `json:"pathSegments"`
 	Type         string   `json:"type"`
 	Default      *string  `json:"default,omitempty"`
-	Index        int      `json:"index"` // Position in extracted values slice
+	Index        int      `json:"index"`
 }
 
 // CompiledComputation represents a computed field with parsed expression
 type CompiledComputation struct {
-	Name       string `json:"name"`
-	Expression string `json:"expression"`
-	Type       string `json:"type"`
-	// AST would be added in Phase 2 for expression evaluation
+	Name       string      `json:"name"`
+	Expression string      `json:"expression"`
+	Type       string      `json:"type"`
+	Compiled   interface{} `json:"-"` // *expression.CompiledExpression at runtime
 }
 
 // CompiledAggregation represents an aggregation with parsed filter
 type CompiledAggregation struct {
-	Name       string                    `json:"name"`
-	Field      string                    `json:"field,omitempty"`
-	Function   string                    `json:"function"`
-	Filter     *CompiledAggFilter        `json:"filter,omitempty"`
-	GroupBy    string                    `json:"groupBy,omitempty"`
-	Percentile int                       `json:"percentile,omitempty"`
+	Name       string             `json:"name"`
+	Field      string             `json:"field,omitempty"`
+	Function   string             `json:"function"`
+	Filter     *CompiledAggFilter `json:"filter,omitempty"`
+	GroupBy    string             `json:"groupBy,omitempty"`
+	Percentile int                `json:"percentile,omitempty"`
 }
 
 // CompiledAggFilter represents a pre-processed aggregation filter
@@ -102,20 +102,20 @@ type CompiledRBAC struct {
 
 // CustomCollectedResource represents a single resource instance with extracted values
 type CustomCollectedResource struct {
-	ID        string                 `json:"_id"`                  // namespace/name or just name for cluster-scoped
-	Namespace string                 `json:"_namespace,omitempty"` // Empty for cluster-scoped
+	ID        string                 `json:"_id"`
+	Namespace string                 `json:"_namespace,omitempty"`
 	Name      string                 `json:"_name"`
 	Labels    map[string]string      `json:"_labels,omitempty"`
-	Values    map[string]interface{} `json:"values"` // Extracted and computed field values
+	Values    map[string]interface{} `json:"values"`
 }
 
 // CustomResourceCollection holds all collected resources for a cluster/source combination
 type CustomResourceCollection struct {
 	CollectedAt   time.Time                 `json:"collectedAt"`
-	SourceID      string                    `json:"sourceId"` // namespace/name of MetricSource
+	SourceID      string                    `json:"sourceId"`
 	ClusterName   string                    `json:"clusterName"`
 	ResourceCount int                       `json:"resourceCount"`
-	Truncated     bool                      `json:"truncated"` // True if MaxResources limit was hit
+	Truncated     bool                      `json:"truncated"`
 	DurationMs    int64                     `json:"durationMs"`
 	Resources     []CustomCollectedResource `json:"resources"`
 }
@@ -125,7 +125,7 @@ type AggregationResults struct {
 	ComputedAt time.Time              `json:"computedAt"`
 	SourceID   string                 `json:"sourceId"`
 	DurationMs int64                  `json:"durationMs"`
-	Values     map[string]interface{} `json:"values"` // Aggregation name -> result value
+	Values     map[string]interface{} `json:"values"`
 }
 
 // CollectionMetadata holds metadata about the last collection run
@@ -140,7 +140,7 @@ type CollectionMetadata struct {
 	LastError          string    `json:"lastError,omitempty"`
 }
 
-// FieldType constants for type conversion
+// FieldType constants
 const (
 	FieldTypeString      = "string"
 	FieldTypeInteger     = "integer"

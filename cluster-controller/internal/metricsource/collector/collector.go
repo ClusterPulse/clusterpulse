@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/clusterpulse/cluster-controller/internal/metricsource/aggregator"
+	"github.com/clusterpulse/cluster-controller/internal/metricsource/expression"
 	"github.com/clusterpulse/cluster-controller/internal/metricsource/extractor"
 	"github.com/clusterpulse/cluster-controller/pkg/types"
 	"github.com/sirupsen/logrus"
@@ -17,22 +19,27 @@ import (
 
 // Collector handles resource collection from Kubernetes clusters
 type Collector struct {
-	extractor *extractor.Extractor
-	log       *logrus.Entry
+	extractor  *extractor.Extractor
+	evaluator  *expression.Evaluator
+	aggregator *aggregator.Aggregator
+	log        *logrus.Entry
 }
 
 // NewCollector creates a new resource collector
 func NewCollector() *Collector {
 	return &Collector{
-		extractor: extractor.NewExtractor(),
-		log:       logrus.WithField("component", "metricsource-collector"),
+		extractor:  extractor.NewExtractor(),
+		evaluator:  expression.NewEvaluator(),
+		aggregator: aggregator.NewAggregator(),
+		log:        logrus.WithField("component", "metricsource-collector"),
 	}
 }
 
 // CollectResult contains the results of a collection operation
 type CollectResult struct {
-	Collection *types.CustomResourceCollection
-	Errors     []error
+	Collection   *types.CustomResourceCollection
+	Aggregations *types.AggregationResults
+	Errors       []error
 }
 
 // Collect gathers resources from a cluster based on the MetricSource configuration
@@ -91,7 +98,6 @@ func (c *Collector) Collect(
 	truncated := false
 
 	if source.Source.Scope == "Cluster" {
-		// Cluster-scoped resources: single collection
 		resources, err := c.collectFromScope(ctx, dynamicClient, gvr, "", source, maxResources)
 		if err != nil {
 			return nil, fmt.Errorf("failed to collect cluster-scoped resources: %w", err)
@@ -99,7 +105,6 @@ func (c *Collector) Collect(
 		allResources = resources
 		truncated = len(resources) >= maxResources
 	} else {
-		// Namespaced resources: collect from each namespace
 		for _, ns := range namespaces {
 			collectMu.Lock()
 			currentCount := len(allResources)
@@ -114,16 +119,13 @@ func (c *Collector) Collect(
 			go func(namespace string) {
 				defer wg.Done()
 
-				// Acquire semaphore
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				// Check context
 				if ctx.Err() != nil {
 					return
 				}
 
-				// Calculate remaining capacity
 				collectMu.Lock()
 				remaining := maxResources - len(allResources)
 				collectMu.Unlock()
@@ -148,7 +150,6 @@ func (c *Collector) Collect(
 		wg.Wait()
 	}
 
-	// Enforce max resources limit
 	if len(allResources) > maxResources {
 		allResources = allResources[:maxResources]
 		truncated = true
@@ -159,6 +160,16 @@ func (c *Collector) Collect(
 	result.Collection.Truncated = truncated
 	result.Collection.DurationMs = time.Since(startTime).Milliseconds()
 	result.Errors = collectErrors
+
+	// Compute aggregations if defined
+	if len(source.Aggregations) > 0 {
+		aggInput := &aggregator.AggregationInput{
+			Resources:    allResources,
+			Aggregations: source.Aggregations,
+		}
+		result.Aggregations = c.aggregator.Compute(aggInput)
+		result.Aggregations.SourceID = source.Namespace + "/" + source.Name
+	}
 
 	log.WithFields(logrus.Fields{
 		"resources": len(allResources),
@@ -197,7 +208,6 @@ func (c *Collector) collectFromScope(
 		resourceInterface = dynamicClient.Resource(gvr).Namespace(namespace)
 	}
 
-	// Paginate through results
 	for {
 		if ctx.Err() != nil {
 			return resources, ctx.Err()
@@ -224,7 +234,6 @@ func (c *Collector) collectFromScope(
 			resources = append(resources, *collected)
 		}
 
-		// Check for more pages
 		if list.GetContinue() == "" || len(resources) >= limit {
 			break
 		}
@@ -234,19 +243,36 @@ func (c *Collector) collectFromScope(
 	return resources, nil
 }
 
-// extractResource extracts configured fields from a single resource
+// extractResource extracts configured fields and computes expressions from a single resource
 func (c *Collector) extractResource(
 	resource *unstructured.Unstructured,
 	source *types.CompiledMetricSource,
 ) (*types.CustomCollectedResource, error) {
 
-	// Extract identity
 	namespace, name, labels := c.extractor.ExtractResourceIdentity(resource)
 
 	// Extract configured fields
 	values, err := c.extractor.ExtractFields(resource, source.Fields)
 	if err != nil {
 		return nil, fmt.Errorf("field extraction failed: %w", err)
+	}
+
+	// Evaluate computed expressions
+	if len(source.Computed) > 0 {
+		ctx := &expression.Context{Values: values}
+		for _, comp := range source.Computed {
+			if comp.Compiled != nil {
+				result, err := c.evaluator.Evaluate(comp.Compiled, ctx)
+				if err != nil {
+					c.log.Debugf("Computed field '%s' evaluation failed: %v", comp.Name, err)
+					values[comp.Name] = nil
+				} else {
+					values[comp.Name] = result
+				}
+				// Update context so subsequent computed fields can use this value
+				ctx.Values[comp.Name] = values[comp.Name]
+			}
+		}
 	}
 
 	return &types.CustomCollectedResource{
@@ -265,23 +291,19 @@ func (c *Collector) resolveNamespaces(
 	source *types.CompiledMetricSource,
 ) ([]string, error) {
 
-	// Cluster-scoped resources don't need namespace resolution
 	if source.Source.Scope == "Cluster" {
 		return []string{""}, nil
 	}
 
-	// If no namespace config, collect from all namespaces
 	if source.Source.Namespaces == nil {
 		return c.listAllNamespaces(ctx, dynamicClient)
 	}
 
-	// Get all namespaces first
 	allNamespaces, err := c.listAllNamespaces(ctx, dynamicClient)
 	if err != nil {
 		return nil, err
 	}
 
-	// Filter namespaces based on include/exclude patterns
 	return c.filterNamespaces(allNamespaces, source), nil
 }
 
@@ -324,7 +346,6 @@ func (c *Collector) filterNamespaces(namespaces []string, source *types.Compiled
 	var filtered []string
 
 	for _, ns := range namespaces {
-		// Check exclude patterns first (they take precedence)
 		excluded := false
 		for _, pattern := range source.NamespacePatterns.Exclude {
 			if pattern.MatchString(ns) {
@@ -336,13 +357,11 @@ func (c *Collector) filterNamespaces(namespaces []string, source *types.Compiled
 			continue
 		}
 
-		// If no include patterns, include all non-excluded
 		if len(source.NamespacePatterns.Include) == 0 {
 			filtered = append(filtered, ns)
 			continue
 		}
 
-		// Check include patterns
 		for _, pattern := range source.NamespacePatterns.Include {
 			if pattern.MatchString(ns) {
 				filtered = append(filtered, ns)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/api/v1alpha1"
+	"github.com/clusterpulse/cluster-controller/internal/metricsource/expression"
 	"github.com/clusterpulse/cluster-controller/pkg/types"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,7 +48,7 @@ func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSour
 	}
 	compiled.Source = *source
 
-	// Compile fields
+	// Compile fields and build field name set
 	fields, fieldIndex, err := c.compileFields(ms.Spec.Fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile fields: %w", err)
@@ -55,8 +56,18 @@ func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSour
 	compiled.Fields = fields
 	compiled.FieldNameToIndex = fieldIndex
 
-	// Compile computed fields (basic structure for Phase 1, full expression parsing in Phase 2)
-	compiled.Computed = c.compileComputed(ms.Spec.Computed)
+	// Build field name set for computed field validation
+	fieldNames := make(map[string]bool)
+	for _, f := range ms.Spec.Fields {
+		fieldNames[f.Name] = true
+	}
+
+	// Compile computed fields with expression parsing
+	computedFields, err := c.compileComputed(ms.Spec.Computed, fieldNames)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile computed fields: %w", err)
+	}
+	compiled.Computed = computedFields
 
 	// Compile aggregations
 	compiled.Aggregations = c.compileAggregations(ms.Spec.Aggregations)
@@ -80,8 +91,8 @@ func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSour
 	compiled.Hash = c.generateHash(&ms.Spec)
 	compiled.CompiledAt = time.Now().UTC().Format(time.RFC3339)
 
-	c.log.Debugf("Successfully compiled MetricSource %s/%s with %d fields", 
-		ms.Namespace, ms.Name, len(compiled.Fields))
+	c.log.Debugf("Successfully compiled MetricSource %s/%s with %d fields, %d computed, %d aggregations",
+		ms.Namespace, ms.Name, len(compiled.Fields), len(compiled.Computed), len(compiled.Aggregations))
 
 	return compiled, nil
 }
@@ -202,25 +213,94 @@ func (c *Compiler) compileFields(fields []v1alpha1.FieldExtraction) ([]types.Com
 	return compiled, index, nil
 }
 
-// compileComputed processes computed field definitions
-func (c *Compiler) compileComputed(computed []v1alpha1.ComputedField) []types.CompiledComputation {
-	result := make([]types.CompiledComputation, len(computed))
+// compileComputed processes computed field definitions with expression compilation
+func (c *Compiler) compileComputed(computed []v1alpha1.ComputedField, fieldNames map[string]bool) ([]types.CompiledComputation, error) {
+	result := make([]types.CompiledComputation, 0, len(computed))
 
-	for i, comp := range computed {
+	for _, comp := range computed {
 		fieldType := comp.Type
 		if fieldType == "" {
 			fieldType = types.FieldTypeFloat
 		}
 
-		result[i] = types.CompiledComputation{
+		// Compile the expression
+		compiled, err := expression.Compile(comp.Expression, fieldType)
+		if err != nil {
+			return nil, fmt.Errorf("invalid expression for computed field '%s': %w", comp.Name, err)
+		}
+
+		// Validate that all referenced fields exist
+		for _, ref := range compiled.References {
+			if !fieldNames[ref] {
+				return nil, fmt.Errorf("computed field '%s' references unknown field '%s'", comp.Name, ref)
+			}
+		}
+
+		result = append(result, types.CompiledComputation{
 			Name:       comp.Name,
 			Expression: comp.Expression,
 			Type:       fieldType,
-			// AST parsing will be added in Phase 2
+			Compiled:   compiled,
+		})
+
+		// Add to fieldNames so subsequent computed fields can reference it
+		fieldNames[comp.Name] = true
+	}
+
+	// Check for circular dependencies
+	if err := c.detectCircularDependencies(result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// detectCircularDependencies checks for circular references in computed fields
+func (c *Compiler) detectCircularDependencies(computed []types.CompiledComputation) error {
+	// Build dependency graph
+	deps := make(map[string][]string)
+	for _, comp := range computed {
+		if comp.Compiled != nil {
+			deps[comp.Name] = comp.Compiled.References
 		}
 	}
 
-	return result
+	// DFS to detect cycles
+	visited := make(map[string]int) // 0=unvisited, 1=visiting, 2=visited
+	var path []string
+
+	var visit func(name string) error
+	visit = func(name string) error {
+		if visited[name] == 1 {
+			return fmt.Errorf("circular dependency detected: %v -> %s", path, name)
+		}
+		if visited[name] == 2 {
+			return nil
+		}
+
+		visited[name] = 1
+		path = append(path, name)
+
+		for _, dep := range deps[name] {
+			if _, isComputed := deps[dep]; isComputed {
+				if err := visit(dep); err != nil {
+					return err
+				}
+			}
+		}
+
+		visited[name] = 2
+		path = path[:len(path)-1]
+		return nil
+	}
+
+	for name := range deps {
+		if err := visit(name); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // compileAggregations processes aggregation definitions

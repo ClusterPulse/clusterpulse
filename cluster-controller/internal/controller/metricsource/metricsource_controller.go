@@ -181,15 +181,15 @@ func (r *MetricSourceReconciler) Reconcile(ctx context.Context, req reconcile.Re
 
 // CollectionSummary holds aggregate results from collecting across all clusters
 type CollectionSummary struct {
-	TotalResources    int
-	ClustersCollected int
-	TotalErrors       int
-	ClusterResults    map[string]*collector.CollectResult
+	TotalResources     int
+	ClustersCollected  int
+	TotalErrors        int
+	AggregationsComputed bool
+	ClusterResults     map[string]*collector.CollectResult
 }
 
 // collectFromAllClusters collects resources from all connected clusters
 func (r *MetricSourceReconciler) collectFromAllClusters(ctx context.Context, source *types.CompiledMetricSource) (*CollectionSummary, error) {
-	// Get list of connected clusters
 	clusterConns := &v1alpha1.ClusterConnectionList{}
 	if err := r.List(ctx, clusterConns, k8sclient.InNamespace(r.WatchNamespace)); err != nil {
 		return nil, fmt.Errorf("failed to list cluster connections: %w", err)
@@ -203,17 +203,16 @@ func (r *MetricSourceReconciler) collectFromAllClusters(ctx context.Context, sou
 	}
 
 	summary := &CollectionSummary{
-		ClusterResults: make(map[string]*collector.CollectResult),
+		ClusterResults:       make(map[string]*collector.CollectResult),
+		AggregationsComputed: len(source.Aggregations) > 0,
 	}
 
-	// Collect from each cluster in parallel
 	g, gctx := errgroup.WithContext(ctx)
 	var mu sync.Mutex
 
 	for i := range clusterConns.Items {
 		cc := &clusterConns.Items[i]
 
-		// Only collect from healthy clusters
 		if cc.Status.Phase != "Connected" {
 			logrus.Debugf("Skipping cluster %s (status: %s)", cc.Name, cc.Status.Phase)
 			continue
@@ -226,7 +225,7 @@ func (r *MetricSourceReconciler) collectFromAllClusters(ctx context.Context, sou
 				mu.Lock()
 				summary.TotalErrors++
 				mu.Unlock()
-				return nil // Don't fail the whole operation
+				return nil
 			}
 
 			mu.Lock()
@@ -254,26 +253,30 @@ func (r *MetricSourceReconciler) collectFromCluster(ctx context.Context, cc *v1a
 		"metricsource": source.Namespace + "/" + source.Name,
 	})
 
-	// Get or create dynamic client for this cluster
 	dynamicClient, err := r.getDynamicClient(ctx, cc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dynamic client: %w", err)
 	}
 
-	// Set collection timeout
 	timeout := time.Duration(source.Collection.TimeoutSeconds) * time.Second
 	collectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Perform collection
 	result, err := r.collector.Collect(collectCtx, dynamicClient, source, cc.Name)
 	if err != nil {
 		return nil, err
 	}
 
-	// Store results in Redis
+	// Store resource collection results
 	if err := r.RedisClient.StoreCustomResourceCollection(ctx, cc.Name, result.Collection); err != nil {
 		log.WithError(err).Debug("Failed to store collection results")
+	}
+
+	// Store aggregation results if computed
+	if result.Aggregations != nil {
+		if err := r.RedisClient.StoreAggregationResults(ctx, cc.Name, result.Aggregations); err != nil {
+			log.WithError(err).Debug("Failed to store aggregation results")
+		}
 	}
 
 	return result, nil
