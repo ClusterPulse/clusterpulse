@@ -23,6 +23,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -53,8 +55,44 @@ func (r *MetricSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.compiledCache = make(map[string]*types.CompiledMetricSource)
 	r.clusterClients = make(map[string]dynamic.Interface)
 
+	// Create predicate to filter out status-only updates
+	pred := predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return true
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return true
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldMS, okOld := e.ObjectOld.(*v1alpha1.MetricSource)
+			newMS, okNew := e.ObjectNew.(*v1alpha1.MetricSource)
+
+			if !okOld || !okNew {
+				return true
+			}
+
+			// Only reconcile if generation changed (spec change)
+			if oldMS.Generation != newMS.Generation {
+				logrus.Debugf("MetricSource %s generation changed, reconciling", newMS.Name)
+				return true
+			}
+
+			// Reconcile if deletion timestamp was added
+			if oldMS.DeletionTimestamp.IsZero() && !newMS.DeletionTimestamp.IsZero() {
+				return true
+			}
+
+			// Ignore status-only updates to prevent reconciliation loops
+			return false
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return false
+		},
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.MetricSource{}).
+		WithEventFilter(pred).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 2,
 		}).
