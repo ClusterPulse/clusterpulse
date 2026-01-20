@@ -262,7 +262,11 @@ func (c *Collector) extractResource(
 		ctx := &expression.Context{Values: values}
 		for _, comp := range source.Computed {
 			if comp.Compiled != nil {
-				result, err := c.evaluator.Evaluate(comp.Compiled, ctx)
+				compiledExpr, ok := comp.Compiled.(*expression.CompiledExpression)
+				if !ok || compiledExpr == nil {
+					continue
+				}
+				result, err := c.evaluator.Evaluate(compiledExpr, ctx)
 				if err != nil {
 					c.log.Debugf("Computed field '%s' evaluation failed: %v", comp.Name, err)
 					values[comp.Name] = nil

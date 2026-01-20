@@ -260,8 +260,8 @@ func (c *Compiler) detectCircularDependencies(computed []types.CompiledComputati
 	// Build dependency graph
 	deps := make(map[string][]string)
 	for _, comp := range computed {
-		if comp.Compiled != nil {
-			deps[comp.Name] = comp.Compiled.References
+		if compiledExpr, ok := comp.Compiled.(*expression.CompiledExpression); ok && compiledExpr != nil {
+			deps[comp.Name] = compiledExpr.References
 		}
 	}
 
