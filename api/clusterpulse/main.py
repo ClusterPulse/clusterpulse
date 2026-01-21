@@ -1,4 +1,4 @@
-"""OpenShift Cluster Monitor API."""
+"""ClusterPulse API."""
 
 from contextlib import asynccontextmanager
 
@@ -9,8 +9,14 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from clusterpulse.api.middleware.auth import AuthMiddleware
 from clusterpulse.api.middleware.logging import LoggingMiddleware
-from clusterpulse.api.v1.endpoints import (auth, clusters, health, public,
-                                           registries)
+from clusterpulse.api.v1.endpoints import (
+    auth,
+    clusters,
+    custom_resources,
+    health,
+    public,
+    registries,
+)
 from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger, setup_logging
 from clusterpulse.db.redis import close_redis_connection, get_redis_client
@@ -37,10 +43,12 @@ async def lifespan(app: FastAPI):
         cluster_count = redis.scard("clusters:all")
         policy_count = redis.scard("policies:all")
         registry_count = redis.scard("registries:all")
+        metricsource_count = redis.scard("metricsources:enabled")
 
         logger.info(
             f"Initialized: {cluster_count} clusters, "
-            f"{policy_count} policies, {registry_count} registries"
+            f"{policy_count} policies, {registry_count} registries, "
+            f"{metricsource_count} MetricSources"
         )
     except Exception as e:
         logger.error(f"Redis initialization failed: {e}")
@@ -87,6 +95,13 @@ app.include_router(
 )
 app.include_router(
     registries.router, prefix=f"{settings.api_prefix}", tags=["registries"]
+)
+
+# Register custom resource routes
+app.include_router(
+    custom_resources.router,
+    prefix=f"{settings.api_prefix}",
+    tags=["custom-resources"],
 )
 
 # Register public routes (if anonymous access enabled)

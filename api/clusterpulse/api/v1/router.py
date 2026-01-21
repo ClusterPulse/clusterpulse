@@ -2,8 +2,14 @@
 
 from fastapi import APIRouter
 
-from clusterpulse.api.v1.endpoints import (auth, clusters, health, public,
-                                           registries)
+from clusterpulse.api.v1.endpoints import (
+    auth,
+    clusters,
+    custom_resources,
+    health,
+    public,
+    registries,
+)
 from clusterpulse.config import settings
 
 api_router = APIRouter()
@@ -19,6 +25,12 @@ api_router.include_router(clusters.router, prefix="/clusters", tags=["clusters"]
 
 # Registry endpoints
 api_router.include_router(registries.router, tags=["registries"])
+
+# Custom resource endpoints (MetricSources and custom types)
+api_router.include_router(
+    custom_resources.router,
+    tags=["custom-resources"],
+)
 
 # Public endpoints (if enabled)
 if settings.allow_anonymous_access:
