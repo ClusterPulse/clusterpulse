@@ -634,20 +634,22 @@ class RBACEngine:
         """
         policies = self._get_applicable_policies(principal)
         accessible_types = set()
-
+    
         for policy in policies:
             if not self._is_policy_valid(policy):
                 continue
-
+    
             if policy.get("effect") != "Allow":
                 continue
-
-            custom_resources = policy.get("custom_resources", {})
-            for type_name, config in custom_resources.items():
-                visibility = config.get("visibility", "all")
-                if visibility != "none":
-                    accessible_types.add(type_name)
-
+    
+            # Check cluster_rules for custom_resources
+            for rule in policy.get("cluster_rules", []):
+                custom_resources = rule.get("custom_resources", {})
+                for type_name, config in custom_resources.items():
+                    visibility = config.get("visibility", "all")
+                    if visibility != "none":
+                        accessible_types.add(type_name)
+    
         return sorted(accessible_types)
 
     def filter_aggregations(
@@ -734,7 +736,6 @@ class RBACEngine:
     # =========================================================================
     # Custom Resource Policy Evaluation
     # =========================================================================
-
     def _evaluate_custom_resource_policies(
         self,
         principal: Principal,
@@ -744,102 +745,109 @@ class RBACEngine:
         policies: List[Dict],
     ) -> CustomResourceDecision:
         """Evaluate policies for custom resource authorization."""
-        # Default deny
         decision = CustomResourceDecision(
             decision=Decision.DENY,
             resource_type_name=resource_type_name,
             cluster=cluster,
             reason=f"No policy grants access to custom resource type: {resource_type_name}",
         )
-
+    
         for policy in policies:
             if not self._is_policy_valid(policy):
                 continue
-
-            custom_resources = policy.get("custom_resources", {})
-            if resource_type_name not in custom_resources:
-                continue
-
-            config = custom_resources[resource_type_name]
-            decision.applied_policies.append(policy.get("_key", policy.get("policy_name", "unknown")))
-
-            # Handle deny policies
+    
             if policy.get("effect") == "Deny":
-                decision.decision = Decision.DENY
-                decision.reason = f"Denied by policy {policy.get('policy_name', 'unknown')}"
-                return decision
-
-            # Handle allow policies
-            if policy.get("effect") == "Allow":
+                # Check if this deny policy affects this resource type
+                for rule in policy.get("cluster_rules", []):
+                    if resource_type_name in rule.get("custom_resources", {}):
+                        decision.decision = Decision.DENY
+                        decision.reason = f"Denied by policy {policy.get('policy_name', 'unknown')}"
+                        decision.applied_policies.append(
+                            policy.get("_key", policy.get("policy_name", "unknown"))
+                        )
+                        return decision
+                continue
+    
+            if policy.get("effect") != "Allow":
+                continue
+    
+            # Search through cluster_rules for custom_resources
+            for rule in policy.get("cluster_rules", []):
+                custom_resources = rule.get("custom_resources", {})
+                if resource_type_name not in custom_resources:
+                    continue
+    
+                config = custom_resources[resource_type_name]
+                decision.applied_policies.append(
+                    policy.get("_key", policy.get("policy_name", "unknown"))
+                )
+    
                 visibility = config.get("visibility", "all")
                 if visibility == "none":
                     continue
-
-                # Build filters
+    
                 filters = self._parse_custom_resource_filters(config)
-
-                # Determine decision type
+    
                 if visibility == "all" and filters.is_unrestricted():
                     decision.decision = Decision.ALLOW
                 else:
                     decision.decision = Decision.PARTIAL
                     filters.visibility = Visibility.FILTERED
-
+    
                 decision.filters = filters
                 decision.reason = f"Allowed by policy {policy.get('policy_name', 'unknown')}"
-
-                # Extract permissions
+    
                 permissions = config.get("permissions", {"view": True})
                 decision.permissions = self._extract_custom_permissions(permissions)
-
-                # Extract aggregation visibility
-                agg_config = config.get("aggregations", {})
+    
+                agg_config = config.get("aggregation_rules") or {}
                 if "include" in agg_config:
                     decision.allowed_aggregations = set(agg_config["include"])
                 if "exclude" in agg_config:
                     decision.denied_aggregations = set(agg_config["exclude"])
-
+    
                 return decision
-
+    
         return decision
 
     def _parse_custom_resource_filters(
         self, config: Dict[str, Any]
     ) -> CustomResourceFilter:
         """Parse custom resource filter configuration from policy."""
-        filters_config = config.get("filters", {})
         result = CustomResourceFilter()
-
-        # Parse namespace filters
-        ns_config = filters_config.get("namespaces", {})
-        result.namespace_literals, result.namespace_patterns = self._parse_filter_specs(
-            ns_config.get("allowed_literals", []),
-            ns_config.get("allowed_patterns", []),
-        )
-        (
-            result.namespace_exclude_literals,
-            result.namespace_exclude_patterns,
-        ) = self._parse_filter_specs(
-            ns_config.get("denied_literals", []),
-            ns_config.get("denied_patterns", []),
-        )
-
-        # Parse name filters
-        name_config = filters_config.get("names", {})
-        result.name_literals, result.name_patterns = self._parse_filter_specs(
-            name_config.get("allowed_literals", []),
-            name_config.get("allowed_patterns", []),
-        )
-        (
-            result.name_exclude_literals,
-            result.name_exclude_patterns,
-        ) = self._parse_filter_specs(
-            name_config.get("denied_literals", []),
-            name_config.get("denied_patterns", []),
-        )
-
-        # Parse field filters
-        field_configs = filters_config.get("fields", {})
+    
+        # Handle namespace_filter (your policy structure)
+        ns_config = config.get("namespace_filter", {})
+        if ns_config:
+            result.namespace_literals, result.namespace_patterns = self._parse_filter_specs(
+                ns_config.get("allowed_literals", []),
+                ns_config.get("allowed_patterns", []),
+            )
+            (
+                result.namespace_exclude_literals,
+                result.namespace_exclude_patterns,
+            ) = self._parse_filter_specs(
+                ns_config.get("denied_literals", []),
+                ns_config.get("denied_patterns", []),
+            )
+    
+        # Handle name_filter
+        name_config = config.get("name_filter") or {}
+        if name_config:
+            result.name_literals, result.name_patterns = self._parse_filter_specs(
+                name_config.get("allowed_literals", []),
+                name_config.get("allowed_patterns", []),
+            )
+            (
+                result.name_exclude_literals,
+                result.name_exclude_patterns,
+            ) = self._parse_filter_specs(
+                name_config.get("denied_literals", []),
+                name_config.get("denied_patterns", []),
+            )
+    
+        # Handle field_filters
+        field_configs = config.get("field_filters", {})
         for field_name, field_spec in field_configs.items():
             allowed_literals, allowed_patterns = self._parse_filter_specs(
                 field_spec.get("allowed_literals", []),
@@ -855,13 +863,12 @@ class RBACEngine:
                 denied_literals,
                 denied_patterns,
             )
-
-        # Set visibility based on filter presence
+    
         if result.is_unrestricted():
             result.visibility = Visibility.ALL
         else:
             result.visibility = Visibility.FILTERED
-
+    
         return result
 
     def _parse_filter_specs(

@@ -254,3 +254,73 @@ class RegistryDataRepository(RedisRepository):
             }
 
         return output
+
+class MetricSourceRepository(RedisRepository):
+    """Repository for MetricSource data access."""
+
+    def get_all_metric_source_ids(self) -> List[str]:
+        """Get all enabled MetricSource identifiers."""
+        try:
+            return sorted(self.redis.smembers("metricsources:enabled"))
+        except Exception as e:
+            logger.error(f"Error getting MetricSource IDs: {e}")
+            return []
+
+    def get_metric_source(self, source_id: str) -> Optional[Dict[str, Any]]:
+        """Get compiled MetricSource definition by ID."""
+        if "/" not in source_id:
+            return None
+        namespace, name = source_id.split("/", 1)
+        return self.get_json(f"metricsource:{namespace}:{name}")
+
+    def get_all_metric_sources(self) -> List[Dict[str, Any]]:
+        """Get all enabled MetricSource definitions."""
+        source_ids = self.get_all_metric_source_ids()
+        if not source_ids:
+            return []
+
+        sources = []
+        for source_id in source_ids:
+            source = self.get_metric_source(source_id)
+            if source:
+                source["_id"] = source_id
+                sources.append(source)
+        return sources
+
+    def get_resource_type_mapping(self) -> Dict[str, str]:
+        """Map resourceTypeName to sourceId."""
+        sources = self.get_all_metric_sources()
+        mapping = {}
+        for source in sources:
+            type_name = source.get("rbac", {}).get("resourceTypeName")
+            if type_name:
+                mapping[type_name] = source.get("_id", f"{source.get('namespace')}/{source.get('name')}")
+        return mapping
+
+    def get_source_id_for_type(self, resource_type_name: str) -> Optional[str]:
+        """Get sourceId for a resource type name."""
+        key = f"metricsources:by:resourcetype:{resource_type_name}"
+        source_id = self.redis.get(key)
+        if source_id:
+            return source_id
+
+        mapping = self.get_resource_type_mapping()
+        return mapping.get(resource_type_name)
+
+    def get_clusters_with_data(self, resource_type_name: str) -> List[str]:
+        """Get cluster names that have collected data for this type."""
+        source_id = self.get_source_id_for_type(resource_type_name)
+        if not source_id:
+            return []
+
+        clusters = set()
+        pattern = f"cluster:*:custom:{source_id}:resources"
+        try:
+            for key in self.redis.scan_iter(match=pattern, count=100):
+                parts = key.split(":")
+                if len(parts) >= 2:
+                    clusters.add(parts[1])
+        except Exception as e:
+            logger.error(f"Error scanning for clusters with data: {e}")
+        return sorted(clusters)
+
