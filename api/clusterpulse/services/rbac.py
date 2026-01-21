@@ -1,4 +1,8 @@
-"""Role-Based Access Control engine for ClusterPulse."""
+"""Role-Based Access Control engine for ClusterPulse.
+
+Provides authorization decisions for cluster resources including support for
+custom MetricSource resources with namespace, name, and field-based filtering.
+"""
 
 import json
 import logging
@@ -40,6 +44,7 @@ class ResourceType(str, Enum):
     EVENT = "event"
     METRIC = "metric"
     POLICY = "policy"
+    CUSTOM = "custom"
 
 
 class Decision(str, Enum):
@@ -89,10 +94,14 @@ class Resource:
     labels: Dict[str, str] = field(default_factory=dict)
     annotations: Dict[str, str] = field(default_factory=dict)
     attributes: Dict[str, Any] = field(default_factory=dict)
+    custom_type: Optional[str] = None
+    custom_fields: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
         parts = [self.type.value]
+        if self.custom_type:
+            parts.append(self.custom_type)
         if self.cluster:
             parts.append(self.cluster)
         if self.namespace:
@@ -161,6 +170,109 @@ class Filter:
 
 
 @dataclass
+class FieldFilter:
+    """Filter configuration for a single custom resource field."""
+
+    allowed_values: Set[str] = field(default_factory=set)
+    denied_values: Set[str] = field(default_factory=set)
+    allowed_patterns: List[re.Pattern] = field(default_factory=list)
+
+    def matches(self, value: Any) -> bool:
+        """Check if a field value passes this filter."""
+        if value is None:
+            return not self.allowed_values and not self.allowed_patterns
+
+        str_value = str(value)
+
+        if str_value in self.denied_values:
+            return False
+
+        if not self.allowed_values and not self.allowed_patterns:
+            return True
+
+        if str_value in self.allowed_values:
+            return True
+
+        for pattern in self.allowed_patterns:
+            if pattern.match(str_value):
+                return True
+
+        return not self.allowed_values and not self.allowed_patterns
+
+    def is_empty(self) -> bool:
+        """Check if filter has no restrictions."""
+        return (
+            not self.allowed_values
+            and not self.denied_values
+            and not self.allowed_patterns
+        )
+
+
+@dataclass
+class CustomResourceFilter:
+    """Filter configuration for custom MetricSource resources."""
+
+    namespace_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
+    namespace_denied: Set[str] = field(default_factory=set)
+    name_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
+    name_denied: Set[str] = field(default_factory=set)
+    field_filters: Dict[str, FieldFilter] = field(default_factory=dict)
+    aggregation_include: Optional[Set[str]] = None
+    aggregation_exclude: Set[str] = field(default_factory=set)
+
+    def matches_namespace(self, namespace: Optional[str]) -> bool:
+        """Check if a namespace passes the filter."""
+        if namespace is None:
+            return True
+
+        if namespace in self.namespace_denied:
+            return False
+
+        if not self.namespace_patterns:
+            return True
+
+        for _, pattern in self.namespace_patterns:
+            if pattern.match(namespace):
+                return True
+
+        return False
+
+    def matches_name(self, name: str) -> bool:
+        """Check if a resource name passes the filter."""
+        if name in self.name_denied:
+            return False
+
+        if not self.name_patterns:
+            return True
+
+        for _, pattern in self.name_patterns:
+            if pattern.match(name):
+                return True
+
+        return False
+
+    def matches_fields(self, resource: Dict[str, Any]) -> bool:
+        """Check if resource fields pass all field filters."""
+        for field_name, field_filter in self.field_filters.items():
+            value = resource.get(field_name)
+            if not field_filter.matches(value):
+                return False
+        return True
+
+    def is_empty(self) -> bool:
+        """Check if filter has no restrictions."""
+        return (
+            not self.namespace_patterns
+            and not self.namespace_denied
+            and not self.name_patterns
+            and not self.name_denied
+            and not self.field_filters
+            and self.aggregation_include is None
+            and not self.aggregation_exclude
+        )
+
+
+@dataclass
 class RBACDecision:
     """Authorization decision result."""
 
@@ -172,6 +284,7 @@ class RBACDecision:
     metadata: Dict[str, Any] = field(default_factory=dict)
     applied_policies: List[str] = field(default_factory=list)
     cached: bool = False
+    custom_filters: Dict[str, CustomResourceFilter] = field(default_factory=dict)
 
     @property
     def allowed(self) -> bool:
@@ -187,9 +300,13 @@ class RBACDecision:
     def get_filter(self, resource_type: ResourceType) -> Optional[Filter]:
         return self.filters.get(resource_type)
 
+    def get_custom_filter(self, resource_type_name: str) -> Optional[CustomResourceFilter]:
+        """Retrieve the filter for a specific custom resource type."""
+        return self.custom_filters.get(resource_type_name)
+
 
 class RBACEngine:
-    """RBAC authorization engine."""
+    """RBAC authorization engine with support for custom MetricSource resources."""
 
     def __init__(self, redis_client: redis.Redis, cache_ttl: int = 0):
         self.redis = redis_client
@@ -272,6 +389,130 @@ class RBACEngine:
             filtered.append(filtered_resource)
 
         return filtered
+
+    def filter_custom_resources(
+        self,
+        principal: Principal,
+        resources: List[Dict[str, Any]],
+        resource_type_name: str,
+        cluster: Optional[str],
+        namespace_field: str,
+        name_field: str,
+        filterable_fields: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Filter custom MetricSource resources based on RBAC policies.
+
+        Args:
+            principal: The entity making the request
+            resources: List of resource dictionaries to filter
+            resource_type_name: The custom resource type identifier from MetricSource
+            cluster: Optional cluster name for context
+            namespace_field: Field name containing namespace value
+            name_field: Field name containing resource name
+            filterable_fields: List of additional field names that can be filtered
+
+        Returns:
+            Filtered list of resources the principal is authorized to view
+        """
+        if not resources:
+            return []
+
+        dummy_resource = Resource(
+            type=ResourceType.CUSTOM,
+            name="*",
+            cluster=cluster,
+            custom_type=resource_type_name,
+        )
+        request = Request(
+            principal=principal, action=Action.VIEW, resource=dummy_resource
+        )
+
+        decision = self.authorize(request)
+
+        if decision.denied:
+            logger.debug(
+                f"Access denied for {principal.username} to custom resource "
+                f"type {resource_type_name}"
+            )
+            return []
+
+        custom_filter = decision.get_custom_filter(resource_type_name)
+
+        if custom_filter is None or custom_filter.is_empty():
+            if decision.decision == Decision.ALLOW:
+                return resources
+
+        if custom_filter is None:
+            return resources
+
+        filtered = []
+        for resource in resources:
+            namespace_value = resource.get(namespace_field)
+            if not custom_filter.matches_namespace(namespace_value):
+                continue
+
+            name_value = resource.get(name_field, "")
+            if not custom_filter.matches_name(name_value):
+                continue
+
+            if not custom_filter.matches_fields(resource):
+                continue
+
+            filtered.append(resource)
+
+        logger.debug(
+            f"Custom resource filtering for {principal.username} on "
+            f"{resource_type_name}: {len(filtered)}/{len(resources)} allowed"
+        )
+
+        return filtered
+
+    def get_visible_aggregations(
+        self,
+        principal: Principal,
+        resource_type_name: str,
+        cluster: str,
+        all_aggregation_names: List[str],
+    ) -> List[str]:
+        """Get aggregation names visible to the principal.
+
+        Args:
+            principal: The entity making the request
+            resource_type_name: The custom resource type identifier
+            cluster: Cluster name for context
+            all_aggregation_names: Complete list of available aggregation names
+
+        Returns:
+            List of aggregation names the principal is authorized to view
+        """
+        dummy_resource = Resource(
+            type=ResourceType.CUSTOM,
+            name="*",
+            cluster=cluster,
+            custom_type=resource_type_name,
+        )
+        request = Request(
+            principal=principal, action=Action.VIEW, resource=dummy_resource
+        )
+
+        decision = self.authorize(request)
+
+        if decision.denied:
+            return []
+
+        custom_filter = decision.get_custom_filter(resource_type_name)
+
+        if custom_filter is None:
+            return all_aggregation_names
+
+        visible = set(all_aggregation_names)
+
+        if custom_filter.aggregation_include is not None:
+            visible = visible.intersection(custom_filter.aggregation_include)
+
+        visible = visible - custom_filter.aggregation_exclude
+
+        return list(visible)
 
     def get_accessible_clusters(self, principal: Principal) -> List[str]:
         """Get clusters accessible to principal."""
@@ -522,6 +763,35 @@ class RBACEngine:
             if not self._is_policy_valid(policy):
                 continue
 
+            if request.resource.type == ResourceType.CUSTOM:
+                custom_match = self._match_custom_resource(request, policy)
+                if custom_match:
+                    decision.applied_policies.append(policy["_key"])
+
+                    if policy.get("effect") == "Deny":
+                        decision.decision = Decision.DENY
+                        decision.reason = f"Denied by policy {policy.get('policy_name')}"
+                        break
+
+                    custom_filter = self._extract_custom_resource_filters(
+                        policy, request.resource.custom_type
+                    )
+
+                    if custom_filter:
+                        decision.custom_filters[request.resource.custom_type] = custom_filter
+                        decision.decision = Decision.PARTIAL
+                    else:
+                        decision.decision = Decision.ALLOW
+
+                    decision.permissions.add(Action.VIEW)
+                    if custom_match.get("permissions", {}).get("viewMetrics"):
+                        decision.permissions.add(Action.VIEW_METRICS)
+
+                    decision.reason = f"Allowed by policy {policy.get('policy_name')}"
+                    break
+
+                continue
+
             match = self._match_resource(request.resource, policy)
             if not match:
                 continue
@@ -545,6 +815,143 @@ class RBACEngine:
                     decision.metadata["audit_required"] = True
 
         return decision
+
+    def _match_custom_resource(
+        self, request: Request, policy: Dict
+    ) -> Optional[Dict]:
+        """Match a custom resource request against policy rules."""
+        resource_type_name = request.resource.custom_type
+        if not resource_type_name:
+            return None
+
+        for rule in policy.get("cluster_rules", []):
+            custom_resources = rule.get("resources", {}).get("custom", {})
+            if resource_type_name in custom_resources:
+                custom_config = custom_resources[resource_type_name]
+                visibility = custom_config.get("visibility", "none")
+
+                if visibility == "none":
+                    continue
+
+                return {
+                    "rule": rule,
+                    "custom_config": custom_config,
+                    "permissions": rule.get("permissions", {"view": True}),
+                }
+
+        return None
+
+    def _extract_custom_resource_filters(
+        self, policy: Dict, resource_type_name: str
+    ) -> Optional[CustomResourceFilter]:
+        """Extract custom resource filters from a policy.
+
+        Args:
+            policy: The policy dictionary
+            resource_type_name: The custom resource type to extract filters for
+
+        Returns:
+            CustomResourceFilter if filters are defined, None otherwise
+        """
+        for rule in policy.get("cluster_rules", []):
+            custom_resources = rule.get("resources", {}).get("custom", {})
+            if resource_type_name not in custom_resources:
+                continue
+
+            custom_config = custom_resources[resource_type_name]
+            visibility = custom_config.get("visibility", "none")
+
+            if visibility == "none":
+                return None
+
+            if visibility == "all":
+                agg_include = custom_config.get("aggregations", {}).get("include")
+                agg_exclude = custom_config.get("aggregations", {}).get("exclude", [])
+
+                if not agg_include and not agg_exclude:
+                    return None
+
+                return CustomResourceFilter(
+                    aggregation_include=set(agg_include) if agg_include else None,
+                    aggregation_exclude=set(agg_exclude),
+                )
+
+            custom_filter = CustomResourceFilter()
+            filters_config = custom_config.get("filters", {})
+
+            ns_config = filters_config.get("namespaces", {})
+            ns_allowed = ns_config.get("allowed", [])
+            ns_denied = ns_config.get("denied", [])
+
+            for pattern_str in ns_allowed:
+                try:
+                    regex_pattern = self._wildcard_to_regex(pattern_str)
+                    custom_filter.namespace_patterns.append(
+                        (pattern_str, re.compile(regex_pattern))
+                    )
+                except re.error as e:
+                    logger.warning(f"Invalid namespace pattern '{pattern_str}': {e}")
+
+            custom_filter.namespace_denied = set(ns_denied)
+
+            name_config = filters_config.get("names", {})
+            name_allowed = name_config.get("allowed", [])
+            name_denied = name_config.get("denied", [])
+
+            for pattern_str in name_allowed:
+                try:
+                    regex_pattern = self._wildcard_to_regex(pattern_str)
+                    custom_filter.name_patterns.append(
+                        (pattern_str, re.compile(regex_pattern))
+                    )
+                except re.error as e:
+                    logger.warning(f"Invalid name pattern '{pattern_str}': {e}")
+
+            custom_filter.name_denied = set(name_denied)
+
+            fields_config = filters_config.get("fields", {})
+            for field_name, field_config in fields_config.items():
+                field_filter = FieldFilter()
+
+                allowed = field_config.get("allowed", [])
+                denied = field_config.get("denied", [])
+                patterns = field_config.get("patterns", [])
+
+                field_filter.allowed_values = set(allowed)
+                field_filter.denied_values = set(denied)
+
+                for pattern_str in patterns:
+                    try:
+                        regex_pattern = self._wildcard_to_regex(pattern_str)
+                        field_filter.allowed_patterns.append(re.compile(regex_pattern))
+                    except re.error as e:
+                        logger.warning(
+                            f"Invalid field pattern '{pattern_str}' for {field_name}: {e}"
+                        )
+
+                if not field_filter.is_empty():
+                    custom_filter.field_filters[field_name] = field_filter
+
+            agg_config = custom_config.get("aggregations", {})
+            agg_include = agg_config.get("include")
+            agg_exclude = agg_config.get("exclude", [])
+
+            if agg_include:
+                custom_filter.aggregation_include = set(agg_include)
+            custom_filter.aggregation_exclude = set(agg_exclude)
+
+            return custom_filter
+
+        return None
+
+    def _wildcard_to_regex(self, pattern: str) -> str:
+        """Convert a wildcard pattern to a regex pattern.
+
+        Supports * for any characters and ? for single character.
+        """
+        escaped = re.escape(pattern)
+        regex = escaped.replace(r"\*", ".*").replace(r"\?", ".")
+        return f"^{regex}$"
 
     def _is_policy_valid(self, policy: Dict) -> bool:
         """Check policy validity."""
@@ -773,6 +1180,7 @@ class RBACEngine:
                         name=data["resource"]["name"],
                         namespace=data["resource"].get("namespace"),
                         cluster=data["resource"].get("cluster"),
+                        custom_type=data["resource"].get("custom_type"),
                     ),
                 )
 
@@ -795,6 +1203,37 @@ class RBACEngine:
                     filter_obj.labels = filter_data.get("labels", {})
                     filter_obj.metadata = filter_data.get("metadata", {})
                     decision.filters[ResourceType(resource_type_str)] = filter_obj
+
+                for type_name, cf_data in data.get("custom_filters", {}).items():
+                    cf = CustomResourceFilter()
+                    cf.namespace_denied = set(cf_data.get("namespace_denied", []))
+                    cf.name_denied = set(cf_data.get("name_denied", []))
+
+                    for pat_str in cf_data.get("namespace_patterns", []):
+                        cf.namespace_patterns.append(
+                            (pat_str, re.compile(self._wildcard_to_regex(pat_str)))
+                        )
+
+                    for pat_str in cf_data.get("name_patterns", []):
+                        cf.name_patterns.append(
+                            (pat_str, re.compile(self._wildcard_to_regex(pat_str)))
+                        )
+
+                    agg_inc = cf_data.get("aggregation_include")
+                    cf.aggregation_include = set(agg_inc) if agg_inc else None
+                    cf.aggregation_exclude = set(cf_data.get("aggregation_exclude", []))
+
+                    for field_name, ff_data in cf_data.get("field_filters", {}).items():
+                        ff = FieldFilter()
+                        ff.allowed_values = set(ff_data.get("allowed_values", []))
+                        ff.denied_values = set(ff_data.get("denied_values", []))
+                        for pat_str in ff_data.get("allowed_patterns", []):
+                            ff.allowed_patterns.append(
+                                re.compile(self._wildcard_to_regex(pat_str))
+                            )
+                        cf.field_filters[field_name] = ff
+
+                    decision.custom_filters[type_name] = cf
 
                 return decision
         except Exception as e:
@@ -819,11 +1258,13 @@ class RBACEngine:
                     "name": decision.request.resource.name,
                     "namespace": decision.request.resource.namespace,
                     "cluster": decision.request.resource.cluster,
+                    "custom_type": decision.request.resource.custom_type,
                 },
                 "permissions": [a.value for a in decision.permissions],
                 "metadata": decision.metadata,
                 "applied_policies": decision.applied_policies,
                 "filters": {},
+                "custom_filters": {},
             }
 
             for resource_type, filter_obj in decision.filters.items():
@@ -833,6 +1274,30 @@ class RBACEngine:
                     "exclude": list(filter_obj.exclude),
                     "labels": filter_obj.labels,
                     "metadata": filter_obj.metadata,
+                }
+
+            for type_name, cf in decision.custom_filters.items():
+                data["custom_filters"][type_name] = {
+                    "namespace_patterns": [p[0] for p in cf.namespace_patterns],
+                    "namespace_denied": list(cf.namespace_denied),
+                    "name_patterns": [p[0] for p in cf.name_patterns],
+                    "name_denied": list(cf.name_denied),
+                    "field_filters": {
+                        fn: {
+                            "allowed_values": list(ff.allowed_values),
+                            "denied_values": list(ff.denied_values),
+                            "allowed_patterns": [
+                                p.pattern for p in ff.allowed_patterns
+                            ],
+                        }
+                        for fn, ff in cf.field_filters.items()
+                    },
+                    "aggregation_include": (
+                        list(cf.aggregation_include)
+                        if cf.aggregation_include is not None
+                        else None
+                    ),
+                    "aggregation_exclude": list(cf.aggregation_exclude),
                 }
 
             self.redis.setex(cache_key, self.cache_ttl, json.dumps(data))
@@ -859,6 +1324,17 @@ class RBACEngine:
             },
         }
 
+        if decision.custom_filters:
+            audit_entry["custom_filters"] = {
+                type_name: {
+                    "has_namespace_filters": bool(cf.namespace_patterns)
+                    or bool(cf.namespace_denied),
+                    "has_name_filters": bool(cf.name_patterns) or bool(cf.name_denied),
+                    "has_field_filters": bool(cf.field_filters),
+                }
+                for type_name, cf in decision.custom_filters.items()
+            }
+
         audit_key = f"audit:rbac:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
         self.redis.lpush(audit_key, json.dumps(audit_entry))
         self.redis.expire(audit_key, 86400 * 30)
@@ -874,15 +1350,12 @@ class RBACEngine:
         )
 
     def authorize_anonymous(self, action: Action, resource: Resource) -> RBACDecision:
-        """
-        Authorize anonymous access - always allows viewing basic cluster health.
-        """
+        """Authorize anonymous access - allows viewing basic cluster health."""
         anonymous_principal = self.create_anonymous_principal()
         request = Request(
             principal=anonymous_principal, action=action, resource=resource
         )
 
-        # Only allow VIEW action for clusters
         if action != Action.VIEW or resource.type != ResourceType.CLUSTER:
             return RBACDecision(
                 decision=Decision.DENY,
@@ -890,7 +1363,6 @@ class RBACEngine:
                 reason="Anonymous access only allows viewing cluster health",
             )
 
-        # Always allow viewing cluster health for anonymous users
         return RBACDecision(
             decision=Decision.ALLOW,
             request=request,
@@ -917,3 +1389,29 @@ def principal_from_user(user: Any) -> Principal:
 def resource_from_cluster(cluster_name: str) -> Resource:
     """Create cluster resource."""
     return Resource(type=ResourceType.CLUSTER, name=cluster_name, cluster=cluster_name)
+
+
+def resource_from_custom(
+    resource_type_name: str,
+    name: str = "*",
+    cluster: Optional[str] = None,
+    namespace: Optional[str] = None,
+) -> Resource:
+    """Create a custom MetricSource resource reference.
+
+    Args:
+        resource_type_name: The resourceTypeName from MetricSource RBAC config
+        name: Resource name (default "*" for collection-level access)
+        cluster: Optional cluster context
+        namespace: Optional namespace context
+
+    Returns:
+        Resource configured for custom resource authorization
+    """
+    return Resource(
+        type=ResourceType.CUSTOM,
+        name=name,
+        cluster=cluster,
+        namespace=namespace,
+        custom_type=resource_type_name,
+    )
