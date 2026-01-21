@@ -40,6 +40,7 @@ class ResourceType(str, Enum):
     EVENT = "event"
     METRIC = "metric"
     POLICY = "policy"
+    CUSTOM = "custom"
 
 
 class Decision(str, Enum):
@@ -188,8 +189,192 @@ class RBACDecision:
         return self.filters.get(resource_type)
 
 
+# =============================================================================
+# Custom Resource Authorization Data Classes
+# =============================================================================
+
+
+@dataclass
+class CustomResourceFilter:
+    """Filter configuration for custom resources.
+
+    Supports namespace, name, and arbitrary field-based filtering with
+    both literal matches and compiled regex patterns.
+    """
+
+    visibility: Visibility = Visibility.ALL
+
+    # Namespace filtering
+    namespace_literals: Set[str] = field(default_factory=set)
+    namespace_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
+    namespace_exclude_literals: Set[str] = field(default_factory=set)
+    namespace_exclude_patterns: List[Tuple[str, re.Pattern]] = field(
+        default_factory=list
+    )
+
+    # Name filtering
+    name_literals: Set[str] = field(default_factory=set)
+    name_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
+    name_exclude_literals: Set[str] = field(default_factory=set)
+    name_exclude_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
+
+    # Field-based filtering: field_name -> (allowed_values, allowed_patterns, denied_values, denied_patterns)
+    field_filters: Dict[
+        str,
+        Tuple[
+            Set[str],
+            List[Tuple[str, re.Pattern]],
+            Set[str],
+            List[Tuple[str, re.Pattern]],
+        ],
+    ] = field(default_factory=dict)
+
+    def matches_namespace(self, namespace: Optional[str]) -> bool:
+        """Check if namespace passes filter criteria."""
+        if self.visibility == Visibility.NONE:
+            return False
+
+        if namespace is None:
+            # Cluster-scoped resources pass namespace filter
+            return True
+
+        # Check exclusions first
+        if namespace in self.namespace_exclude_literals:
+            return False
+        for _, pattern in self.namespace_exclude_patterns:
+            if pattern.match(namespace):
+                return False
+
+        # If no include filters, allow all non-excluded
+        if not self.namespace_literals and not self.namespace_patterns:
+            return True
+
+        # Check inclusions
+        if namespace in self.namespace_literals:
+            return True
+        for _, pattern in self.namespace_patterns:
+            if pattern.match(namespace):
+                return True
+
+        return False
+
+    def matches_name(self, name: str) -> bool:
+        """Check if resource name passes filter criteria."""
+        if self.visibility == Visibility.NONE:
+            return False
+
+        # Check exclusions first
+        if name in self.name_exclude_literals:
+            return False
+        for _, pattern in self.name_exclude_patterns:
+            if pattern.match(name):
+                return False
+
+        # If no include filters, allow all non-excluded
+        if not self.name_literals and not self.name_patterns:
+            return True
+
+        # Check inclusions
+        if name in self.name_literals:
+            return True
+        for _, pattern in self.name_patterns:
+            if pattern.match(name):
+                return True
+
+        return False
+
+    def matches_field(self, field_name: str, field_value: Any) -> bool:
+        """Check if field value passes filter criteria."""
+        if field_name not in self.field_filters:
+            return True
+
+        allowed_literals, allowed_patterns, denied_literals, denied_patterns = (
+            self.field_filters[field_name]
+        )
+        value_str = str(field_value) if field_value is not None else ""
+
+        # Check exclusions first
+        if value_str in denied_literals:
+            return False
+        for _, pattern in denied_patterns:
+            if pattern.match(value_str):
+                return False
+
+        # If no include filters, allow all non-excluded
+        if not allowed_literals and not allowed_patterns:
+            return True
+
+        # Check inclusions
+        if value_str in allowed_literals:
+            return True
+        for _, pattern in allowed_patterns:
+            if pattern.match(value_str):
+                return True
+
+        return False
+
+    def is_unrestricted(self) -> bool:
+        """Check if filter imposes no restrictions."""
+        return (
+            self.visibility == Visibility.ALL
+            and not self.namespace_literals
+            and not self.namespace_patterns
+            and not self.namespace_exclude_literals
+            and not self.namespace_exclude_patterns
+            and not self.name_literals
+            and not self.name_patterns
+            and not self.name_exclude_literals
+            and not self.name_exclude_patterns
+            and not self.field_filters
+        )
+
+
+@dataclass
+class CustomResourceDecision:
+    """Authorization decision for custom resource access.
+
+    Contains the decision, applicable filters, and aggregation visibility controls.
+    """
+
+    decision: Decision
+    resource_type_name: str
+    cluster: Optional[str] = None
+    reason: str = ""
+    filters: CustomResourceFilter = field(default_factory=CustomResourceFilter)
+    allowed_aggregations: Optional[Set[str]] = None  # None means all allowed
+    denied_aggregations: Set[str] = field(default_factory=set)
+    permissions: Set[Action] = field(default_factory=set)
+    applied_policies: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    cached: bool = False
+
+    @property
+    def allowed(self) -> bool:
+        return self.decision in (Decision.ALLOW, Decision.PARTIAL)
+
+    @property
+    def denied(self) -> bool:
+        return self.decision == Decision.DENY
+
+    def can(self, action: Action) -> bool:
+        return action in self.permissions
+
+    def is_aggregation_allowed(self, aggregation_name: str) -> bool:
+        """Check if a specific aggregation is visible to the user."""
+        if aggregation_name in self.denied_aggregations:
+            return False
+        if self.allowed_aggregations is not None:
+            return aggregation_name in self.allowed_aggregations
+        return True
+
+
+# =============================================================================
+# RBAC Engine
+# =============================================================================
+
+
 class RBACEngine:
-    """RBAC authorization engine."""
+    """RBAC authorization engine supporting built-in and custom resources."""
 
     def __init__(self, redis_client: redis.Redis, cache_ttl: int = 0):
         self.redis = redis_client
@@ -199,8 +384,12 @@ class RBACEngine:
         self._cache_misses = 0
         self._caching_enabled = cache_ttl > 0
 
+    # =========================================================================
+    # Standard Resource Authorization
+    # =========================================================================
+
     def authorize(self, request: Request) -> RBACDecision:
-        """Authorize a request."""
+        """Authorize a request for standard resources."""
         if self._caching_enabled:
             cache_key = f"rbac:decision:{request.cache_key}"
             cached = self._get_cached_decision(cache_key)
@@ -301,6 +490,633 @@ class RBACEngine:
                 permissions.add(action)
 
         return permissions
+
+    # =========================================================================
+    # Custom Resource Authorization
+    # =========================================================================
+
+    def authorize_custom_resource(
+        self,
+        principal: Principal,
+        resource_type_name: str,
+        cluster: Optional[str] = None,
+        action: Action = Action.VIEW,
+    ) -> CustomResourceDecision:
+        """Authorize access to a custom resource type.
+
+        Args:
+            principal: The user/service making the request
+            resource_type_name: The resourceTypeName from MetricSource (e.g., "pvc")
+            cluster: Optional cluster name (None for all clusters)
+            action: The action being performed
+
+        Returns:
+            CustomResourceDecision with authorization result and applicable filters
+        """
+        # Check cache if enabled
+        if self._caching_enabled:
+            cache_key = self._custom_resource_cache_key(
+                principal, resource_type_name, cluster, action
+            )
+            cached = self._get_cached_custom_decision(cache_key)
+            if cached:
+                self._cache_hits += 1
+                cached.cached = True
+                return cached
+
+        self._cache_misses += 1
+
+        # If cluster is specified, first verify cluster access
+        if cluster:
+            cluster_resource = Resource(
+                type=ResourceType.CLUSTER, name=cluster, cluster=cluster
+            )
+            cluster_request = Request(
+                principal=principal, action=action, resource=cluster_resource
+            )
+            cluster_decision = self.authorize(cluster_request)
+
+            if cluster_decision.denied:
+                decision = CustomResourceDecision(
+                    decision=Decision.DENY,
+                    resource_type_name=resource_type_name,
+                    cluster=cluster,
+                    reason=f"Access denied to cluster '{cluster}'",
+                )
+                return decision
+
+        # Get applicable policies
+        policies = self._get_applicable_policies(principal)
+
+        # Evaluate custom resource rules
+        decision = self._evaluate_custom_resource_policies(
+            principal, resource_type_name, cluster, action, policies
+        )
+
+        # Cache if enabled
+        if self._caching_enabled and self.cache_ttl > 0:
+            cache_key = self._custom_resource_cache_key(
+                principal, resource_type_name, cluster, action
+            )
+            self._cache_custom_decision(cache_key, decision)
+
+        return decision
+
+    def filter_custom_resources(
+        self,
+        principal: Principal,
+        resources: List[Dict[str, Any]],
+        resource_type_name: str,
+        cluster: str,
+        namespace_field: str = "namespace",
+        name_field: str = "name",
+    ) -> List[Dict[str, Any]]:
+        """Filter custom resources based on RBAC permissions.
+
+        Args:
+            principal: The user/service making the request
+            resources: List of resource dictionaries to filter
+            resource_type_name: The resourceTypeName from MetricSource
+            cluster: The cluster name
+            namespace_field: Field name containing the namespace
+            name_field: Field name containing the resource name
+
+        Returns:
+            Filtered list of resources the user can access
+        """
+        if not resources:
+            return []
+
+        decision = self.authorize_custom_resource(
+            principal, resource_type_name, cluster, Action.VIEW
+        )
+
+        if decision.denied:
+            logger.debug(
+                f"Custom resource access denied for {principal.username} "
+                f"on {resource_type_name}: {decision.reason}"
+            )
+            return []
+
+        # If unrestricted access, return all resources
+        if (
+            decision.decision == Decision.ALLOW
+            and decision.filters.is_unrestricted()
+        ):
+            return resources
+
+        # Apply filters
+        filtered = []
+        for resource in resources:
+            if self._custom_resource_matches_filters(
+                resource, decision.filters, namespace_field, name_field
+            ):
+                filtered.append(resource)
+
+        logger.debug(
+            f"Filtered {len(resources)} -> {len(filtered)} custom resources "
+            f"for {principal.username} on {resource_type_name}"
+        )
+
+        return filtered
+
+    def get_accessible_custom_resource_types(self, principal: Principal) -> List[str]:
+        """Get all custom resource types the principal can access.
+
+        This implements implicit deny - only types explicitly granted
+        in a policy are returned.
+
+        Args:
+            principal: The user/service making the request
+
+        Returns:
+            Sorted list of accessible resource type names
+        """
+        policies = self._get_applicable_policies(principal)
+        accessible_types = set()
+
+        for policy in policies:
+            if not self._is_policy_valid(policy):
+                continue
+
+            if policy.get("effect") != "Allow":
+                continue
+
+            custom_resources = policy.get("custom_resources", {})
+            for type_name, config in custom_resources.items():
+                visibility = config.get("visibility", "all")
+                if visibility != "none":
+                    accessible_types.add(type_name)
+
+        return sorted(accessible_types)
+
+    def filter_aggregations(
+        self,
+        principal: Principal,
+        aggregations: Dict[str, Any],
+        resource_type_name: str,
+        cluster: str,
+    ) -> Dict[str, Any]:
+        """Filter aggregations based on RBAC permissions.
+
+        Args:
+            principal: The user/service making the request
+            aggregations: Dict of aggregation name to value
+            resource_type_name: The resourceTypeName from MetricSource
+            cluster: The cluster name
+
+        Returns:
+            Filtered aggregations dict
+        """
+        if not aggregations:
+            return {}
+
+        decision = self.authorize_custom_resource(
+            principal, resource_type_name, cluster, Action.VIEW_METRICS
+        )
+
+        if decision.denied:
+            return {}
+
+        # Apply aggregation visibility filters
+        filtered = {}
+        for name, value in aggregations.items():
+            if decision.is_aggregation_allowed(name):
+                filtered[name] = value
+
+        return filtered
+
+    def clear_custom_resource_cache(
+        self,
+        principal: Optional[Principal] = None,
+        resource_type_name: Optional[str] = None,
+    ) -> int:
+        """Clear custom resource authorization cache.
+
+        Args:
+            principal: If provided, only clear cache for this principal
+            resource_type_name: If provided, only clear cache for this type
+
+        Returns:
+            Number of cache entries cleared
+        """
+        if not self._caching_enabled:
+            return 0
+
+        pattern_parts = ["rbac:custom"]
+        if principal:
+            pattern_parts.append(principal.cache_key)
+        else:
+            pattern_parts.append("*")
+
+        if resource_type_name:
+            pattern_parts.append(resource_type_name)
+        else:
+            pattern_parts.append("*")
+
+        pattern_parts.append("*")  # cluster
+        pattern_parts.append("*")  # action
+
+        pattern = ":".join(pattern_parts)
+
+        cursor = 0
+        count = 0
+        while True:
+            cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+            if keys:
+                self.redis.delete(*keys)
+                count += len(keys)
+            if cursor == 0:
+                break
+
+        return count
+
+    # =========================================================================
+    # Custom Resource Policy Evaluation
+    # =========================================================================
+
+    def _evaluate_custom_resource_policies(
+        self,
+        principal: Principal,
+        resource_type_name: str,
+        cluster: Optional[str],
+        action: Action,
+        policies: List[Dict],
+    ) -> CustomResourceDecision:
+        """Evaluate policies for custom resource authorization."""
+        # Default deny
+        decision = CustomResourceDecision(
+            decision=Decision.DENY,
+            resource_type_name=resource_type_name,
+            cluster=cluster,
+            reason=f"No policy grants access to custom resource type: {resource_type_name}",
+        )
+
+        for policy in policies:
+            if not self._is_policy_valid(policy):
+                continue
+
+            custom_resources = policy.get("custom_resources", {})
+            if resource_type_name not in custom_resources:
+                continue
+
+            config = custom_resources[resource_type_name]
+            decision.applied_policies.append(policy.get("_key", policy.get("policy_name", "unknown")))
+
+            # Handle deny policies
+            if policy.get("effect") == "Deny":
+                decision.decision = Decision.DENY
+                decision.reason = f"Denied by policy {policy.get('policy_name', 'unknown')}"
+                return decision
+
+            # Handle allow policies
+            if policy.get("effect") == "Allow":
+                visibility = config.get("visibility", "all")
+                if visibility == "none":
+                    continue
+
+                # Build filters
+                filters = self._parse_custom_resource_filters(config)
+
+                # Determine decision type
+                if visibility == "all" and filters.is_unrestricted():
+                    decision.decision = Decision.ALLOW
+                else:
+                    decision.decision = Decision.PARTIAL
+                    filters.visibility = Visibility.FILTERED
+
+                decision.filters = filters
+                decision.reason = f"Allowed by policy {policy.get('policy_name', 'unknown')}"
+
+                # Extract permissions
+                permissions = config.get("permissions", {"view": True})
+                decision.permissions = self._extract_custom_permissions(permissions)
+
+                # Extract aggregation visibility
+                agg_config = config.get("aggregations", {})
+                if "include" in agg_config:
+                    decision.allowed_aggregations = set(agg_config["include"])
+                if "exclude" in agg_config:
+                    decision.denied_aggregations = set(agg_config["exclude"])
+
+                return decision
+
+        return decision
+
+    def _parse_custom_resource_filters(
+        self, config: Dict[str, Any]
+    ) -> CustomResourceFilter:
+        """Parse custom resource filter configuration from policy."""
+        filters_config = config.get("filters", {})
+        result = CustomResourceFilter()
+
+        # Parse namespace filters
+        ns_config = filters_config.get("namespaces", {})
+        result.namespace_literals, result.namespace_patterns = self._parse_filter_specs(
+            ns_config.get("allowed_literals", []),
+            ns_config.get("allowed_patterns", []),
+        )
+        (
+            result.namespace_exclude_literals,
+            result.namespace_exclude_patterns,
+        ) = self._parse_filter_specs(
+            ns_config.get("denied_literals", []),
+            ns_config.get("denied_patterns", []),
+        )
+
+        # Parse name filters
+        name_config = filters_config.get("names", {})
+        result.name_literals, result.name_patterns = self._parse_filter_specs(
+            name_config.get("allowed_literals", []),
+            name_config.get("allowed_patterns", []),
+        )
+        (
+            result.name_exclude_literals,
+            result.name_exclude_patterns,
+        ) = self._parse_filter_specs(
+            name_config.get("denied_literals", []),
+            name_config.get("denied_patterns", []),
+        )
+
+        # Parse field filters
+        field_configs = filters_config.get("fields", {})
+        for field_name, field_spec in field_configs.items():
+            allowed_literals, allowed_patterns = self._parse_filter_specs(
+                field_spec.get("allowed_literals", []),
+                field_spec.get("allowed_patterns", []),
+            )
+            denied_literals, denied_patterns = self._parse_filter_specs(
+                field_spec.get("denied_literals", []),
+                field_spec.get("denied_patterns", []),
+            )
+            result.field_filters[field_name] = (
+                allowed_literals,
+                allowed_patterns,
+                denied_literals,
+                denied_patterns,
+            )
+
+        # Set visibility based on filter presence
+        if result.is_unrestricted():
+            result.visibility = Visibility.ALL
+        else:
+            result.visibility = Visibility.FILTERED
+
+        return result
+
+    def _parse_filter_specs(
+        self,
+        literals: List[str],
+        patterns: List[List[str]],
+    ) -> Tuple[Set[str], List[Tuple[str, re.Pattern]]]:
+        """Parse literal values and compile pattern specifications."""
+        literal_set = set(literals) if literals else set()
+        compiled_patterns = []
+
+        for pattern_spec in patterns or []:
+            try:
+                # Pattern spec is [pattern_str, regex_str]
+                if isinstance(pattern_spec, list) and len(pattern_spec) >= 2:
+                    pattern_str, regex_str = pattern_spec[0], pattern_spec[1]
+                    compiled = re.compile(regex_str)
+                    compiled_patterns.append((pattern_str, compiled))
+                elif isinstance(pattern_spec, str):
+                    # Simple string pattern - treat as literal prefix match
+                    compiled = re.compile(f"^{re.escape(pattern_spec)}")
+                    compiled_patterns.append((pattern_spec, compiled))
+            except re.error as e:
+                logger.warning(f"Invalid regex pattern '{pattern_spec}': {e}")
+                # Fail closed - invalid pattern means no match
+                continue
+
+        return literal_set, compiled_patterns
+
+    def _extract_custom_permissions(
+        self, permissions_config: Dict[str, bool]
+    ) -> Set[Action]:
+        """Extract Action set from permissions configuration."""
+        permissions = set()
+        permission_mapping = {
+            "view": Action.VIEW,
+            "viewMetrics": Action.VIEW_METRICS,
+            "viewSensitive": Action.VIEW_SENSITIVE,
+            "viewCosts": Action.VIEW_COSTS,
+            "viewSecrets": Action.VIEW_SECRETS,
+            "viewMetadata": Action.VIEW_METADATA,
+            "viewAuditInfo": Action.VIEW_AUDIT,
+        }
+
+        for key, action in permission_mapping.items():
+            if permissions_config.get(key):
+                permissions.add(action)
+
+        return permissions
+
+    def _custom_resource_matches_filters(
+        self,
+        resource: Dict[str, Any],
+        filters: CustomResourceFilter,
+        namespace_field: str,
+        name_field: str,
+    ) -> bool:
+        """Check if a custom resource matches all filter criteria."""
+        if filters.visibility == Visibility.NONE:
+            return False
+
+        # Extract namespace (may be None for cluster-scoped)
+        namespace = resource.get(namespace_field)
+
+        # Extract name
+        name = resource.get(name_field)
+        if name is None:
+            logger.warning(
+                f"Resource missing name field '{name_field}', excluding from results"
+            )
+            return False
+
+        # Check namespace filter
+        if not filters.matches_namespace(namespace):
+            return False
+
+        # Check name filter
+        if not filters.matches_name(name):
+            return False
+
+        # Check field filters
+        for field_name in filters.field_filters:
+            field_value = resource.get(field_name)
+            if not filters.matches_field(field_name, field_value):
+                return False
+
+        return True
+
+    def _custom_resource_cache_key(
+        self,
+        principal: Principal,
+        resource_type_name: str,
+        cluster: Optional[str],
+        action: Action,
+    ) -> str:
+        """Generate cache key for custom resource decisions."""
+        cluster_part = cluster or "all"
+        return f"rbac:custom:{principal.cache_key}:{resource_type_name}:{cluster_part}:{action.value}"
+
+    def _get_cached_custom_decision(
+        self, cache_key: str
+    ) -> Optional[CustomResourceDecision]:
+        """Retrieve cached custom resource decision."""
+        try:
+            cached = self.redis.get(cache_key)
+            if not cached:
+                return None
+
+            data = json.loads(cached)
+            decision = CustomResourceDecision(
+                decision=Decision(data["decision"]),
+                resource_type_name=data["resource_type_name"],
+                cluster=data.get("cluster"),
+                reason=data["reason"],
+                applied_policies=data.get("applied_policies", []),
+                metadata=data.get("metadata", {}),
+            )
+
+            # Rebuild permissions
+            decision.permissions = set(Action(a) for a in data.get("permissions", []))
+
+            # Rebuild aggregation visibility
+            if data.get("allowed_aggregations") is not None:
+                decision.allowed_aggregations = set(data["allowed_aggregations"])
+            decision.denied_aggregations = set(data.get("denied_aggregations", []))
+
+            # Rebuild filters
+            filters_data = data.get("filters", {})
+            decision.filters = self._deserialize_custom_filter(filters_data)
+
+            return decision
+        except Exception as e:
+            logger.debug(f"Custom resource cache retrieval failed: {e}")
+            return None
+
+    def _cache_custom_decision(
+        self, cache_key: str, decision: CustomResourceDecision
+    ) -> None:
+        """Cache custom resource authorization decision."""
+        try:
+            data = {
+                "decision": decision.decision.value,
+                "resource_type_name": decision.resource_type_name,
+                "cluster": decision.cluster,
+                "reason": decision.reason,
+                "permissions": [a.value for a in decision.permissions],
+                "applied_policies": decision.applied_policies,
+                "metadata": decision.metadata,
+                "allowed_aggregations": (
+                    list(decision.allowed_aggregations)
+                    if decision.allowed_aggregations is not None
+                    else None
+                ),
+                "denied_aggregations": list(decision.denied_aggregations),
+                "filters": self._serialize_custom_filter(decision.filters),
+            }
+
+            self.redis.setex(cache_key, self.cache_ttl, json.dumps(data))
+        except Exception as e:
+            logger.debug(f"Custom resource cache storage failed: {e}")
+
+    def _serialize_custom_filter(self, filters: CustomResourceFilter) -> Dict[str, Any]:
+        """Serialize CustomResourceFilter for caching."""
+        return {
+            "visibility": filters.visibility.value,
+            "namespace_literals": list(filters.namespace_literals),
+            "namespace_patterns": [
+                [p, pat.pattern] for p, pat in filters.namespace_patterns
+            ],
+            "namespace_exclude_literals": list(filters.namespace_exclude_literals),
+            "namespace_exclude_patterns": [
+                [p, pat.pattern] for p, pat in filters.namespace_exclude_patterns
+            ],
+            "name_literals": list(filters.name_literals),
+            "name_patterns": [[p, pat.pattern] for p, pat in filters.name_patterns],
+            "name_exclude_literals": list(filters.name_exclude_literals),
+            "name_exclude_patterns": [
+                [p, pat.pattern] for p, pat in filters.name_exclude_patterns
+            ],
+            "field_filters": {
+                field: [
+                    list(allowed_lits),
+                    [[p, pat.pattern] for p, pat in allowed_pats],
+                    list(denied_lits),
+                    [[p, pat.pattern] for p, pat in denied_pats],
+                ]
+                for field, (
+                    allowed_lits,
+                    allowed_pats,
+                    denied_lits,
+                    denied_pats,
+                ) in filters.field_filters.items()
+            },
+        }
+
+    def _deserialize_custom_filter(self, data: Dict[str, Any]) -> CustomResourceFilter:
+        """Deserialize CustomResourceFilter from cache."""
+        filters = CustomResourceFilter()
+
+        try:
+            filters.visibility = Visibility(data.get("visibility", "all"))
+        except ValueError:
+            filters.visibility = Visibility.ALL
+
+        filters.namespace_literals = set(data.get("namespace_literals", []))
+        filters.namespace_patterns = self._compile_pattern_list(
+            data.get("namespace_patterns", [])
+        )
+        filters.namespace_exclude_literals = set(
+            data.get("namespace_exclude_literals", [])
+        )
+        filters.namespace_exclude_patterns = self._compile_pattern_list(
+            data.get("namespace_exclude_patterns", [])
+        )
+
+        filters.name_literals = set(data.get("name_literals", []))
+        filters.name_patterns = self._compile_pattern_list(
+            data.get("name_patterns", [])
+        )
+        filters.name_exclude_literals = set(data.get("name_exclude_literals", []))
+        filters.name_exclude_patterns = self._compile_pattern_list(
+            data.get("name_exclude_patterns", [])
+        )
+
+        for field, (
+            allowed_lits,
+            allowed_pats,
+            denied_lits,
+            denied_pats,
+        ) in data.get("field_filters", {}).items():
+            filters.field_filters[field] = (
+                set(allowed_lits),
+                self._compile_pattern_list(allowed_pats),
+                set(denied_lits),
+                self._compile_pattern_list(denied_pats),
+            )
+
+        return filters
+
+    def _compile_pattern_list(
+        self, patterns: List[List[str]]
+    ) -> List[Tuple[str, re.Pattern]]:
+        """Compile a list of [pattern_str, regex] pairs."""
+        compiled = []
+        for pattern_spec in patterns:
+            if isinstance(pattern_spec, list) and len(pattern_spec) >= 2:
+                try:
+                    compiled.append((pattern_spec[0], re.compile(pattern_spec[1])))
+                except re.error:
+                    continue
+        return compiled
+
+    # =========================================================================
+    # Standard RBAC Methods (unchanged)
+    # =========================================================================
 
     def clear_cache(self, principal: Optional[Principal] = None):
         """Clear authorization cache."""
@@ -874,15 +1690,12 @@ class RBACEngine:
         )
 
     def authorize_anonymous(self, action: Action, resource: Resource) -> RBACDecision:
-        """
-        Authorize anonymous access - always allows viewing basic cluster health.
-        """
+        """Authorize anonymous access - allows viewing basic cluster health."""
         anonymous_principal = self.create_anonymous_principal()
         request = Request(
             principal=anonymous_principal, action=action, resource=resource
         )
 
-        # Only allow VIEW action for clusters
         if action != Action.VIEW or resource.type != ResourceType.CLUSTER:
             return RBACDecision(
                 decision=Decision.DENY,
@@ -890,7 +1703,6 @@ class RBACEngine:
                 reason="Anonymous access only allows viewing cluster health",
             )
 
-        # Always allow viewing cluster health for anonymous users
         return RBACDecision(
             decision=Decision.ALLOW,
             request=request,
@@ -898,6 +1710,11 @@ class RBACEngine:
             permissions={Action.VIEW},
             metadata={"anonymous": True, "restricted": True},
         )
+
+
+# =============================================================================
+# Factory Functions
+# =============================================================================
 
 
 def create_rbac_engine(redis_client: redis.Redis, cache_ttl: int = 0) -> RBACEngine:
