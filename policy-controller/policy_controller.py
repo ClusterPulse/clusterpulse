@@ -1,6 +1,9 @@
 """
 Policy Controller for MonitorAccessPolicy CRDs
-Compiles and manages RBAC policies in Redis for fast evaluation
+Compiles and manages RBAC policies in Redis for fast evaluation.
+
+Supports both built-in resources (nodes, namespaces, pods, operators) and
+custom resources defined via MetricSource CRDs.
 """
 
 import asyncio
@@ -29,18 +32,16 @@ from redis.exceptions import RedisError
 # CONSTANTS
 # ============================================================================
 
-# Environment configuration
 OPERATOR_NAMESPACE = os.getenv("NAMESPACE", "clusterpulse")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
-# Policy settings
 POLICY_CACHE_TTL = int(os.getenv("POLICY_CACHE_TTL", 300))
 GROUP_CACHE_TTL = int(os.getenv("GROUP_CACHE_TTL", 300))
 MAX_POLICIES_PER_USER = int(os.getenv("MAX_POLICIES_PER_USER", 100))
-POLICY_VALIDATION_INTERVAL = 300  # 5 minutes
+POLICY_VALIDATION_INTERVAL = 300
 
 # Redis key patterns
 POLICY_KEY_PATTERN = "policy:{namespace}:{name}"
@@ -50,6 +51,7 @@ SA_POLICY_KEY_PATTERN = "policy:sa:{sa}"
 EVAL_CACHE_KEY_PATTERN = "policy:eval:{identity}:{cluster}"
 USER_GROUPS_KEY_PATTERN = "user:groups:{username}"
 GROUP_MEMBERS_KEY_PATTERN = "group:members:{group}"
+CUSTOM_TYPE_POLICY_KEY_PATTERN = "policy:customtype:{resource_type}"
 
 # Batch processing
 REDIS_SCAN_BATCH_SIZE = 100
@@ -91,6 +93,12 @@ policy_errors = Counter(
 
 redis_operations = Histogram(
     "redis_operation_duration_seconds", "Redis operation duration", ["operation"]
+)
+
+custom_resource_policies = Gauge(
+    "custom_resource_policies_total",
+    "Policies referencing custom resource types",
+    ["resource_type"],
 )
 
 # ============================================================================
@@ -135,6 +143,20 @@ class PolicyState(str, Enum):
     INACTIVE = "Inactive"
     ERROR = "Error"
     EXPIRED = "Expired"
+
+
+class FilterOperator(str, Enum):
+    """Operators for field-based filtering in custom resources."""
+    EQUALS = "equals"
+    NOT_EQUALS = "notEquals"
+    CONTAINS = "contains"
+    STARTS_WITH = "startsWith"
+    ENDS_WITH = "endsWith"
+    GREATER_THAN = "greaterThan"
+    LESS_THAN = "lessThan"
+    IN = "in"
+    NOT_IN = "notIn"
+    MATCHES = "matches"
 
 
 # ============================================================================
@@ -185,6 +207,141 @@ class CompiledResourceFilter:
 
 
 @dataclass
+class CompiledFieldFilter:
+    """
+    Compiled filter for a single custom resource field.
+    
+    Supports both simple allowed/denied patterns and operator-based conditions.
+    """
+    field_name: str
+    allowed_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
+    denied_patterns: List[Tuple[str, re.Pattern]] = field(default_factory=list)
+    allowed_literals: Set[str] = field(default_factory=set)
+    denied_literals: Set[str] = field(default_factory=set)
+    # Operator-based conditions: list of (operator, value) tuples
+    conditions: List[Tuple[FilterOperator, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "field_name": self.field_name,
+            "allowed_patterns": [(p[0], p[1].pattern) for p in self.allowed_patterns],
+            "denied_patterns": [(p[0], p[1].pattern) for p in self.denied_patterns],
+            "allowed_literals": list(self.allowed_literals),
+            "denied_literals": list(self.denied_literals),
+            "conditions": [(op.value, val) for op, val in self.conditions],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "CompiledFieldFilter":
+        """Reconstruct from dictionary"""
+        obj = cls(field_name=data.get("field_name", ""))
+
+        for pattern_str, regex_str in data.get("allowed_patterns", []):
+            obj.allowed_patterns.append((pattern_str, re.compile(regex_str)))
+
+        for pattern_str, regex_str in data.get("denied_patterns", []):
+            obj.denied_patterns.append((pattern_str, re.compile(regex_str)))
+
+        obj.allowed_literals = set(data.get("allowed_literals", []))
+        obj.denied_literals = set(data.get("denied_literals", []))
+        
+        for op_str, val in data.get("conditions", []):
+            obj.conditions.append((FilterOperator(op_str), val))
+
+        return obj
+
+
+@dataclass
+class CompiledAggregationRules:
+    """
+    Rules controlling which aggregations are visible to the user.
+    
+    If include is non-empty, only those aggregations are shown.
+    If exclude is non-empty, those aggregations are hidden.
+    Include takes precedence over exclude.
+    """
+    include: Set[str] = field(default_factory=set)
+    exclude: Set[str] = field(default_factory=set)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "include": list(self.include),
+            "exclude": list(self.exclude),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "CompiledAggregationRules":
+        return cls(
+            include=set(data.get("include", [])),
+            exclude=set(data.get("exclude", [])),
+        )
+
+    def is_aggregation_allowed(self, aggregation_name: str) -> bool:
+        """Check if a specific aggregation should be visible."""
+        if self.include:
+            return aggregation_name in self.include
+        if self.exclude:
+            return aggregation_name not in self.exclude
+        return True
+
+
+@dataclass
+class CompiledCustomResourceFilter:
+    """
+    Compiled filter for a custom resource type defined by MetricSource.
+    
+    This integrates custom resources into the RBAC model by mapping
+    MetricSource-defined fields to standard filtering constructs.
+    """
+    resource_type_name: str
+    visibility: str = "all"
+    
+    # Namespace filtering (applied to the field identified by rbac.identifiers.namespace)
+    namespace_filter: Optional[CompiledResourceFilter] = None
+    
+    # Name filtering (applied to the field identified by rbac.identifiers.name)
+    name_filter: Optional[CompiledResourceFilter] = None
+    
+    # Field-based filters (keyed by field name from rbac.filterableFields)
+    field_filters: Dict[str, CompiledFieldFilter] = field(default_factory=dict)
+    
+    # Aggregation visibility rules
+    aggregation_rules: Optional[CompiledAggregationRules] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "resource_type_name": self.resource_type_name,
+            "visibility": self.visibility,
+            "namespace_filter": self.namespace_filter.to_dict() if self.namespace_filter else None,
+            "name_filter": self.name_filter.to_dict() if self.name_filter else None,
+            "field_filters": {k: v.to_dict() for k, v in self.field_filters.items()},
+            "aggregation_rules": self.aggregation_rules.to_dict() if self.aggregation_rules else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "CompiledCustomResourceFilter":
+        """Reconstruct from dictionary"""
+        obj = cls(
+            resource_type_name=data.get("resource_type_name", ""),
+            visibility=data.get("visibility", "all"),
+        )
+
+        if data.get("namespace_filter"):
+            obj.namespace_filter = CompiledResourceFilter.from_dict(data["namespace_filter"])
+
+        if data.get("name_filter"):
+            obj.name_filter = CompiledResourceFilter.from_dict(data["name_filter"])
+
+        for field_name, filter_data in data.get("field_filters", {}).items():
+            obj.field_filters[field_name] = CompiledFieldFilter.from_dict(filter_data)
+
+        if data.get("aggregation_rules"):
+            obj.aggregation_rules = CompiledAggregationRules.from_dict(data["aggregation_rules"])
+
+        return obj
+
+
+@dataclass
 class CompiledClusterRule:
     """Compiled cluster access rule"""
 
@@ -194,6 +351,8 @@ class CompiledClusterRule:
     operator_filter: Optional[CompiledResourceFilter] = None
     namespace_filter: Optional[CompiledResourceFilter] = None
     pod_filter: Optional[CompiledResourceFilter] = None
+    # Custom resource filters keyed by resourceTypeName
+    custom_resources: Dict[str, CompiledCustomResourceFilter] = field(default_factory=dict)
 
     def to_dict(self):
         return {
@@ -207,6 +366,7 @@ class CompiledClusterRule:
                 self.namespace_filter.to_dict() if self.namespace_filter else None
             ),
             "pod_filter": self.pod_filter.to_dict() if self.pod_filter else None,
+            "custom_resources": {k: v.to_dict() for k, v in self.custom_resources.items()},
         }
 
 
@@ -242,6 +402,9 @@ class CompiledPolicy:
     # Metadata
     compiled_at: str
     hash: str
+    
+    # Custom resource types referenced by this policy
+    custom_resource_types: Set[str] = field(default_factory=set)
 
     def to_dict(self):
         """This format MUST remain unchanged for Redis compatibility"""
@@ -262,6 +425,7 @@ class CompiledPolicy:
             "audit_config": self.audit_config,
             "compiled_at": self.compiled_at,
             "hash": self.hash,
+            "custom_resource_types": list(self.custom_resource_types),
         }
 
 
@@ -375,32 +539,20 @@ class PolicyCompiler:
 
         with policy_compilation_duration.labels(namespace=namespace, name=name).time():
             try:
-                # Validate the new format spec
                 self._validate_spec(spec)
 
-                # Extract components from new format
                 identity = spec.get("identity", {})
                 access = spec.get("access", {})
                 scope = spec.get("scope", {})
                 lifecycle = spec.get("lifecycle", {})
                 operations = spec.get("operations", {})
 
-                # Extract subjects
                 subjects = self._extract_subjects(identity.get("subjects", {}))
-
-                # Compile cluster rules
-                cluster_rules = self._compile_cluster_rules(scope.get("clusters", {}))
-
-                # Extract validity
+                cluster_rules, custom_types = self._compile_cluster_rules(scope.get("clusters", {}))
                 validity = self._extract_validity(lifecycle.get("validity", {}))
-
-                # Extract audit config
                 audit_config = self._extract_audit_config(operations.get("audit", {}))
-
-                # Generate policy hash
                 policy_hash = self._generate_hash(spec)
 
-                # Return the EXACT SAME compiled format for Redis compatibility
                 return CompiledPolicy(
                     policy_name=name,
                     namespace=namespace,
@@ -410,9 +562,7 @@ class PolicyCompiler:
                     users=subjects["users"],
                     groups=subjects["groups"],
                     service_accounts=subjects["service_accounts"],
-                    default_cluster_access=scope.get("clusters", {}).get(
-                        "default", "none"
-                    ),
+                    default_cluster_access=scope.get("clusters", {}).get("default", "none"),
                     cluster_rules=cluster_rules,
                     global_restrictions=scope.get("restrictions", {}),
                     not_before=validity["not_before"],
@@ -420,6 +570,7 @@ class PolicyCompiler:
                     audit_config=audit_config,
                     compiled_at=datetime.now(timezone.utc).isoformat(),
                     hash=policy_hash,
+                    custom_resource_types=custom_types,
                 )
 
             except Exception as e:
@@ -427,11 +578,10 @@ class PolicyCompiler:
                 raise PolicyCompilationError(f"Failed to compile policy: {str(e)}")
 
     def _validate_spec(self, spec: Dict[str, Any]):
-        """Validate policy specification (new format)"""
+        """Validate policy specification"""
         if not isinstance(spec, dict):
             raise PolicyValidationError("Policy spec must be a dictionary")
 
-        # Check required sections
         if "identity" not in spec:
             raise PolicyValidationError("Policy must have an 'identity' section")
 
@@ -441,18 +591,15 @@ class PolicyCompiler:
         if "scope" not in spec:
             raise PolicyValidationError("Policy must have a 'scope' section")
 
-        # Validate identity section
         identity = spec.get("identity", {})
         if "subjects" not in identity:
             raise PolicyValidationError("Identity section must specify subjects")
 
-        # Validate access section
         access = spec.get("access", {})
         effect = access.get("effect", "Allow")
         if effect not in ["Allow", "Deny"]:
             raise PolicyValidationError(f"Invalid effect: {effect}")
 
-        # Validate priority
         priority = identity.get("priority", 100)
         if not isinstance(priority, int) or priority < 0:
             raise PolicyValidationError(f"Invalid priority: {priority}")
@@ -462,7 +609,6 @@ class PolicyCompiler:
         users = set(subjects.get("users", []))
         groups = set(subjects.get("groups", []))
 
-        # Process service accounts
         service_accounts = set()
         for sa in subjects.get("serviceAccounts", []):
             sa_namespace = sa.get("namespace", "default")
@@ -473,49 +619,58 @@ class PolicyCompiler:
 
     def _compile_cluster_rules(
         self, clusters: Dict[str, Any]
-    ) -> List[CompiledClusterRule]:
-        """Compile cluster access rules from new format"""
+    ) -> Tuple[List[CompiledClusterRule], Set[str]]:
+        """
+        Compile cluster access rules from policy spec.
+        
+        Returns:
+            Tuple of (compiled_rules, custom_resource_types_referenced)
+        """
         rules = []
+        all_custom_types: Set[str] = set()
 
         for rule in clusters.get("rules", []):
-            # Extract selector, permissions, and resources
             selector = rule.get("selector", {})
             permissions = rule.get("permissions", {"view": True})
             resources = rule.get("resources", {})
 
-            # Compile resource filters
+            # Compile built-in resource filters
             node_filter = None
             operator_filter = None
             namespace_filter = None
             pod_filter = None
+            custom_resources: Dict[str, CompiledCustomResourceFilter] = {}
 
-            # Process nodes
             if "nodes" in resources:
                 node_config = resources["nodes"]
                 node_filter = self._compile_node_filter(
                     node_config.get("visibility", "all"), node_config.get("filters", {})
                 )
 
-            # Process operators
             if "operators" in resources:
                 op_config = resources["operators"]
                 operator_filter = self._compile_operator_filter(
                     op_config.get("visibility", "all"), op_config.get("filters", {})
                 )
 
-            # Process namespaces
             if "namespaces" in resources:
                 ns_config = resources["namespaces"]
                 namespace_filter = self._compile_namespace_filter(
                     ns_config.get("visibility", "all"), ns_config.get("filters", {})
                 )
 
-            # Process pods
             if "pods" in resources:
                 pod_config = resources["pods"]
                 pod_filter = self._compile_pod_filter(
                     pod_config.get("visibility", "all"), pod_config.get("filters", {})
                 )
+
+            # Compile custom resource filters
+            if "custom" in resources:
+                custom_resources, custom_types = self._compile_custom_resources(
+                    resources["custom"]
+                )
+                all_custom_types.update(custom_types)
 
             compiled_rule = CompiledClusterRule(
                 cluster_selector=selector,
@@ -524,11 +679,173 @@ class PolicyCompiler:
                 operator_filter=operator_filter,
                 namespace_filter=namespace_filter,
                 pod_filter=pod_filter,
+                custom_resources=custom_resources,
             )
 
             rules.append(compiled_rule)
 
-        return rules
+        return rules, all_custom_types
+
+    def _compile_custom_resources(
+        self, custom_config: Dict[str, Any]
+    ) -> Tuple[Dict[str, CompiledCustomResourceFilter], Set[str]]:
+        """
+        Compile custom resource filters from policy spec.
+        
+        The custom section maps resourceTypeName to filter configuration:
+        
+        custom:
+          pvc:
+            visibility: filtered
+            filters:
+              namespaces:
+                allowed: ["alpha-*"]
+              names:
+                denied: ["*-test"]
+              fields:
+                storageClass:
+                  allowed: ["gp3"]
+            aggregations:
+              include: ["totalStorage"]
+        """
+        compiled: Dict[str, CompiledCustomResourceFilter] = {}
+        custom_types: Set[str] = set()
+
+        for resource_type_name, config in custom_config.items():
+            custom_types.add(resource_type_name)
+            
+            visibility = config.get("visibility", "all")
+            filters = config.get("filters", {})
+            aggregations = config.get("aggregations", {})
+
+            # Compile namespace filter
+            namespace_filter = None
+            if "namespaces" in filters:
+                namespace_filter = self._compile_pattern_filter(filters["namespaces"])
+
+            # Compile name filter
+            name_filter = None
+            if "names" in filters:
+                name_filter = self._compile_pattern_filter(filters["names"])
+
+            # Compile field filters
+            field_filters: Dict[str, CompiledFieldFilter] = {}
+            if "fields" in filters:
+                for field_name, field_config in filters["fields"].items():
+                    field_filters[field_name] = self._compile_field_filter(
+                        field_name, field_config
+                    )
+
+            # Compile aggregation rules
+            aggregation_rules = None
+            if aggregations:
+                aggregation_rules = CompiledAggregationRules(
+                    include=set(aggregations.get("include", [])),
+                    exclude=set(aggregations.get("exclude", [])),
+                )
+
+            compiled[resource_type_name] = CompiledCustomResourceFilter(
+                resource_type_name=resource_type_name,
+                visibility=visibility,
+                namespace_filter=namespace_filter,
+                name_filter=name_filter,
+                field_filters=field_filters,
+                aggregation_rules=aggregation_rules,
+            )
+
+            logger.debug(
+                f"Compiled custom resource filter for '{resource_type_name}': "
+                f"visibility={visibility}, "
+                f"namespace_filter={namespace_filter is not None}, "
+                f"name_filter={name_filter is not None}, "
+                f"field_filters={list(field_filters.keys())}"
+            )
+
+        return compiled, custom_types
+
+    def _compile_pattern_filter(self, filter_config: Dict[str, Any]) -> CompiledResourceFilter:
+        """
+        Compile a simple pattern-based filter (for namespaces/names).
+        
+        Supports:
+          allowed: ["pattern1", "pattern2"]
+          denied: ["pattern3"]
+        """
+        filter_obj = CompiledResourceFilter(visibility="filtered")
+
+        for pattern in filter_config.get("allowed", []):
+            compiled = self._compile_pattern(pattern)
+            if compiled[0] == "literal":
+                filter_obj.allowed_literals.add(compiled[1])
+            else:
+                filter_obj.allowed_patterns.append((pattern, compiled[1]))
+
+        for pattern in filter_config.get("denied", []):
+            compiled = self._compile_pattern(pattern)
+            if compiled[0] == "literal":
+                filter_obj.denied_literals.add(compiled[1])
+            else:
+                filter_obj.denied_patterns.append((pattern, compiled[1]))
+
+        return filter_obj
+
+    def _compile_field_filter(
+        self, field_name: str, field_config: Dict[str, Any]
+    ) -> CompiledFieldFilter:
+        """
+        Compile a field-based filter for custom resources.
+        
+        Supports two formats:
+        
+        1. Simple allowed/denied:
+           storageClass:
+             allowed: ["gp3", "io2"]
+             denied: ["gp2"]
+        
+        2. Operator-based conditions:
+           storageBytes:
+             conditions:
+               - operator: greaterThan
+                 value: 1073741824
+        """
+        filter_obj = CompiledFieldFilter(field_name=field_name)
+
+        # Process allowed patterns/literals
+        for pattern in field_config.get("allowed", []):
+            compiled = self._compile_pattern(str(pattern))
+            if compiled[0] == "literal":
+                filter_obj.allowed_literals.add(compiled[1])
+            else:
+                filter_obj.allowed_patterns.append((str(pattern), compiled[1]))
+
+        # Process denied patterns/literals
+        for pattern in field_config.get("denied", []):
+            compiled = self._compile_pattern(str(pattern))
+            if compiled[0] == "literal":
+                filter_obj.denied_literals.add(compiled[1])
+            else:
+                filter_obj.denied_patterns.append((str(pattern), compiled[1]))
+
+        # Process operator-based conditions
+        for condition in field_config.get("conditions", []):
+            operator_str = condition.get("operator")
+            value = condition.get("value")
+            
+            if operator_str and value is not None:
+                try:
+                    operator = FilterOperator(operator_str)
+                    
+                    # Pre-compile regex for matches operator
+                    if operator == FilterOperator.MATCHES:
+                        value = re.compile(value)
+                    
+                    filter_obj.conditions.append((operator, value))
+                except ValueError:
+                    logger.warning(
+                        f"Unknown filter operator '{operator_str}' for field '{field_name}'"
+                    )
+
+        return filter_obj
 
     def _compile_node_filter(
         self, visibility: str, filters: Dict
@@ -536,11 +853,9 @@ class PolicyCompiler:
         """Compile node-specific filters"""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Add label selector
         if "labelSelector" in filters:
             filter_obj.label_selectors = filters["labelSelector"]
 
-        # Add node-specific filters
         if filters.get("hideMasters"):
             filter_obj.additional_filters["hide_masters"] = True
 
@@ -555,7 +870,6 @@ class PolicyCompiler:
         """Compile operator-specific filters"""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Process namespace filters
         for pattern in filters.get("allowedNamespaces", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -570,7 +884,6 @@ class PolicyCompiler:
             else:
                 filter_obj.denied_patterns.append((f"ns:{pattern}", compiled[1]))
 
-        # Process name filters
         for pattern in filters.get("allowedNames", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -593,7 +906,6 @@ class PolicyCompiler:
         """Compile namespace filters"""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Process allowed patterns/literals
         for pattern in filters.get("allowed", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -601,7 +913,6 @@ class PolicyCompiler:
             else:
                 filter_obj.allowed_patterns.append((pattern, compiled[1]))
 
-        # Process denied patterns/literals
         for pattern in filters.get("denied", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -617,7 +928,6 @@ class PolicyCompiler:
         """Compile pod filters"""
         filter_obj = CompiledResourceFilter(visibility=visibility)
 
-        # Process allowed namespaces for pods
         for pattern in filters.get("allowedNamespaces", []):
             compiled = self._compile_pattern(pattern)
             if compiled[0] == "literal":
@@ -631,7 +941,6 @@ class PolicyCompiler:
     def _compile_pattern(self, pattern: str) -> Tuple[str, Any]:
         """Compile a string pattern into regex or literal (cached)"""
         if "*" in pattern or "?" in pattern:
-            # Convert shell-style wildcards to regex
             regex_pattern = pattern.replace(".", r"\.")
             regex_pattern = regex_pattern.replace("*", ".*")
             regex_pattern = regex_pattern.replace("?", ".")
@@ -678,7 +987,6 @@ class PolicyStore:
 
         with redis_operations.labels(operation="store_policy").time():
             with RedisBatchProcessor(self.redis) as batch:
-                # Store the main policy data
                 policy_data = json.dumps(policy.to_dict())
                 batch.add_operation(
                     "hset",
@@ -693,23 +1001,27 @@ class PolicyStore:
                     },
                 )
 
-                # Create indexes
                 self._create_policy_indexes(batch, policy, policy_key)
 
-        # Clear evaluation caches
         self._invalidate_evaluation_caches(
             policy.users, policy.groups, policy.service_accounts
         )
 
-        # Update metrics
+        # Update custom resource type metrics
+        for resource_type in policy.custom_resource_types:
+            custom_resource_policies.labels(resource_type=resource_type).inc()
+
         active_policies_gauge.inc()
 
-        logger.info(f"Stored policy {policy_key} and cleared evaluation caches")
+        logger.info(
+            f"Stored policy {policy_key} with {len(policy.custom_resource_types)} "
+            f"custom resource types and cleared evaluation caches"
+        )
 
     def _create_policy_indexes(
         self, batch: RedisBatchProcessor, policy: CompiledPolicy, policy_key: str
     ):
-        """Create all indexes for a policy"""
+        """Create all indexes for a policy including custom resource type indexes"""
         # Index by users
         for user in policy.users:
             if policy.enabled:
@@ -746,6 +1058,20 @@ class PolicyStore:
                     {policy_key: policy.priority},
                 )
 
+        # Index by custom resource types
+        for resource_type in policy.custom_resource_types:
+            if policy.enabled:
+                batch.add_operation(
+                    "sadd",
+                    CUSTOM_TYPE_POLICY_KEY_PATTERN.format(resource_type=resource_type),
+                    policy_key,
+                )
+                batch.add_operation(
+                    "zadd",
+                    f"{CUSTOM_TYPE_POLICY_KEY_PATTERN.format(resource_type=resource_type)}:sorted",
+                    {policy_key: policy.priority},
+                )
+
         # Global indexes
         batch.add_operation("sadd", "policies:all", policy_key)
         batch.add_operation(
@@ -763,7 +1089,6 @@ class PolicyStore:
         """Remove policy and all its indexes"""
         policy_key = POLICY_KEY_PATTERN.format(namespace=namespace, name=name)
 
-        # Get policy data first
         policy_data = self.redis.hget(policy_key, "data")
         if not policy_data:
             logger.warning(f"Policy {policy_key} not found for removal")
@@ -776,17 +1101,18 @@ class PolicyStore:
                 self._remove_policy_indexes(batch, policy, policy_key)
                 batch.add_operation("delete", policy_key)
 
-        # Clear evaluation caches
         self._invalidate_evaluation_caches(
             policy.get("users", []),
             policy.get("groups", []),
             policy.get("service_accounts", []),
         )
 
-        # Publish event
         self._publish_policy_event("deleted", namespace, name)
 
-        # Update metrics
+        # Update custom resource type metrics
+        for resource_type in policy.get("custom_resource_types", []):
+            custom_resource_policies.labels(resource_type=resource_type).dec()
+
         active_policies_gauge.dec()
 
         logger.info(f"Removed policy {policy_key} and cleared evaluation caches")
@@ -794,7 +1120,7 @@ class PolicyStore:
     def _remove_policy_indexes(
         self, batch: RedisBatchProcessor, policy: Dict, policy_key: str
     ):
-        """Remove all indexes for a policy"""
+        """Remove all indexes for a policy including custom resource type indexes"""
         # Remove from user indexes
         for user in policy.get("users", []):
             batch.add_operation(
@@ -824,6 +1150,19 @@ class PolicyStore:
                 "zrem", f"{SA_POLICY_KEY_PATTERN.format(sa=sa)}:sorted", policy_key
             )
 
+        # Remove from custom resource type indexes
+        for resource_type in policy.get("custom_resource_types", []):
+            batch.add_operation(
+                "srem",
+                CUSTOM_TYPE_POLICY_KEY_PATTERN.format(resource_type=resource_type),
+                policy_key,
+            )
+            batch.add_operation(
+                "zrem",
+                f"{CUSTOM_TYPE_POLICY_KEY_PATTERN.format(resource_type=resource_type)}:sorted",
+                policy_key,
+            )
+
         # Remove from global indexes
         batch.add_operation("srem", "policies:all", policy_key)
         batch.add_operation("zrem", "policies:by:priority", policy_key)
@@ -841,15 +1180,12 @@ class PolicyStore:
         count = 0
 
         with RedisBatchProcessor(self.redis) as batch:
-            # Clear caches for users
             for user in users:
                 pattern = f"policy:eval:{user}:*"
                 count += self._scan_and_delete(batch, pattern)
                 batch.add_operation("delete", f"user:permissions:{user}")
 
-            # Clear caches for groups and their members
             for group in groups:
-                # Get group members
                 members = self.redis.smembers(
                     GROUP_MEMBERS_KEY_PATTERN.format(group=group)
                 )
@@ -858,11 +1194,9 @@ class PolicyStore:
                     count += self._scan_and_delete(batch, pattern)
                     batch.add_operation("delete", f"user:permissions:{member}")
 
-                # Clear group-specific caches
                 pattern = f"policy:eval:*:group:{group}:*"
                 count += self._scan_and_delete(batch, pattern)
 
-            # Clear service account caches
             for sa in service_accounts:
                 pattern = f"policy:eval:{sa}:*"
                 count += self._scan_and_delete(batch, pattern)
@@ -932,6 +1266,50 @@ class PolicyStore:
         key = "policies:enabled" if enabled_only else "policies:all"
         return list(self.redis.smembers(key))
 
+    def get_policies_for_custom_type(
+        self, resource_type: str, sorted_by_priority: bool = True
+    ) -> List[str]:
+        """
+        Get all policies that reference a specific custom resource type.
+        
+        Args:
+            resource_type: The resourceTypeName from MetricSource
+            sorted_by_priority: If True, return sorted by priority (highest first)
+        
+        Returns:
+            List of policy keys
+        """
+        if sorted_by_priority:
+            key = f"{CUSTOM_TYPE_POLICY_KEY_PATTERN.format(resource_type=resource_type)}:sorted"
+            return self.redis.zrevrange(key, 0, -1)
+        else:
+            key = CUSTOM_TYPE_POLICY_KEY_PATTERN.format(resource_type=resource_type)
+            return list(self.redis.smembers(key))
+
+    def get_custom_resource_types(self) -> Set[str]:
+        """
+        Get all custom resource types that have policies defined.
+        
+        Returns:
+            Set of resource type names
+        """
+        types = set()
+        pattern = "policy:customtype:*"
+        
+        cursor = 0
+        while True:
+            cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+            for key in keys:
+                # Extract resource type from key pattern
+                # key format: policy:customtype:{resource_type} or policy:customtype:{resource_type}:sorted
+                parts = key.split(":")
+                if len(parts) >= 3 and not key.endswith(":sorted"):
+                    types.add(parts[2])
+            if cursor == 0:
+                break
+        
+        return types
+
 
 # ============================================================================
 # POLICY VALIDATOR
@@ -954,7 +1332,6 @@ class PolicyValidator:
             "validated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Check validity period from lifecycle section
         lifecycle = spec.get("lifecycle", {})
         validity = lifecycle.get("validity", {})
         now = datetime.now(timezone.utc)
@@ -979,13 +1356,67 @@ class PolicyValidator:
                 status["message"] = f'Policy expired at {validity["notAfter"]}'
                 return status
 
-        # Check if enabled from access section
         access = spec.get("access", {})
         if not access.get("enabled", True):
             status["state"] = PolicyState.INACTIVE
             status["message"] = "Policy is disabled"
 
+        # Validate custom resource references
+        custom_validation = await self._validate_custom_resources(spec)
+        if custom_validation.get("warnings"):
+            status["custom_resource_warnings"] = custom_validation["warnings"]
+
         return status
+
+    async def _validate_custom_resources(
+        self, spec: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Validate custom resource references in the policy.
+        
+        Checks that referenced MetricSource resourceTypeNames exist
+        and that filtered fields are in the MetricSource's filterableFields.
+        """
+        result = {"warnings": []}
+
+        scope = spec.get("scope", {})
+        clusters = scope.get("clusters", {})
+
+        for rule in clusters.get("rules", []):
+            resources = rule.get("resources", {})
+            custom = resources.get("custom", {})
+
+            for resource_type, config in custom.items():
+                # Check if MetricSource exists for this type
+                metricsource_key = f"metricsource:*:{resource_type}"
+                
+                # Note: This is a basic check. In production, you'd want to
+                # query the actual MetricSource to validate filterableFields
+                exists = False
+                cursor = 0
+                while True:
+                    cursor, keys = self.policy_store.redis.scan(
+                        cursor, match=f"metricsource:*", count=100
+                    )
+                    for key in keys:
+                        data = self.policy_store.redis.get(key)
+                        if data:
+                            try:
+                                ms = json.loads(data)
+                                if ms.get("rbac", {}).get("resourceTypeName") == resource_type:
+                                    exists = True
+                                    break
+                            except json.JSONDecodeError:
+                                pass
+                    if exists or cursor == 0:
+                        break
+
+                if not exists:
+                    result["warnings"].append(
+                        f"Custom resource type '{resource_type}' not found in any MetricSource"
+                    )
+
+        return result
 
     async def validate_all_policies(self):
         """Validate all policies for expiration"""
@@ -993,18 +1424,13 @@ class PolicyValidator:
 
         for policy_key in policies:
             try:
-                # Parse policy key
                 parts = policy_key.split(":")
                 if len(parts) >= 3:
                     namespace = parts[1]
                     name = parts[2]
 
-                    # Get policy data
                     policy_data = self.policy_store.get_policy(namespace, name)
                     if policy_data:
-                        # Note: This retrieves the compiled format from Redis
-                        # May need to reconstruct the spec or store it separately
-                        # For now, validate based on the compiled data
                         status = {
                             "state": PolicyState.ACTIVE,
                             "message": "Policy is active",
@@ -1051,7 +1477,7 @@ policy_compiler = PolicyCompiler()
 policy_validator = PolicyValidator(policy_store)
 
 # ============================================================================
-# KOPF HANDLERS (Using new format exclusively)
+# KOPF HANDLERS
 # ============================================================================
 
 
@@ -1069,32 +1495,30 @@ async def policy_changed(
     logger.info(f"Policy {namespace}/{name} changed")
 
     try:
-        # Compile the policy (new format only)
         spec_dict = dict(spec)
         compiled = policy_compiler.compile_policy(name, namespace, spec_dict)
-
-        # Store in Redis (exactly the same format as before)
         policy_store.store_policy(compiled)
 
-        # Validate the policy
         status = await policy_validator.validate_policy(namespace, name, spec_dict)
 
-        # Add compilation info to status
         status.update(
             {
                 "compiledAt": compiled.compiled_at,
                 "affectedUsers": len(compiled.users),
                 "affectedGroups": len(compiled.groups),
                 "affectedServiceAccounts": len(compiled.service_accounts),
+                "customResourceTypes": len(compiled.custom_resource_types),
                 "hash": compiled.hash,
             }
         )
 
-        # Update status
         patch["status"] = status
         policy_store.update_policy_status(namespace, name, status)
 
-        logger.info(f"Successfully compiled policy {namespace}/{name}")
+        logger.info(
+            f"Successfully compiled policy {namespace}/{name} with "
+            f"{len(compiled.custom_resource_types)} custom resource types"
+        )
 
     except PolicyCompilationError as e:
         logger.error(f"Failed to compile policy {namespace}/{name}: {str(e)}")
@@ -1152,10 +1576,8 @@ async def periodic_policy_validation(
 ):
     """Periodic validation of policies"""
     try:
-        # Validate the policy
         new_status = await policy_validator.validate_policy(namespace, name, dict(spec))
 
-        # Check if status changed
         current_state = status.get("state")
         new_state = new_status["state"]
 
@@ -1164,11 +1586,9 @@ async def periodic_policy_validation(
                 f"Policy {namespace}/{name} state changed from {current_state} to {new_state}"
             )
 
-            # Update status
             patch["status"] = new_status
             policy_store.update_policy_status(namespace, name, new_status)
 
-            # If policy became inactive/expired, update indexes
             if new_state in [PolicyState.INACTIVE, PolicyState.EXPIRED]:
                 policy_key = POLICY_KEY_PATTERN.format(namespace=namespace, name=name)
                 redis_client.srem("policies:enabled", policy_key)
@@ -1186,13 +1606,8 @@ async def periodic_policy_validation(
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_):
     """Configure kopf settings"""
-    # Disable CRD scanning - we already know our CRDs exist
     settings.scanning.disabled = True
-    
-    # Run in standalone mode - disables peering which requires cluster access
     settings.peering.standalone = True
-    
-    # Existing settings
     settings.batching.worker_limit = 3
     settings.posting.enabled = False
     settings.watching.server_timeout = 300
@@ -1208,12 +1623,12 @@ def configure(settings: kopf.OperatorSettings, **_):
 
     logger.info("Kopf configured with API server protection settings")
 
+
 @kopf.on.startup()
 async def startup_handler(**kwargs):
     """Startup tasks"""
     logger.info("Policy controller starting up")
 
-    # Initialize resource manager
     global resource_manager
     resource_manager = ResourceManager()
 
@@ -1240,12 +1655,19 @@ async def startup_handler(**kwargs):
 
         # Initialize metrics
         active_policies_gauge.set(redis_client.scard("policies:enabled"))
+        
+        # Initialize custom resource type metrics
+        custom_types = policy_store.get_custom_resource_types()
+        for resource_type in custom_types:
+            policy_count = len(policy_store.get_policies_for_custom_type(resource_type))
+            custom_resource_policies.labels(resource_type=resource_type).set(policy_count)
+        
+        logger.info(f"Found {len(custom_types)} custom resource types with policies")
 
     except RedisError as e:
         logger.error(f"Failed to connect to Redis: {str(e)}")
         sys.exit(1)
 
-    # Start background tasks
     asyncio.create_task(periodic_cache_cleanup())
 
     logger.info("Policy controller ready")
@@ -1255,13 +1677,11 @@ async def periodic_cache_cleanup():
     """Periodically clean up expired caches"""
     while True:
         try:
-            await asyncio.sleep(3600)  # Run every hour
+            await asyncio.sleep(3600)
 
-            # Clear expired evaluation caches
             count = 0
             cursor = 0
             pattern = "policy:eval:*"
-            time.time()
 
             while True:
                 cursor, keys = redis_client.scan(
@@ -1270,7 +1690,7 @@ async def periodic_cache_cleanup():
 
                 for key in keys:
                     ttl = redis_client.ttl(key)
-                    if ttl == -1:  # No expiry set
+                    if ttl == -1:
                         redis_client.expire(key, POLICY_CACHE_TTL)
                         count += 1
 
@@ -1288,8 +1708,6 @@ async def periodic_cache_cleanup():
 async def cleanup_handler(**kwargs):
     """Cleanup tasks"""
     logger.info("Policy controller shutting down")
-
-    # Close Redis connection pool
     redis_pool.disconnect()
 
 
@@ -1303,6 +1721,7 @@ async def health_probe(**kwargs):
             "status": "healthy",
             "policies": redis_client.scard("policies:all"),
             "enabled_policies": redis_client.scard("policies:enabled"),
+            "custom_resource_types": len(policy_store.get_custom_resource_types()),
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
