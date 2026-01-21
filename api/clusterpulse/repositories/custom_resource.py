@@ -52,26 +52,29 @@ class CustomResourceRepository(RedisRepository):
         self, resource_type_name: str
     ) -> Optional[Dict[str, Any]]:
         """Get MetricSource definition by its RBAC resource type name.
-
+    
         Args:
             resource_type_name: The resourceTypeName from rbac configuration
-
+    
         Returns:
             Compiled MetricSource definition or None if not found
         """
         # First get the source ID from the index
         index_key = f"metricsources:by:resourcetype:{resource_type_name}"
-        source_id = self.redis.smembers(index_key)
-
-        if not source_id:
+        source_ids = self.redis.smembers(index_key)
+    
+        if not source_ids:
             return None
-
+    
+        # Get the first source_id from the set (typically there should be only one)
+        source_id = next(iter(source_ids))
+    
         # Parse source_id (format: namespace/name)
         parts = source_id.split("/", 1)
         if len(parts) != 2:
             logger.error(f"Invalid source_id format in index: {source_id}")
             return None
-
+    
         namespace, name = parts
         return self.get_metricsource(namespace, name)
 
