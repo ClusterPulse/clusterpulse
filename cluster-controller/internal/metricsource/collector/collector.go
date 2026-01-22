@@ -51,7 +51,7 @@ func (c *Collector) Collect(
 ) (*CollectResult, error) {
 
 	startTime := time.Now()
-	log := c.log.WithFields(logrus.Fields{
+	log := logrus.WithFields(logrus.Fields{
 		"cluster":      clusterName,
 		"metricsource": source.Namespace + "/" + source.Name,
 		"kind":         source.Source.Kind,
@@ -139,6 +139,7 @@ func (c *Collector) Collect(
 					errorMu.Lock()
 					collectErrors = append(collectErrors, fmt.Errorf("namespace %s: %w", namespace, err))
 					errorMu.Unlock()
+					log.Debugf("Failed to collect from namespace %s: %v", namespace, err)
 					return
 				}
 
@@ -171,12 +172,17 @@ func (c *Collector) Collect(
 		result.Aggregations.SourceID = source.Namespace + "/" + source.Name
 	}
 
-	log.WithFields(logrus.Fields{
-		"resources": len(allResources),
-		"truncated": truncated,
-		"duration":  result.Collection.DurationMs,
-		"errors":    len(collectErrors),
-	}).Debug("Collection completed")
+	// Log collection results
+	if len(collectErrors) > 0 {
+		log.Warnf("Collection completed with %d errors: %d resources collected (truncated: %v, took %dms)",
+			len(collectErrors), len(allResources), truncated, result.Collection.DurationMs)
+	} else if result.Collection.DurationMs > 5000 {
+		log.Infof("Collection completed: %d resources (truncated: %v, took %dms)",
+			len(allResources), truncated, result.Collection.DurationMs)
+	} else {
+		log.Debugf("Collection completed: %d resources (truncated: %v, took %dms)",
+			len(allResources), truncated, result.Collection.DurationMs)
+	}
 
 	return result, nil
 }

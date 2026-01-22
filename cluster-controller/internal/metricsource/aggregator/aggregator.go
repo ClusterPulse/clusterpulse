@@ -31,12 +31,21 @@ func (a *Aggregator) Compute(input *AggregationInput) *types.AggregationResults 
 		Values:     make(map[string]interface{}),
 	}
 
+	a.log.Debugf("Computing %d aggregations over %d resources", len(input.Aggregations), len(input.Resources))
+
 	for _, agg := range input.Aggregations {
 		value := a.computeAggregation(&agg, input.Resources)
 		results.Values[agg.Name] = value
 	}
 
 	results.DurationMs = time.Since(startTime).Milliseconds()
+
+	if results.DurationMs > 1000 {
+		a.log.Infof("Aggregation computation took %dms for %d aggregations", results.DurationMs, len(input.Aggregations))
+	} else {
+		a.log.Debugf("Aggregation computation completed in %dms", results.DurationMs)
+	}
+
 	return results
 }
 

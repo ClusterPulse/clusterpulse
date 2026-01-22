@@ -124,7 +124,7 @@ func (r *MetricSourceReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		return r.handleDeletion(ctx, req.Namespace, req.Name)
 	}
 
-	log.Debug("Reconciling MetricSource")
+	log.Debug("Starting reconciliation")
 
 	// Compile the MetricSource
 	compiled, err := r.compiler.Compile(ms)
@@ -173,19 +173,28 @@ func (r *MetricSourceReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		}
 	}
 
-	log.Debugf("Reconciliation complete, collected %d resources from %d clusters, requeue in %v",
-		collectionResult.TotalResources, collectionResult.ClustersCollected, interval)
+	duration := time.Since(startTime)
+
+	// Log at Info level for significant events or slow reconciliations
+	if duration > 5*time.Second {
+		log.Infof("MetricSource %s reconciled (took %v)", ms.Name, duration)
+	} else if collectionResult.TotalErrors > 0 {
+		log.Warnf("MetricSource %s reconciled with %d errors (%d resources from %d clusters)",
+			ms.Name, collectionResult.TotalErrors, collectionResult.TotalResources, collectionResult.ClustersCollected)
+	} else {
+		log.Debugf("Reconciliation completed in %v, next in %v", duration, interval)
+	}
 
 	return reconcile.Result{RequeueAfter: interval}, nil
 }
 
 // CollectionSummary holds aggregate results from collecting across all clusters
 type CollectionSummary struct {
-	TotalResources     int
-	ClustersCollected  int
-	TotalErrors        int
+	TotalResources       int
+	ClustersCollected    int
+	TotalErrors          int
 	AggregationsComputed bool
-	ClusterResults     map[string]*collector.CollectResult
+	ClusterResults       map[string]*collector.CollectResult
 }
 
 // collectFromAllClusters collects resources from all connected clusters
@@ -341,6 +350,8 @@ func (r *MetricSourceReconciler) getDynamicClient(ctx context.Context, cc *v1alp
 	r.clusterClientsMu.Lock()
 	r.clusterClients[cc.Name] = dynamicClient
 	r.clusterClientsMu.Unlock()
+
+	logrus.Debugf("Created dynamic client for cluster %s", cc.Name)
 
 	return dynamicClient, nil
 }

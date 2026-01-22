@@ -30,9 +30,16 @@ func NewCompiler() *Compiler {
 
 // Compile transforms a MetricSource spec into a CompiledMetricSource
 func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSource, error) {
-	c.log.Debugf("Compiling MetricSource %s/%s", ms.Namespace, ms.Name)
+	startTime := time.Now()
+	log := logrus.WithFields(logrus.Fields{
+		"metricsource": ms.Namespace + "/" + ms.Name,
+		"kind":         ms.Spec.Source.Kind,
+	})
+
+	log.Debug("Compiling MetricSource")
 
 	if err := c.validate(ms); err != nil {
+		log.WithError(err).Error("Validation failed")
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
@@ -91,8 +98,9 @@ func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSour
 	compiled.Hash = c.generateHash(&ms.Spec)
 	compiled.CompiledAt = time.Now().UTC().Format(time.RFC3339)
 
-	c.log.Debugf("Successfully compiled MetricSource %s/%s with %d fields, %d computed, %d aggregations",
-		ms.Namespace, ms.Name, len(compiled.Fields), len(compiled.Computed), len(compiled.Aggregations))
+	duration := time.Since(startTime)
+	log.Debugf("Compiled MetricSource: %d fields, %d computed, %d aggregations (took %v)",
+		len(compiled.Fields), len(compiled.Computed), len(compiled.Aggregations), duration)
 
 	return compiled, nil
 }

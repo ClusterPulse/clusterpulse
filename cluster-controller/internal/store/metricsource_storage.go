@@ -12,13 +12,13 @@ import (
 
 // MetricSource Redis key patterns
 const (
-	keyMetricSourceDef        = "metricsource:%s:%s"              // namespace:name
-	keyMetricSourceResources  = "cluster:%s:custom:%s:resources"  // cluster:sourceId
+	keyMetricSourceDef          = "metricsource:%s:%s"                // namespace:name
+	keyMetricSourceResources    = "cluster:%s:custom:%s:resources"    // cluster:sourceId
 	keyMetricSourceAggregations = "cluster:%s:custom:%s:aggregations" // cluster:sourceId
-	keyMetricSourceMeta       = "cluster:%s:custom:%s:meta"       // cluster:sourceId
-	keyMetricSourcesAll       = "metricsources:all"
-	keyMetricSourcesEnabled   = "metricsources:enabled"
-	keyMetricSourceByType     = "metricsources:by:resourcetype:%s" // resourceTypeName
+	keyMetricSourceMeta         = "cluster:%s:custom:%s:meta"         // cluster:sourceId
+	keyMetricSourcesAll         = "metricsources:all"
+	keyMetricSourcesEnabled     = "metricsources:enabled"
+	keyMetricSourceByType       = "metricsources:by:resourcetype:%s" // resourceTypeName
 )
 
 // StoreCompiledMetricSource stores a compiled MetricSource definition in Redis
@@ -62,7 +62,7 @@ func (c *Client) StoreCompiledMetricSource(ctx context.Context, source *types.Co
 		return fmt.Errorf("failed to store MetricSource: %w", err)
 	}
 
-	logrus.Debugf("Stored MetricSource %s/%s (hash: %s)", source.Namespace, source.Name, source.Hash)
+	logrus.Debugf("Stored MetricSource %s (hash: %s)", sourceID, source.Hash)
 	return nil
 }
 
@@ -131,7 +131,7 @@ func (c *Client) DeleteMetricSource(ctx context.Context, namespace, name string)
 		return fmt.Errorf("failed to delete MetricSource: %w", err)
 	}
 
-	logrus.Debugf("Deleted MetricSource %s", sourceID)
+	logrus.Infof("Deleted MetricSource %s", sourceID)
 	return nil
 }
 
@@ -217,7 +217,12 @@ func (c *Client) StoreAggregationResults(ctx context.Context, clusterName string
 	}
 
 	ttl := time.Duration(c.config.CacheTTL) * time.Second
-	return c.client.Set(ctx, key, string(data), ttl).Err()
+	if err := c.client.Set(ctx, key, string(data), ttl).Err(); err != nil {
+		return err
+	}
+
+	logrus.Debugf("Stored aggregation results for %s/%s", clusterName, results.SourceID)
+	return nil
 }
 
 // GetAggregationResults retrieves computed aggregations for a cluster/source
@@ -279,4 +284,6 @@ func (c *Client) PublishMetricSourceEvent(eventType, sourceID string, data map[s
 
 	ctx := context.Background()
 	c.client.Publish(ctx, "metricsource-events", string(eventJSON))
+
+	logrus.Debugf("Published MetricSource event: %s for %s", eventType, sourceID)
 }
