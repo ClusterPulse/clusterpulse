@@ -172,10 +172,6 @@ type MetricSourceRBAC struct {
 	// ResourceTypeName is the unique identifier for policy references
 	ResourceTypeName string `json:"resourceTypeName"`
 
-	// Identifiers maps RBAC dimensions to extracted field names
-	// +optional
-	Identifiers *RBACIdentifiers `json:"identifiers,omitempty"`
-
 	// FilterableFields lists fields that can be filtered in policies
 	// +optional
 	FilterableFields []string `json:"filterableFields,omitempty"`
@@ -183,17 +179,6 @@ type MetricSourceRBAC struct {
 	// FilterAggregations controls whether aggregations respect RBAC filtering
 	// +kubebuilder:default=true
 	FilterAggregations bool `json:"filterAggregations,omitempty"`
-}
-
-// RBACIdentifiers maps standard RBAC dimensions to field names
-type RBACIdentifiers struct {
-	// Namespace field name for namespace-based filtering
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
-
-	// Name field name for name-based filtering
-	// +optional
-	Name string `json:"name,omitempty"`
 }
 
 // MetricSourceStatus defines the observed state of MetricSource

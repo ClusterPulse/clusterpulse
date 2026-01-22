@@ -75,40 +75,24 @@ async def list_custom_resource_types(
     return result
 
 
-@router.get("/{resource_type_name}/clusters", response_model=List[Dict[str, Any]])
-async def get_custom_resource_counts_by_cluster(
+def _get_counts_for_resource_type(
     resource_type_name: str,
-    rbac: RBACContext = Depends(get_rbac_context),
-    clusters: Optional[List[str]] = Query(None, description="Filter to specific clusters"),
-    include_aggregations: bool = Query(False, description="Include key aggregations"),
+    accessible_clusters: List[str],
+    rbac: RBACContext,
+    include_aggregations: bool,
 ) -> List[Dict[str, Any]]:
     """
-    Get resource counts for a custom resource type across clusters.
+    Compute filtered resource counts for a single resource type across clusters.
 
-    Returns for each accessible cluster the total and filtered resource counts.
+    Returns list of cluster count entries for the given type.
     """
-    decision = rbac.check_custom_resource_access(resource_type_name)
-
     source_id = repo.get_source_id_for_type(resource_type_name)
     if not source_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Custom resource type '{resource_type_name}' not found",
-        )
+        return []
 
     source = repo.get_metric_source(source_id)
     rbac_config = source.get("rbac", {}) if source else {}
-    identifiers = rbac_config.get("identifiers", {})
-    namespace_field = identifiers.get("namespace", "namespace")
-    name_field = identifiers.get("name", "name")
     filter_aggregations = rbac_config.get("filterAggregations", True)
-
-    accessible_clusters = rbac.get_accessible_clusters()
-    if clusters:
-        accessible_clusters = [c for c in accessible_clusters if c in clusters]
-
-    if not accessible_clusters:
-        return []
 
     resources_by_cluster = repo.get_custom_resources_for_clusters(
         source_id, accessible_clusters
@@ -126,9 +110,10 @@ async def get_custom_resource_counts_by_cluster(
             continue
 
         raw_resources = resource_data.get("resources", [])
+        total_count = len(raw_resources)
 
         filtered_resources = rbac.filter_custom_resources(
-            raw_resources, resource_type_name, cluster_name, namespace_field, name_field
+            raw_resources, resource_type_name, cluster_name
         )
         filtered_count = len(filtered_resources)
 
@@ -148,8 +133,47 @@ async def get_custom_resource_counts_by_cluster(
 
         result.append(builder.build())
 
+    return result
+
+
+@router.get("/clusters", response_model=List[Dict[str, Any]])
+async def get_custom_resource_counts_by_cluster(
+    rbac: RBACContext = Depends(get_rbac_context),
+    resource_type_names: List[str] = Query(
+        ..., alias="type", description="Resource type names to query"
+    ),
+    clusters: Optional[List[str]] = Query(
+        None, description="Filter to specific clusters"
+    ),
+    include_aggregations: bool = Query(False, description="Include key aggregations"),
+) -> List[Dict[str, Any]]:
+    """
+    Get resource counts for one or more custom resource types across clusters.
+
+    Returns for each accessible cluster and requested type the total and filtered
+    resource counts. Results are returned as a flat list with cluster and
+    resourceTypeName in each entry.
+    """
+    # Validate access to all requested types upfront
+    for type_name in resource_type_names:
+        rbac.check_custom_resource_access(type_name)
+
+    accessible_clusters = rbac.get_accessible_clusters()
+    if clusters:
+        accessible_clusters = [c for c in accessible_clusters if c in clusters]
+
+    if not accessible_clusters:
+        return []
+
+    result = []
+    for type_name in resource_type_names:
+        type_counts = _get_counts_for_resource_type(
+            type_name, accessible_clusters, rbac, include_aggregations
+        )
+        result.extend(type_counts)
+
     logger.info(
-        f"User {rbac.user.username} accessed counts for {resource_type_name} "
-        f"across {len(result)} clusters"
+        f"User {rbac.user.username} accessed counts for {len(resource_type_names)} "
+        f"resource types across {len(accessible_clusters)} clusters"
     )
     return result

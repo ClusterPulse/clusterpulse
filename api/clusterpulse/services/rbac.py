@@ -568,56 +568,45 @@ class RBACEngine:
         resources: List[Dict[str, Any]],
         resource_type_name: str,
         cluster: str,
-        namespace_field: str = "namespace",
-        name_field: str = "name",
     ) -> List[Dict[str, Any]]:
         """Filter custom resources based on RBAC permissions.
-
+    
         Args:
             principal: The user/service making the request
             resources: List of resource dictionaries to filter
             resource_type_name: The resourceTypeName from MetricSource
             cluster: The cluster name
-            namespace_field: Field name containing the namespace
-            name_field: Field name containing the resource name
-
+    
         Returns:
             Filtered list of resources the user can access
         """
         if not resources:
             return []
-
+    
         decision = self.authorize_custom_resource(
             principal, resource_type_name, cluster, Action.VIEW
         )
-
+    
         if decision.denied:
             logger.debug(
                 f"Custom resource access denied for {principal.username} "
                 f"on {resource_type_name}: {decision.reason}"
             )
             return []
-
-        # If unrestricted access, return all resources
-        if (
-            decision.decision == Decision.ALLOW
-            and decision.filters.is_unrestricted()
-        ):
+    
+        if decision.decision == Decision.ALLOW and decision.filters.is_unrestricted():
             return resources
-
-        # Apply filters
+    
         filtered = []
         for resource in resources:
-            if self._custom_resource_matches_filters(
-                resource, decision.filters, namespace_field, name_field
-            ):
+            if self._custom_resource_matches_filters(resource, decision.filters):
                 filtered.append(resource)
-
+    
         logger.debug(
             f"Filtered {len(resources)} -> {len(filtered)} custom resources "
             f"for {principal.username} on {resource_type_name}"
         )
-
+    
         return filtered
 
     def get_accessible_custom_resource_types(self, principal: Principal) -> List[str]:
@@ -923,38 +912,27 @@ class RBACEngine:
         self,
         resource: Dict[str, Any],
         filters: CustomResourceFilter,
-        namespace_field: str,
-        name_field: str,
     ) -> bool:
         """Check if a custom resource matches all filter criteria."""
         if filters.visibility == Visibility.NONE:
             return False
     
-        # Extract values - handle nested 'values' structure from collector
-        values = resource.get("values", {})
-        
-        # Extract namespace: try _namespace first, then values.{namespace_field}
-        namespace = resource.get("_namespace") or values.get(namespace_field)
-    
-        # Extract name: try _name first, then values.{name_field}
-        name = resource.get("_name") or values.get(name_field)
+        namespace = resource.get("_namespace")
+        name = resource.get("_name")
         if name is None:
-            logger.warning(
-                f"Resource missing name field '{name_field}', excluding from results"
-            )
+            logger.warning("Resource missing _name field, excluding from results")
             return False
     
-        # Check namespace filter
         if not filters.matches_namespace(namespace):
             return False
     
-        # Check name filter
         if not filters.matches_name(name):
             return False
     
-        # Check field filters - look in values dict
+        # Field filters check the values dict where extracted fields are stored
+        values = resource.get("values", {})
         for field_name in filters.field_filters:
-            field_value = values.get(field_name) or resource.get(field_name)
+            field_value = values.get(field_name)
             if not filters.matches_field(field_name, field_value):
                 return False
     

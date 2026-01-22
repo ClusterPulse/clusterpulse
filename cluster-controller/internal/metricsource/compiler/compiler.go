@@ -48,7 +48,7 @@ func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSour
 	}
 	compiled.Source = *source
 
-	// Compile fields and build field name set
+	// Compile fields and build field name index
 	fields, fieldIndex, err := c.compileFields(ms.Spec.Fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile fields: %w", err)
@@ -135,16 +135,6 @@ func (c *Compiler) validate(ms *v1alpha1.MetricSource) error {
 		fieldNames[comp.Name] = true
 	}
 
-	// Validate RBAC identifiers reference valid fields
-	if ms.Spec.RBAC.Identifiers != nil {
-		if ns := ms.Spec.RBAC.Identifiers.Namespace; ns != "" && !fieldNames[ns] {
-			return fmt.Errorf("RBAC namespace identifier references unknown field: %s", ns)
-		}
-		if name := ms.Spec.RBAC.Identifiers.Name; name != "" && !fieldNames[name] {
-			return fmt.Errorf("RBAC name identifier references unknown field: %s", name)
-		}
-	}
-
 	return nil
 }
 
@@ -165,8 +155,6 @@ func (c *Compiler) compileSource(source *v1alpha1.MetricSourceTarget) (*types.Co
 	compiled.Group, compiled.Version = parseAPIVersion(source.APIVersion)
 
 	// Derive resource name (lowercase plural form of kind)
-	compiled.Resource = strings.ToLower(source.Kind) + "s"
-	// Handle common irregular plurals
 	compiled.Resource = pluralize(strings.ToLower(source.Kind))
 
 	// Compile label selector to string format
@@ -368,18 +356,11 @@ func (c *Compiler) compileCollectionConfig(config *v1alpha1.CollectionConfig) ty
 
 // compileRBAC processes RBAC configuration
 func (c *Compiler) compileRBAC(rbac *v1alpha1.MetricSourceRBAC) types.CompiledRBAC {
-	compiled := types.CompiledRBAC{
+	return types.CompiledRBAC{
 		ResourceTypeName:   rbac.ResourceTypeName,
 		FilterableFields:   rbac.FilterableFields,
 		FilterAggregations: rbac.FilterAggregations,
 	}
-
-	if rbac.Identifiers != nil {
-		compiled.NamespaceField = rbac.Identifiers.Namespace
-		compiled.NameField = rbac.Identifiers.Name
-	}
-
-	return compiled
 }
 
 // compileNamespacePatterns converts wildcard patterns to compiled regex

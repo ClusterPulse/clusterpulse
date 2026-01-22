@@ -91,11 +91,10 @@ type CompiledCollectionConf struct {
 	Parallelism     int32 `json:"parallelism"`
 }
 
-// CompiledRBAC holds RBAC configuration for policy integration
+// CompiledRBAC holds RBAC configuration for policy integration.
+// Resource identity (_namespace, _name) is always collected automatically.
 type CompiledRBAC struct {
 	ResourceTypeName   string   `json:"resourceTypeName"`
-	NamespaceField     string   `json:"namespaceField,omitempty"`
-	NameField          string   `json:"nameField,omitempty"`
 	FilterableFields   []string `json:"filterableFields,omitempty"`
 	FilterAggregations bool     `json:"filterAggregations"`
 }

@@ -134,8 +134,6 @@ class RBACContext:
         resources: List[dict],
         resource_type_name: str,
         cluster: str,
-        namespace_field: str = "namespace",
-        name_field: str = "name",
     ) -> List[dict]:
         """Filter custom resources through RBAC engine."""
         return self.rbac.filter_custom_resources(
@@ -143,37 +141,6 @@ class RBACContext:
             resources=resources,
             resource_type_name=resource_type_name,
             cluster=cluster,
-            namespace_field=namespace_field,
-            name_field=name_field,
-        )
-
-    def filter_aggregations(
-        self,
-        aggregations: Dict[str, Any],
-        resource_type_name: str,
-        cluster: str,
-    ) -> Dict[str, Any]:
-        """Filter aggregations based on RBAC permissions."""
-        return self.rbac.filter_aggregations(
-            self.principal, aggregations, resource_type_name, cluster
-        )
-
-    def filter_custom_resources(
-        self,
-        resources: List[dict],
-        resource_type_name: str,
-        cluster: str,
-        namespace_field: str = "namespace",
-        name_field: str = "name",
-    ) -> List[dict]:
-        """Filter custom resources through RBAC engine."""
-        return self.rbac.filter_custom_resources(
-            principal=self.principal,
-            resources=resources,
-            resource_type_name=resource_type_name,
-            cluster=cluster,
-            namespace_field=namespace_field,
-            name_field=name_field,
         )
 
     def filter_aggregations(

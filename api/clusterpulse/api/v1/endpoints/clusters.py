@@ -485,27 +485,34 @@ async def get_custom_resources(
 
     source = metric_source_repo.get_metric_source(source_id)
     rbac_config = source.get("rbac", {}) if source else {}
-    identifiers = rbac_config.get("identifiers", {})
-    namespace_field = identifiers.get("namespace", "namespace")
-    name_field = identifiers.get("name", "name")
     filter_aggregations = rbac_config.get("filterAggregations", True)
 
     resource_data = metric_source_repo.get_custom_resources(source_id, cluster_name)
     if not resource_data:
-        return CustomResourceDetailBuilder(resource_type_name, cluster_name).with_resources(
-            [], False
-        ).with_pagination({"total": 0, "page": 1, "pageSize": page_size, "totalPages": 1, "hasNext": False, "hasPrevious": False}).build()
+        return (
+            CustomResourceDetailBuilder(resource_type_name, cluster_name)
+            .with_resources([], False)
+            .with_pagination({
+                "total": 0,
+                "page": 1,
+                "pageSize": page_size,
+                "totalPages": 1,
+                "hasNext": False,
+                "hasPrevious": False,
+            })
+            .build()
+        )
 
     raw_resources = resource_data.get("resources", [])
     total_before_filter = len(raw_resources)
 
     filtered_resources = rbac.filter_custom_resources(
-        raw_resources, resource_type_name, cluster_name, namespace_field, name_field
+        raw_resources, resource_type_name, cluster_name
     )
 
     if namespace:
         filtered_resources = [
-            r for r in filtered_resources if r.get(namespace_field) == namespace
+            r for r in filtered_resources if r.get("_namespace") == namespace
         ]
 
     if sort_by:
