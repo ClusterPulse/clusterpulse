@@ -929,32 +929,35 @@ class RBACEngine:
         """Check if a custom resource matches all filter criteria."""
         if filters.visibility == Visibility.NONE:
             return False
-
-        # Extract namespace (may be None for cluster-scoped)
-        namespace = resource.get(namespace_field)
-
-        # Extract name
-        name = resource.get(name_field)
+    
+        # Extract values - handle nested 'values' structure from collector
+        values = resource.get("values", {})
+        
+        # Extract namespace: try _namespace first, then values.{namespace_field}
+        namespace = resource.get("_namespace") or values.get(namespace_field)
+    
+        # Extract name: try _name first, then values.{name_field}
+        name = resource.get("_name") or values.get(name_field)
         if name is None:
             logger.warning(
                 f"Resource missing name field '{name_field}', excluding from results"
             )
             return False
-
+    
         # Check namespace filter
         if not filters.matches_namespace(namespace):
             return False
-
+    
         # Check name filter
         if not filters.matches_name(name):
             return False
-
-        # Check field filters
+    
+        # Check field filters - look in values dict
         for field_name in filters.field_filters:
-            field_value = resource.get(field_name)
+            field_value = values.get(field_name) or resource.get(field_name)
             if not filters.matches_field(field_name, field_value):
                 return False
-
+    
         return True
 
     def _custom_resource_cache_key(

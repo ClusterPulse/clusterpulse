@@ -298,14 +298,19 @@ class MetricSourceRepository(RedisRepository):
         return mapping
 
     def get_source_id_for_type(self, resource_type_name: str) -> Optional[str]:
-        """Get sourceId for a resource type name."""
-        key = f"metricsources:by:resourcetype:{resource_type_name}"
-        source_id = self.redis.get(key)
-        if source_id:
-            return source_id
-
-        mapping = self.get_resource_type_mapping()
-        return mapping.get(resource_type_name)
+            """Get sourceId for a resource type name."""
+            key = f"metricsources:by:resourcetype:{resource_type_name}"
+            try:
+                # Key is stored as a set, get first member
+                members = self.redis.smembers(key)
+                if members:
+                    return next(iter(members))
+            except Exception as e:
+                logger.debug(f"Error getting source ID for {resource_type_name}: {e}")
+    
+            # Fallback to iterating sources
+            mapping = self.get_resource_type_mapping()
+            return mapping.get(resource_type_name)
 
     def get_clusters_with_data(self, resource_type_name: str) -> List[str]:
         """Get cluster names that have collected data for this type."""
@@ -324,3 +329,30 @@ class MetricSourceRepository(RedisRepository):
             logger.error(f"Error scanning for clusters with data: {e}")
         return sorted(clusters)
 
+    def get_custom_resources(
+        self, source_id: str, cluster: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get collected custom resources for a cluster."""
+        return self.get_json(f"cluster:{cluster}:custom:{source_id}:resources")
+
+    def get_custom_aggregations(
+        self, source_id: str, cluster: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get computed aggregations for a cluster."""
+        return self.get_json(f"cluster:{cluster}:custom:{source_id}:aggregations")
+
+    def get_custom_resources_for_clusters(
+        self, source_id: str, clusters: List[str]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Batch fetch custom resources for multiple clusters."""
+        keys = [f"cluster:{c}:custom:{source_id}:resources" for c in clusters]
+        results = self.batch_get_json(keys)
+        return {c: results.get(keys[i]) for i, c in enumerate(clusters)}
+
+    def get_custom_aggregations_for_clusters(
+        self, source_id: str, clusters: List[str]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Batch fetch aggregations for multiple clusters."""
+        keys = [f"cluster:{c}:custom:{source_id}:aggregations" for c in clusters]
+        results = self.batch_get_json(keys)
+        return {c: results.get(keys[i]) for i, c in enumerate(clusters)}

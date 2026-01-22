@@ -56,9 +56,8 @@ class ClusterResourceCountBuilder:
             "resourceTypeName": resource_type_name,
         }
 
-    def with_counts(self, total: int, filtered: int) -> "ClusterResourceCountBuilder":
-        """Add total and filtered counts."""
-        self.data["totalCount"] = total
+    def with_counts(filtered: int) -> "ClusterResourceCountBuilder":
+        """Add filtered counts."""
         self.data["filteredCount"] = filtered
         self.data["filtered"] = total != filtered
         return self
