@@ -8,6 +8,7 @@ ClusterPulse implements a policy-based RBAC system that evaluates access request
 
 - Multiple subject types (users, groups, service accounts)
 - Fine-grained resource filtering (clusters, nodes, namespaces, operators, pods)
+- Custom resource types defined via MetricSource CRDs
 - Priority-based policy resolution
 - Time-based policy validity
 
@@ -82,6 +83,7 @@ The object being accessed:
 | `POD` | A pod (used for namespace-scoped filtering) |
 | `ALERT` | A cluster alert |
 | `EVENT` | A cluster event |
+| `CUSTOM` | A custom resource defined by MetricSource |
 
 ### Action
 
@@ -217,6 +219,67 @@ resources:
         - "app-*"
 ```
 
+### Custom Resource Filters
+
+Custom resources defined by MetricSource CRDs can be filtered using the `custom` section:
+
+```yaml
+resources:
+  custom:
+    pvc:  # resourceTypeName from MetricSource
+      visibility: all | none | filtered
+      filters:
+        namespaces:
+          allowed:
+            - "app-*"
+          denied:
+            - "kube-system"
+        names:
+          allowed:
+            - "data-*"
+          denied:
+            - "*-test"
+        fields:
+          storageClass:
+            allowed:
+              - "gp3"
+              - "io2"
+          phase:
+            denied:
+              - "Failed"
+      aggregations:
+        include:
+          - "totalStorage"
+          - "countByStorageClass"
+        exclude:
+          - "costEstimate"
+```
+
+**Custom Resource Filter Properties**:
+
+| Property | Description |
+|----------|-------------|
+| `visibility` | `all`, `none`, or `filtered` |
+| `filters.namespaces` | Filter by resource namespace |
+| `filters.names` | Filter by resource name |
+| `filters.fields` | Filter by extracted field values |
+| `aggregations.include` | Whitelist of visible aggregations |
+| `aggregations.exclude` | Blacklist of hidden aggregations |
+
+**Field Filtering**: Supports both pattern matching and operator-based conditions:
+
+```yaml
+fields:
+  storageBytes:
+    conditions:
+      - operator: greaterThan
+        value: 1073741824
+      - operator: lessThan
+        value: 10737418240
+```
+
+Supported operators: `equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `greaterThan`, `lessThan`, `in`, `notIn`, `matches`.
+
 ## Decision Types
 
 The RBAC engine returns one of three decisions:
@@ -267,6 +330,41 @@ flowchart TD
 | `app-*` | `app-frontend`, `app-backend`, etc. |
 | `team-?-prod` | `team-a-prod`, `team-b-prod`, etc. |
 
+## Custom Resource Authorization
+
+Custom resources follow a specialized authorization flow that integrates with the MetricSource-defined schema.
+
+### CustomResourceFilter
+
+Filters for custom resources support three levels:
+
+| Level | Description |
+|-------|-------------|
+| Namespace | Filter by the namespace identifier field |
+| Name | Filter by the resource name identifier field |
+| Fields | Filter by any field in `rbac.filterableFields` |
+
+### CustomResourceDecision
+
+The authorization decision for custom resources includes:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `decision` | enum | `ALLOW`, `DENY`, or `PARTIAL` |
+| `resource_type_name` | string | The MetricSource resourceTypeName |
+| `filters` | CustomResourceFilter | Applicable filters |
+| `allowed_aggregations` | set | Aggregations user can see (null = all) |
+| `denied_aggregations` | set | Aggregations hidden from user |
+| `permissions` | set | Granted actions |
+
+### Aggregation Filtering
+
+When `filterAggregations: true` in the MetricSource (default), aggregations are recomputed from the filtered resource set. Policies can additionally restrict which aggregation values are visible:
+
+- `include`: Only these aggregations are shown
+- `exclude`: These aggregations are hidden
+- Include takes precedence over exclude
+
 ## Storage Model
 
 Policies are compiled and stored in Redis for fast evaluation:
@@ -287,6 +385,7 @@ flowchart LR
         UserIdx[policy:user:username]
         GroupIdx[policy:group:groupname]
         SAIdx[policy:sa:account]
+        CustomIdx[policy:customtype:typename]
     end
     
     CRD --> PC
@@ -295,6 +394,7 @@ flowchart LR
     Compiler --> UserIdx
     Compiler --> GroupIdx
     Compiler --> SAIdx
+    Compiler --> CustomIdx
 ```
 
 ### Redis Key Patterns
@@ -305,6 +405,7 @@ flowchart LR
 | `policy:user:{user}` | Policies indexed by user |
 | `policy:group:{group}` | Policies indexed by group |
 | `policy:sa:{serviceaccount}` | Policies indexed by service account |
+| `policy:customtype:{typename}` | Policies indexed by custom resource type |
 | `policies:all` | Set of all policy keys |
 | `policies:enabled` | Set of enabled policy keys |
 | `policies:by:priority` | Sorted set by priority |
@@ -314,6 +415,7 @@ flowchart LR
 The RBAC engine supports optional decision caching:
 
 - Cache key: `{principal}:{action}:{resource}`
+- Custom resource cache key: `rbac:custom:{principal}:{typename}:{cluster}:{action}`
 - Configurable TTL (default: disabled for real-time evaluation)
 - Automatically invalidated when policies change
 

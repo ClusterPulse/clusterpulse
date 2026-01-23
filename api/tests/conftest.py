@@ -28,10 +28,8 @@ def fake_redis(fake_redis_session):
     Function-scoped fixture that clears session redis before each test.
     This ensures test isolation while using a single redis instance.
     """
-    # Clear all data before each test
     fake_redis_session.flushdb()
     yield fake_redis_session
-    # Could also clear after, but before is sufficient
 
 
 @pytest.fixture
@@ -516,11 +514,13 @@ def test_client(monkeypatch, fake_redis, rbac_engine):
         "clusterpulse.api.dependencies.rbac.get_rbac_engine", lambda: rbac_engine
     )
 
-    from clusterpulse.repositories.redis_base import ClusterDataRepository
+    from clusterpulse.repositories.redis_base import ClusterDataRepository, MetricSourceRepository
 
     test_repo = ClusterDataRepository(fake_redis)
+    metric_source_repo = MetricSourceRepository(fake_redis)
 
     monkeypatch.setattr("clusterpulse.api.v1.endpoints.clusters.repo", test_repo)
+    monkeypatch.setattr("clusterpulse.api.v1.endpoints.clusters.metric_source_repo", metric_source_repo)
 
     monkeypatch.setattr(
         "clusterpulse.repositories.redis_base.ClusterDataRepository",
@@ -619,7 +619,6 @@ def reset_lru_caches():
 # Markers
 # ============================================================================
 
-# Custom markers for test categorization
 pytest_plugins = []
 
 

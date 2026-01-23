@@ -25,6 +25,7 @@ dev = [
     "mypy>=1.5",
 ]
 test = [
+    "httpx>=0.28.1",
     "pytest>=7.4",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.1",
@@ -59,6 +60,7 @@ dev-dependencies = [
     "fakeredis>=2.20",
     "factory-boy>=3.3",
     "coverage[toml]>=7.3",
+    "httpx>=0.28.1",
 ]
 
 [tool.pytest.ini_options]

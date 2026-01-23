@@ -14,7 +14,7 @@ The Cluster Controller is a Kubernetes operator that:
 
 - Watches `ClusterConnection` CRDs
 - Connects to remote clusters using provided credentials
-- Collects metrics (nodes, pods, operators, resources)
+- Collects metrics (nodes, pods, operators, resources) using MetricSource CRDs
 - Stores data in Redis for the API to consume
 
 [Learn more →](../contributing/cluster-controller.md)

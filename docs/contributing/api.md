@@ -24,17 +24,31 @@ uv run uvicorn clusterpulse.main:app --reload --host 0.0.0.0 --port 8080
 
 API docs available at `http://localhost:8080/api/v1/docs`
 
-### Development Dependencies
+### Dependency Management
 
-Development and test dependencies are included in `pyproject.toml` and managed by uv:
+ClusterPulse uses [uv](https://docs.astral.sh/uv/) for Python dependency management. Key commands:
 
 ```bash
-# Install all dependencies including dev/test
+# Install all dependencies (including dev/test)
 uv sync
 
-# Or install only production dependencies
+# Install only production dependencies
 uv sync --no-dev
+
+# Add a new dependency
+uv add <package>
+
+# Add a dev dependency
+uv add --dev <package>
+
+# Update dependencies
+uv lock --upgrade
+
+# Run commands in the virtual environment
+uv run <command>
 ```
+
+The `uv.lock` file ensures reproducible builds across environments. Always commit changes to both `pyproject.toml` and `uv.lock` when modifying dependencies.
 
 ## Project Structure
 
@@ -54,6 +68,7 @@ clusterpulse/
     ├── dependencies/    FastAPI dependencies
     ├── middleware/      Request/response middleware
     ├── responses/       Response builders for consistent API responses
+    ├── utils/           Shared utilities (pagination, aggregations)
     └── v1/              API version 1
         ├── endpoints/   Route handlers
         └── router.py    Router assembly
@@ -141,6 +156,7 @@ Data access layer. These talk to Redis (or any datastore) and return Python obje
   - `RedisRepository` - Base class with common Redis operations
   - `ClusterDataRepository` - Cluster-specific data access
   - `RegistryDataRepository` - Registry-specific data access
+  - `MetricSourceRepository` - MetricSource and custom resource data access
 
 **When to add here:**
 - New data access patterns
@@ -170,7 +186,7 @@ operators = repo.get_cluster_operators(cluster_name)
 Business logic goes here. This is where you implement features, algorithms, calculations, etc.
 
 **Files:**
-- `rbac.py` - RBACEngine for authorization
+- `rbac.py` - RBACEngine for authorization (including custom resource authorization)
 - `metrics.py` - FilteredMetricsCalculator for calculating filtered metrics
 
 **When to add here:**
@@ -197,6 +213,7 @@ HTTP route handlers. Keep these thin - they should mostly just coordinate betwee
 **Files:**
 - `auth.py` - Authentication endpoints
 - `clusters.py` - Cluster management endpoints
+- `custom_resources.py` - Custom resource type discovery and listing
 - `health.py` - Health check endpoints
 - `public.py` - Public API endpoints
 - `registries.py` - Registry endpoints
@@ -266,6 +283,10 @@ async def get_resource(rbac: RBACContext = Depends(get_rbac_context)):
     
     # Get accessible clusters
     clusters = rbac.get_accessible_clusters()
+    
+    # Custom resource operations
+    rbac.check_custom_resource_access(resource_type_name, cluster_name)
+    filtered_custom = rbac.filter_custom_resources(items, resource_type_name, cluster_name)
 ```
 
 #### `api/middleware/`
@@ -286,6 +307,7 @@ Response builder classes for consistent API responses.
 **Files:**
 - `cluster.py` - Cluster response builders
 - `registry.py` - Registry response builders
+- `metricsource.py` - Custom resource type and detail builders
 
 **When to add here:**
 - New response builders for new resource types
@@ -310,6 +332,46 @@ return (ClusterResponseBuilder(cluster_name)
 - Easy to add new fields
 - Handles fallbacks and normalization
 - Type-safe and IDE-friendly
+
+#### `api/utils/`
+Shared utilities for API endpoints. Contains reusable logic that doesn't fit elsewhere.
+
+**Files:**
+- `pagination.py` - Pagination helpers for list endpoints
+- `aggregations.py` - Aggregation computation utilities for custom resources
+
+**When to add here:**
+- Reusable utility functions for endpoints
+- Common data transformations
+- Shared computation logic
+
+**Pagination Example:**
+```python
+from clusterpulse.api.utils.pagination import PaginationParams, paginate
+
+@router.get("/items")
+async def list_items(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=1000),
+):
+    items = get_all_items()
+    params = PaginationParams(page=page, page_size=page_size)
+    paginated = paginate(items, params)
+    
+    return paginated.to_dict()
+    # Returns: {"items": [...], "pagination": {"total": N, "page": 1, ...}}
+```
+
+**Aggregation Recomputation:**
+```python
+from clusterpulse.api.utils.aggregations import recompute_aggregations
+
+# When user has partial access, recompute aggregations from filtered resources
+filtered_resources = rbac.filter_custom_resources(raw_resources, type_name, cluster)
+if len(filtered_resources) < len(raw_resources):
+    aggregation_specs = source.get("aggregations", [])
+    values = recompute_aggregations(filtered_resources, aggregation_specs)
+```
 
 ### Data Flow Example
 
@@ -418,6 +480,10 @@ async def get_cluster(
 - `filter_resources(resources, resource_type, cluster)` - Filter resources through RBAC
 - `get_accessible_clusters()` - Get all accessible cluster names
 - `has_permission(action, resource)` - Check specific permission
+- `get_accessible_custom_types()` - Get accessible custom resource type names
+- `check_custom_resource_access(type_name, cluster, action)` - Check custom resource access
+- `filter_custom_resources(resources, type_name, cluster)` - Filter custom resources
+- `filter_aggregations(aggregations, type_name, cluster)` - Filter aggregation values
 - `principal` - The user's Principal object
 - `user` - The authenticated User object
 - `rbac` - The RBAC engine instance
@@ -449,6 +515,50 @@ filtered_nodes = rbac_engine.filter_resources(
 ```
 
 The engine applies filters from policies (namespace patterns, node selectors, etc.) and removes resources the user shouldn't see.
+
+### Custom Resource Authorization
+
+Custom resources (defined via MetricSource CRDs) have their own authorization flow with support for namespace, name, and field-based filtering.
+
+**Key Classes:**
+- `CustomResourceDecision` - Authorization result with filters and aggregation visibility
+- `CustomResourceFilter` - Filter configuration supporting patterns, literals, and field filters
+
+**Authorization Flow:**
+```python
+# Check access to a custom resource type
+decision = rbac.check_custom_resource_access("pvc", cluster_name)
+
+# Filter resources based on policy
+filtered = rbac.filter_custom_resources(raw_resources, "pvc", cluster_name)
+
+# Filter aggregations (some may be hidden from certain users)
+visible_aggs = rbac.filter_aggregations(aggregations, "pvc", cluster_name)
+```
+
+**Policy Structure for Custom Resources:**
+```json
+{
+  "cluster_rules": [
+    {
+      "cluster_selector": {"matchNames": ["prod-cluster"]},
+      "custom_resources": {
+        "pvc": {
+          "visibility": "filtered",
+          "permissions": {"view": true, "viewMetrics": true},
+          "namespace_filter": {
+            "allowed_literals": ["team-a", "team-b"],
+            "allowed_patterns": [["team-.*", "^team-.*$"]]
+          },
+          "aggregation_rules": {
+            "exclude": ["sensitive_total"]
+          }
+        }
+      }
+    }
+  ]
+}
+```
 
 ## Common Tasks
 
@@ -492,6 +602,50 @@ async def get_cluster_workloads(
 2. **Register the route** (if needed):
 
 The route is already registered since it's in `api/v1/endpoints/clusters.py`. If you create a new router file, add it to `api/v1/router.py`.
+
+### Adding a Custom Resource Endpoint
+
+For custom resources defined via MetricSource:
+
+```python
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+from clusterpulse.repositories.redis_base import MetricSourceRepository
+from clusterpulse.api.responses.metricsource import CustomResourceDetailBuilder
+from clusterpulse.api.utils.pagination import PaginationParams, paginate
+from clusterpulse.api.utils.aggregations import recompute_aggregations
+
+repo = MetricSourceRepository(redis_client)
+
+@router.get("/{cluster_name}/custom/{resource_type_name}")
+async def get_custom_resources(
+    cluster_name: str,
+    resource_type_name: str,
+    rbac: RBACContext = Depends(get_rbac_context),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=1000),
+):
+    # 1. Check access
+    rbac.check_cluster_access(cluster_name)
+    decision = rbac.check_custom_resource_access(resource_type_name, cluster_name)
+    
+    # 2. Get source definition and data
+    source_id = repo.get_source_id_for_type(resource_type_name)
+    resource_data = repo.get_custom_resources(source_id, cluster_name)
+    
+    # 3. Filter through RBAC
+    raw_resources = resource_data.get("resources", [])
+    filtered = rbac.filter_custom_resources(raw_resources, resource_type_name, cluster_name)
+    
+    # 4. Paginate
+    params = PaginationParams(page=page, page_size=page_size)
+    paginated = paginate(filtered, params)
+    
+    # 5. Build response
+    return (CustomResourceDetailBuilder(resource_type_name, cluster_name)
+        .with_resources(paginated.items, len(filtered) < len(raw_resources))
+        .with_pagination(paginated.to_dict()["pagination"])
+        .build())
+```
 
 ### Using Response Builders
 
@@ -622,6 +776,18 @@ conditions = repo.get_node_conditions(cluster_name, node_name)
 - `get_registry_status(registry_name)` - Get registry status
 - `get_registry_spec(registry_name)` - Get registry spec
 
+**MetricSourceRepository:**
+- `get_all_metric_source_ids()` - Get all enabled MetricSource identifiers
+- `get_metric_source(source_id)` - Get compiled MetricSource definition
+- `get_all_metric_sources()` - Get all enabled MetricSource definitions
+- `get_resource_type_mapping()` - Map resourceTypeName to sourceId
+- `get_source_id_for_type(resource_type_name)` - Get sourceId for a resource type
+- `get_clusters_with_data(resource_type_name)` - Get clusters that have data for a type
+- `get_custom_resources(source_id, cluster)` - Get collected custom resources
+- `get_custom_aggregations(source_id, cluster)` - Get computed aggregations
+- `get_custom_resources_for_clusters(source_id, clusters)` - Batch fetch resources
+- `get_custom_aggregations_for_clusters(source_id, clusters)` - Batch fetch aggregations
+
 **Why use repositories:**
 - Optimized batch operations (1 Redis call instead of N)
 - Consistent error handling
@@ -703,6 +869,67 @@ class ClusterDataRepository(RedisRepository):
         return data.get("count", 0) if data else 0
 ```
 
+### Working with Custom Resources
+
+Custom resources are defined via MetricSource CRDs and collected by the cluster controller. The API provides discovery and filtered access.
+
+**Discovery Endpoint:**
+```
+GET /api/v1/custom-types
+```
+Returns all custom resource types the user can access based on their policies.
+
+**Cluster Counts Endpoint:**
+```
+GET /api/v1/custom-types/clusters?type=pvc&type=configmap
+```
+Returns filtered counts for specified resource types across accessible clusters.
+
+**Detail Endpoint:**
+```
+GET /api/v1/clusters/{cluster}/custom/{resource_type_name}
+```
+Returns paginated, filtered resources with aggregations.
+
+**Implementation Pattern:**
+```python
+from clusterpulse.repositories.redis_base import MetricSourceRepository
+from clusterpulse.api.responses.metricsource import (
+    CustomResourceTypeBuilder,
+    ClusterResourceCountBuilder,
+    CustomResourceDetailBuilder,
+)
+from clusterpulse.api.utils.aggregations import recompute_aggregations
+from clusterpulse.api.utils.pagination import PaginationParams, paginate
+
+repo = MetricSourceRepository(redis_client)
+
+# 1. Get accessible types
+accessible_types = rbac.get_accessible_custom_types()
+
+# 2. For each type, check if MetricSource exists
+for type_name in accessible_types:
+    source_id = repo.get_source_id_for_type(type_name)
+    source = repo.get_metric_source(source_id)
+
+# 3. Get and filter resources
+resource_data = repo.get_custom_resources(source_id, cluster_name)
+raw_resources = resource_data.get("resources", [])
+filtered = rbac.filter_custom_resources(raw_resources, type_name, cluster_name)
+
+# 4. Handle aggregations
+# If user has partial access and filterAggregations is enabled, recompute
+if len(filtered) < len(raw_resources):
+    agg_specs = source.get("aggregations", [])
+    values = recompute_aggregations(filtered, agg_specs)
+else:
+    agg_data = repo.get_custom_aggregations(source_id, cluster_name)
+    values = agg_data.get("values", {})
+
+# 5. Filter aggregation visibility
+visible_aggs = rbac.filter_aggregations(values, type_name, cluster_name)
+```
+
 ## Testing
 
 ### Write Tests First
@@ -749,6 +976,57 @@ class TestWorkloadsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert len(data) > 0  # Should see some workloads based on policy
+```
+
+### Testing Custom Resources
+
+```python
+@pytest.mark.integration
+class TestCustomResourcesEndpoint:
+    def test_list_custom_types_only_shows_granted_types(
+        self,
+        authenticated_client,
+        fake_redis,
+        populate_redis_with_policies,
+    ):
+        """Only custom resource types explicitly granted in policy are returned."""
+        # Setup policy with custom_resources section
+        policy = {
+            "policy_name": "test-policy",
+            "priority": 100,
+            "effect": "Allow",
+            "enabled": True,
+            "subjects": [{"kind": "Group", "name": "developers"}],
+            "cluster_rules": [{
+                "cluster_selector": {"matchNames": ["test-cluster"]},
+                "permissions": {"view": True},
+                "custom_resources": {
+                    "pvc": {"visibility": "all", "permissions": {"view": True}},
+                }
+            }]
+        }
+        populate_redis_with_policies([policy])
+        
+        # Add MetricSource definitions
+        fake_redis.sadd("metricsources:enabled", "default/pvc-source", "default/secret-source")
+        fake_redis.set("metricsource:default:pvc-source", json.dumps({
+            "name": "pvc-source",
+            "namespace": "default",
+            "rbac": {"resourceTypeName": "pvc"}
+        }))
+        fake_redis.set("metricsource:default:secret-source", json.dumps({
+            "name": "secret-source",
+            "namespace": "default",
+            "rbac": {"resourceTypeName": "secret"}
+        }))
+        
+        response = authenticated_client.get("/api/v1/custom-types")
+        
+        assert response.status_code == 200
+        data = response.json()
+        type_names = [t["resourceTypeName"] for t in data]
+        assert "pvc" in type_names
+        assert "secret" not in type_names  # Not granted in policy
 ```
 
 ### Testing with Repositories
@@ -958,6 +1236,16 @@ if not decision.can(Action.VIEW_SENSITIVE):
     raise AuthorizationError("Cannot view sensitive data")
 ```
 
+### Custom Resource Implicit Deny
+
+Custom resource types not explicitly granted in a policy are denied by default:
+
+```python
+# Only types in user's policy custom_resources section are accessible
+accessible_types = rbac.get_accessible_custom_types()
+# Returns: ["pvc"] if only "pvc" is granted, NOT all defined types
+```
+
 ### Input Validation
 
 ```python
@@ -998,12 +1286,19 @@ class WorkloadFilter(BaseModel):
 
 7. **N+1 queries:** Repositories handle batching automatically, but be aware when making multiple repository calls
 
+8. **Forgetting custom resource implicit deny:** Types must be explicitly granted in policies
+
+9. **Not recomputing aggregations after filtering:** When users have partial access, aggregations should be recomputed from filtered resources if `filterAggregations` is enabled
+
 ## Getting Help
 
 - Check existing code in `api/v1/endpoints/clusters.py` for patterns
+- Look at `api/v1/endpoints/custom_resources.py` for custom resource patterns
 - Look at `api/responses/cluster.py` for response builder examples
+- Look at `api/responses/metricsource.py` for custom resource response builders
 - Look at `repositories/redis_base.py` for data access patterns
 - Check `api/dependencies/rbac.py` for RBAC utilities
+- Look at `api/utils/` for pagination and aggregation helpers
 - Look at tests in `tests/integration/api/` for examples
 - Read the RBAC engine code in `services/rbac.py` to understand filtering
 
@@ -1013,9 +1308,11 @@ class WorkloadFilter(BaseModel):
 - **Caching is disabled by default:** RBAC decisions are not cached (security over speed)
 - **Policies are in Redis:** The Policy Controller manages them, but you can inspect with `redis-cli`
 - **Metrics are pre-calculated:** The Cluster Controller writes metrics to Redis, we just filter them
-- **Use repositories for data access:** Don't access Redis directly - use `ClusterDataRepository` or `RegistryDataRepository`
+- **Custom resources are collected by Cluster Controller:** MetricSource CRDs define what to collect
+- **Use repositories for data access:** Don't access Redis directly - use `ClusterDataRepository`, `RegistryDataRepository`, or `MetricSourceRepository`
 - **Use RBACContext in endpoints:** Simplifies authorization checks and resource filtering
 - **Use response builders:** Ensures consistent API responses and handles fallbacks
+- **Custom resource types use implicit deny:** Only types explicitly granted in policies are accessible
 
 ## Quick Reference
 
@@ -1046,6 +1343,46 @@ async def get_resource(
     return filtered
 ```
 
+### Custom Resource Endpoint Structure
+
+```python
+from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
+from clusterpulse.repositories.redis_base import MetricSourceRepository
+from clusterpulse.api.responses.metricsource import CustomResourceDetailBuilder
+from clusterpulse.api.utils.pagination import PaginationParams, paginate
+
+repo = MetricSourceRepository(redis_client)
+
+@router.get("/{cluster_name}/custom/{type_name}")
+async def get_custom_resources(
+    cluster_name: str,
+    type_name: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=1000),
+    rbac: RBACContext = Depends(get_rbac_context),
+):
+    # 1. Check access
+    rbac.check_cluster_access(cluster_name)
+    decision = rbac.check_custom_resource_access(type_name, cluster_name)
+    
+    # 2. Get data
+    source_id = repo.get_source_id_for_type(type_name)
+    resource_data = repo.get_custom_resources(source_id, cluster_name)
+    
+    # 3. Filter
+    raw = resource_data.get("resources", [])
+    filtered = rbac.filter_custom_resources(raw, type_name, cluster_name)
+    
+    # 4. Paginate
+    paginated = paginate(filtered, PaginationParams(page=page, page_size=page_size))
+    
+    # 5. Build response
+    return (CustomResourceDetailBuilder(type_name, cluster_name)
+        .with_resources(paginated.items, len(filtered) < len(raw))
+        .with_pagination(paginated.to_dict()["pagination"])
+        .build())
+```
+
 ### Common Imports
 
 ```python
@@ -1053,12 +1390,32 @@ async def get_resource(
 from clusterpulse.api.dependencies.rbac import RBACContext, get_rbac_context
 
 # Repositories
-from clusterpulse.repositories.redis_base import ClusterDataRepository, RegistryDataRepository
+from clusterpulse.repositories.redis_base import (
+    ClusterDataRepository,
+    RegistryDataRepository,
+    MetricSourceRepository,
+)
 
 # Response builders
 from clusterpulse.api.responses.cluster import ClusterResponseBuilder, ClusterListItemBuilder
 from clusterpulse.api.responses.registry import RegistryStatusBuilder
+from clusterpulse.api.responses.metricsource import (
+    CustomResourceTypeBuilder,
+    ClusterResourceCountBuilder,
+    CustomResourceDetailBuilder,
+)
+
+# Utilities
+from clusterpulse.api.utils.pagination import PaginationParams, paginate
+from clusterpulse.api.utils.aggregations import recompute_aggregations
 
 # RBAC types
-from clusterpulse.services.rbac import Action, ResourceType, Principal, Resource
+from clusterpulse.services.rbac import (
+    Action,
+    ResourceType,
+    Principal,
+    Resource,
+    CustomResourceDecision,
+    CustomResourceFilter,
+)
 ```
