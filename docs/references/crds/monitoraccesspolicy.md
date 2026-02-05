@@ -521,6 +521,15 @@ Resource Types:
         </tr>
     </thead>
     <tbody><tr>
+        <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkey">custom</a></b></td>
+        <td>map[string]object</td>
+        <td>
+          Custom resource filters keyed by resourceTypeName from MetricSource.
+Each key maps to a filter configuration for that resource type.
+<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcesnamespaces">namespaces</a></b></td>
         <td>object</td>
         <td>
@@ -546,6 +555,274 @@ Resource Types:
         <td>object</td>
         <td>
           <br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### MonitorAccessPolicy.spec.scope.clusters.rules[index].resources.custom[key]
+<sup><sup>[↩ Parent](#monitoraccesspolicyspecscopeclustersrulesindexresources)</sup></sup>
+
+
+
+Filter configuration for a custom resource type
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyaggregations">aggregations</a></b></td>
+        <td>object</td>
+        <td>
+          Control which aggregations are visible<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfilters">filters</a></b></td>
+        <td>object</td>
+        <td>
+          Filter criteria for custom resources<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>visibility</b></td>
+        <td>enum</td>
+        <td>
+          Visibility level for this custom resource type<br/>
+          <br/>
+            <i>Enum</i>: all, none, filtered<br/>
+            <i>Default</i>: all<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### MonitorAccessPolicy.spec.scope.clusters.rules[index].resources.custom[key].aggregations
+<sup><sup>[↩ Parent](#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkey)</sup></sup>
+
+
+
+Control which aggregations are visible
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>exclude</b></td>
+        <td>[]string</td>
+        <td>
+          Hide these aggregations<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>include</b></td>
+        <td>[]string</td>
+        <td>
+          Only show these aggregations.
+Takes precedence over exclude.
+<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### MonitorAccessPolicy.spec.scope.clusters.rules[index].resources.custom[key].filters
+<sup><sup>[↩ Parent](#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkey)</sup></sup>
+
+
+
+Filter criteria for custom resources
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfiltersfieldskey">fields</a></b></td>
+        <td>map[string]object</td>
+        <td>
+          Field-based filters keyed by field name.
+Only fields listed in MetricSource rbac.filterableFields can be filtered.
+<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfiltersnames">names</a></b></td>
+        <td>object</td>
+        <td>
+          Resource name filtering<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfiltersnamespaces">namespaces</a></b></td>
+        <td>object</td>
+        <td>
+          Namespace-based filtering<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### MonitorAccessPolicy.spec.scope.clusters.rules[index].resources.custom[key].filters.fields[key]
+<sup><sup>[↩ Parent](#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfilters)</sup></sup>
+
+
+
+Filter for a specific field
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>allowed</b></td>
+        <td>[]int or string</td>
+        <td>
+          Allowed values or patterns<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfiltersfieldskeyconditionsindex">conditions</a></b></td>
+        <td>[]object</td>
+        <td>
+          Operator-based filter conditions<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>denied</b></td>
+        <td>[]int or string</td>
+        <td>
+          Denied values or patterns<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### MonitorAccessPolicy.spec.scope.clusters.rules[index].resources.custom[key].filters.fields[key].conditions[index]
+<sup><sup>[↩ Parent](#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfiltersfieldskey)</sup></sup>
+
+
+
+
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>operator</b></td>
+        <td>enum</td>
+        <td>
+          Comparison operator<br/>
+          <br/>
+            <i>Enum</i>: equals, notEquals, contains, startsWith, endsWith, greaterThan, lessThan, in, notIn, matches<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>value</b></td>
+        <td>int or string</td>
+        <td>
+          Value to compare against<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### MonitorAccessPolicy.spec.scope.clusters.rules[index].resources.custom[key].filters.names
+<sup><sup>[↩ Parent](#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfilters)</sup></sup>
+
+
+
+Resource name filtering
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>allowed</b></td>
+        <td>[]string</td>
+        <td>
+          Allowed name patterns<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>denied</b></td>
+        <td>[]string</td>
+        <td>
+          Denied name patterns<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### MonitorAccessPolicy.spec.scope.clusters.rules[index].resources.custom[key].filters.namespaces
+<sup><sup>[↩ Parent](#monitoraccesspolicyspecscopeclustersrulesindexresourcescustomkeyfilters)</sup></sup>
+
+
+
+Namespace-based filtering
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>allowed</b></td>
+        <td>[]string</td>
+        <td>
+          Allowed namespace patterns (supports wildcards)<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>denied</b></td>
+        <td>[]string</td>
+        <td>
+          Denied namespace patterns<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -1033,6 +1310,20 @@ Resource Types:
         <td>[]object</td>
         <td>
           <br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>customResourceTypes</b></td>
+        <td>integer</td>
+        <td>
+          Number of custom resource types referenced by this policy<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>customResourceWarnings</b></td>
+        <td>[]string</td>
+        <td>
+          Warnings about custom resource references<br/>
         </td>
         <td>false</td>
       </tr><tr>

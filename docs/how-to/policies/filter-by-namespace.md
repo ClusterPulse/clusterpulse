@@ -270,6 +270,62 @@ filters:
     - "prod-api"
 ```
 
+## Filtering Custom Resources by Namespace
+
+Custom resources collected by MetricSource can also be filtered by namespace. Unlike built-in resources, custom resource namespace filters are defined in the `custom` section under `resources`:
+
+```yaml
+resources:
+  custom:
+    pvc:
+      visibility: filtered
+      filters:
+        namespaces:
+          allowed:
+            - "app-*"
+          denied:
+            - "kube-system"
+    certificate:
+      visibility: filtered
+      filters:
+        namespaces:
+          allowed:
+            - "app-*"
+```
+
+The same pattern rules apply — `denied` takes precedence over `allowed`, and wildcards (`*`, `?`) are supported.
+
+### Combining with Built-In Namespace Filters
+
+When restricting namespace visibility, apply matching filters to custom resources for consistency:
+
+```yaml
+resources:
+  namespaces:
+    visibility: filtered
+    filters:
+      allowed:
+        - "app-*"
+
+  pods:
+    visibility: filtered
+    filters:
+      allowedNamespaces:
+        - "app-*"
+
+  custom:
+    pvc:
+      visibility: filtered
+      filters:
+        namespaces:
+          allowed:
+            - "app-*"
+```
+
+### Aggregation Recomputation
+
+When namespace filters reduce the set of visible custom resources, aggregations are automatically recomputed from the filtered set (if `filterAggregations: true` in the MetricSource, which is the default). This means a user filtered to `app-*` namespaces will see aggregation values that reflect only PVCs in those namespaces.
+
 ## Troubleshooting
 
 ### Namespace Not Visible
@@ -297,4 +353,5 @@ curl -H "Authorization: Bearer $TOKEN" \
 ## Next Steps
 
 - [Create Read-Only Policy](create-readonly-policy.md) - Basic policy creation
+- [Grant Custom Resource Access](grant-custom-resource-access.md) - Full custom resource RBAC guide
 - [Policy Evaluation](../../concepts/policy-evaluation.md) - Understand how policies are evaluated

@@ -513,3 +513,4 @@ Debug logs show:
 
 - [RBAC Model](rbac-model.md) - Core concepts and data structures
 - [Filter by Namespace](../how-to/policies/filter-by-namespace.md) - Practical filtering examples
+- [Grant Custom Resource Access](../how-to/policies/grant-custom-resource-access.md) - Custom resource RBAC guide

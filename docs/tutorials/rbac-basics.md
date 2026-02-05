@@ -259,7 +259,93 @@ curl -s https://clusterpulse.example.com/api/v1/clusters/dev-cluster/namespaces 
 
 Only namespaces matching `tutorial-*` or `default` should be returned.
 
-## Step 8: Clean Up
+## Step 8: Grant Access to Custom Resources
+
+Custom resources collected by MetricSource use **implicit deny** — they are invisible unless a policy explicitly grants access. Add a `custom` section to the policy to grant access to a MetricSource type.
+
+Assume you have a MetricSource with `rbac.resourceTypeName: pvc`. Update `tutorial-policy.yaml`:
+
+```yaml
+apiVersion: clusterpulse.io/v1alpha1
+kind: MonitorAccessPolicy
+metadata:
+  name: tutorial-viewers
+  namespace: clusterpulse
+spec:
+  identity:
+    priority: 200
+    subjects:
+      groups:
+        - tutorial-group
+
+  access:
+    effect: Allow
+    enabled: true
+
+  scope:
+    clusters:
+      default: none
+      rules:
+        - selector:
+            environment: development
+          permissions:
+            view: true
+            viewMetrics: true
+          resources:
+            namespaces:
+              visibility: filtered
+              filters:
+                allowed:
+                  - "tutorial-*"
+                  - default
+            custom:
+              pvc:
+                visibility: filtered
+                filters:
+                  namespaces:
+                    allowed:
+                      - "tutorial-*"
+                      - default
+```
+
+Apply and verify:
+
+```bash
+oc apply -f tutorial-policy.yaml
+
+# List accessible custom resource types
+curl -s https://clusterpulse.example.com/api/v1/custom-types | jq
+```
+
+The response should include `pvc`. Types not listed in the policy will not appear.
+
+## Step 9: Verify Custom Resource Filtering
+
+Check that the namespace filter is applied to the custom resources:
+
+```bash
+curl -s https://clusterpulse.example.com/api/v1/clusters/dev-cluster/custom/pvc | jq
+```
+
+Only PVCs in `tutorial-*` and `default` namespaces should be returned. Aggregations are automatically recomputed to reflect only the visible resources.
+
+You can also filter by specific field values. For example, to restrict visibility to only `Bound` PVCs, add a field filter (the field must be listed in the MetricSource's `rbac.filterableFields`):
+
+```yaml
+custom:
+  pvc:
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "tutorial-*"
+      fields:
+        phase:
+          allowed:
+            - "Bound"
+```
+
+## Step 10: Clean Up
 
 Remove the tutorial policy:
 
@@ -298,6 +384,15 @@ oc delete monitoraccesspolicy tutorial-viewers -n clusterpulse
 | Groups | `platform-team` |
 | Service Accounts | `name: monitoring-sa, namespace: monitoring` |
 
+### Custom Resource Access
+
+| Concept | Description |
+|---------|-------------|
+| Implicit deny | Custom types are invisible unless explicitly granted |
+| `resourceTypeName` | The identifier linking a MetricSource to policy rules |
+| Field filtering | Filter by any field in the MetricSource's `rbac.filterableFields` |
+| Aggregation recomputation | Aggregations reflect the user's filtered resource set |
+
 ## Troubleshooting
 
 ### Policy Not Taking Effect
@@ -321,5 +416,6 @@ oc delete monitoraccesspolicy tutorial-viewers -n clusterpulse
 ## Next Steps
 
 - [Create Read-Only Policy](../how-to/policies/create-readonly-policy.md) - Detailed guide on read-only access
+- [Grant Custom Resource Access](../how-to/policies/grant-custom-resource-access.md) - Full custom resource RBAC guide
 - [Filter by Namespace](../how-to/policies/filter-by-namespace.md) - Advanced namespace filtering
 - [Policy Evaluation](../concepts/policy-evaluation.md) - Understand the evaluation algorithm
