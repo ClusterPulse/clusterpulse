@@ -430,3 +430,4 @@ Cache invalidation occurs when:
 - [Policy Evaluation](policy-evaluation.md) - Detailed evaluation algorithm
 - [RBAC Basics Tutorial](../tutorials/rbac-basics.md) - Hands-on introduction
 - [Create Read-Only Policy](../how-to/policies/create-readonly-policy.md) - Practical example
+- [Grant Custom Resource Access](../how-to/policies/grant-custom-resource-access.md) - Custom resource RBAC guide

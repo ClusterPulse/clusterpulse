@@ -116,6 +116,63 @@ spec:
 
 The `default: none` setting ensures users only see clusters that explicitly match the selector rules.
 
+## Read-Only Access to Custom Resources
+
+Custom resources defined by MetricSource use **implicit deny** — users cannot see them unless explicitly granted. To include custom resource types in a read-only policy, add a `custom` section under `resources`:
+
+```yaml
+apiVersion: clusterpulse.io/v1alpha1
+kind: MonitorAccessPolicy
+metadata:
+  name: readonly-with-custom
+  namespace: clusterpulse
+spec:
+  identity:
+    priority: 100
+    subjects:
+      groups:
+        - cluster-viewers
+
+  access:
+    effect: Allow
+    enabled: true
+
+  scope:
+    clusters:
+      default: all
+      rules:
+        - selector:
+            matchPattern: .*
+          permissions:
+            view: true
+            viewMetrics: true
+          resources:
+            custom:
+              pvc:
+                visibility: all
+              certificate:
+                visibility: all
+```
+
+This grants read-only access to the `pvc` and `certificate` custom resource types (as defined by their MetricSource `rbac.resourceTypeName`). Any MetricSource type not listed here remains invisible to the user.
+
+To restrict which resources within a type are visible, use `visibility: filtered` with filters:
+
+```yaml
+resources:
+  custom:
+    pvc:
+      visibility: filtered
+      filters:
+        namespaces:
+          allowed:
+            - "app-*"
+          denied:
+            - "kube-system"
+```
+
+For a complete guide on custom resource filtering, see [Grant Custom Resource Access](grant-custom-resource-access.md).
+
 ## Verification
 
 After applying the policy, verify it was compiled successfully:
@@ -160,4 +217,5 @@ To debug policy evaluation, use the `/api/v1/auth/policies` endpoint to see whic
 ## Next Steps
 
 - [Filter by Namespace](filter-by-namespace.md) - Restrict access to specific namespaces
+- [Grant Custom Resource Access](grant-custom-resource-access.md) - Fine-grained control over MetricSource types
 - [RBAC Basics Tutorial](../../tutorials/rbac-basics.md) - Learn the fundamentals of ClusterPulse RBAC
