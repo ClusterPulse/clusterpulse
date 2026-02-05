@@ -100,6 +100,7 @@ nav:
       - ClusterConnection: references/crds/clusterconnection.md
       - MonitorAccessPolicy: references/crds/monitoraccesspolicy.md
       - RegistryConnection: references/crds/registryconnection.md
+      - MetricSource: references/crds/metricsource.md
     #- API: reference/api/overview.md
   - Contributing:
     - contributing/index.md
