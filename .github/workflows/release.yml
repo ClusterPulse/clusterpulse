@@ -55,6 +55,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -74,6 +77,7 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: Dockerfile.api
@@ -92,6 +96,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -111,6 +118,7 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: Dockerfile.cluster-controller
@@ -129,6 +137,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -148,6 +159,7 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: Dockerfile.policy-controller
@@ -180,3 +192,70 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
       - run: mike deploy --push --update-aliases ${{ github.ref_name }} latest
+
+  # Release summary
+  release-summary:
+    if: always()
+    needs: [detect-changes, build-api, build-cluster-controller, build-policy-controller, deploy-docs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate release summary
+        run: |
+          echo "# Release Summary — ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** [\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Status | Digest |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          # API
+          if [[ "${{ needs.detect-changes.outputs.api }}" != "true" ]]; then
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Skipped (no changes) | — |" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.build-api.result }}" == "success" ]]; then
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Pushed | \`${{ needs.build-api.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Failed | — |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Cluster Controller
+          if [[ "${{ needs.detect-changes.outputs.cluster-controller }}" != "true" ]]; then
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Skipped (no changes) | — |" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.build-cluster-controller.result }}" == "success" ]]; then
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Pushed | \`${{ needs.build-cluster-controller.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Failed | — |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Policy Controller
+          if [[ "${{ needs.detect-changes.outputs.policy-controller }}" != "true" ]]; then
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/policy-controller\` | Skipped (no changes) | — |" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.build-policy-controller.result }}" == "success" ]]; then
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/policy-controller\` | Pushed | \`${{ needs.build-policy-controller.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| \`${{ env.REGISTRY }}/clusterpulse/policy-controller\` | Failed | — |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Tags pushed (from any image that was built)
+          echo "## Tags" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All pushed images were tagged with:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- \`v${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`sha-${GITHUB_SHA::7}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Docs
+          echo "## Documentation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ needs.deploy-docs.result }}" == "success" ]]; then
+            echo "Docs deployed successfully for version \`${{ github.ref_name }}\` (aliased to \`latest\`)." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Docs deployment **failed**." >> $GITHUB_STEP_SUMMARY
+          fi
