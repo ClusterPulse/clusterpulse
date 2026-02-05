@@ -62,17 +62,48 @@ uv run kopf run policy_controller.py --namespace=clusterpulse
 | `REDIS_DB` | `0` | Redis database number |
 | `POLICY_CACHE_TTL` | `300` | Cache TTL in seconds |
 
-### Development Dependencies
+### Dependency Management
 
-Development and test dependencies are included in `pyproject.toml` and managed by uv:
+The policy-controller uses [uv](https://github.com/astral-sh/uv) for fast, reproducible dependency management.
+
+**Key files:**
+
+| File | Purpose |
+|------|---------|
+| `pyproject.toml` | Project metadata, dependencies, and tool configuration |
+| `uv.lock` | Locked dependency versions for reproducible builds |
+| `requirements.txt` | Generated for compatibility with pip-based workflows |
+
+**Common operations:**
 
 ```bash
-# Install all dependencies including dev/test
+# Install all dependencies (including dev/test)
 uv sync
 
-# Or install only production dependencies
+# Install only production dependencies
 uv sync --no-dev
+
+# Add a new dependency
+uv add <package>
+
+# Add a dev dependency
+uv add --dev <package>
+
+# Update dependencies
+uv lock --upgrade
+
+# Generate requirements.txt from lock file (if needed)
+uv pip compile pyproject.toml -o requirements.txt
 ```
+
+**Why uv?**
+
+- Significantly faster than pip (10-100x in most cases)
+- Deterministic builds via lock file
+- Built-in virtual environment management
+- Compatible with existing pyproject.toml and pip workflows
+
+The Dockerfile uses uv to install dependencies during the build process, ensuring production images match development environments exactly.
 
 ## Project Structure
 
@@ -85,6 +116,7 @@ policy-controller/
 ├── policy_controller.py    # Main controller (all sections below)
 ├── pyproject.toml          # Python project configuration
 ├── uv.lock                  # Locked dependencies for reproducible builds
+├── requirements.txt         # Generated requirements for pip compatibility
 └── tests/                   # Tests (TODO)
 ```
 
@@ -132,6 +164,7 @@ Prometheus metrics for monitoring policy operations.
 - `active_policies_total` - Number of active policies
 - `policy_errors_total` - Error counter by type
 - `redis_operation_duration_seconds` - Redis operation timings
+- `custom_resource_policies_total` - Policies referencing custom resource types (labeled by resource_type)
 
 **When to add:**
 - New performance metrics
@@ -158,7 +191,7 @@ class PolicyStorageError(PolicyError): pass
 ```
 
 #### 5. Enums
-Type-safe constants for policy effects, visibility, and states.
+Type-safe constants for policy effects, visibility, states, and filter operators.
 
 ```python
 class PolicyEffect(str, Enum):
@@ -170,6 +203,19 @@ class PolicyState(str, Enum):
     INACTIVE = "Inactive"
     ERROR = "Error"
     EXPIRED = "Expired"
+
+class FilterOperator(str, Enum):
+    """Operators for field-based filtering in custom resources."""
+    EQUALS = "equals"
+    NOT_EQUALS = "notEquals"
+    CONTAINS = "contains"
+    STARTS_WITH = "startsWith"
+    ENDS_WITH = "endsWith"
+    GREATER_THAN = "greaterThan"
+    LESS_THAN = "lessThan"
+    IN = "in"
+    NOT_IN = "notIn"
+    MATCHES = "matches"
 ```
 
 #### 6. Data Classes
@@ -177,6 +223,9 @@ Compiled policy structures for efficient evaluation.
 
 **Key classes:**
 - `CompiledResourceFilter` - Compiled resource filters (namespaces, nodes, operators, pods)
+- `CompiledFieldFilter` - Field-level filters for custom resources with operator support
+- `CompiledAggregationRules` - Controls which aggregations are visible to users
+- `CompiledCustomResourceFilter` - Complete filter for a MetricSource-defined resource type
 - `CompiledClusterRule` - Cluster access rules with filters
 - `CompiledPolicy` - Complete compiled policy ready for Redis
 
@@ -194,6 +243,7 @@ class CompiledPolicy:
     groups: Set[str]
     service_accounts: Set[str]
     cluster_rules: List[CompiledClusterRule]
+    custom_resource_types: Set[str]  # Types referenced by this policy
     # ... more fields
     
     def to_dict(self):
@@ -256,10 +306,11 @@ def compile_policy(name: str, namespace: str, spec: Dict) -> CompiledPolicy
 1. Validates the policy spec (new format)
 2. Extracts subjects (users, groups, service accounts)
 3. Compiles cluster rules with resource filters
-4. Processes patterns into regex or literals
-5. Extracts validity periods and audit config
-6. Generates a hash for change detection
-7. Returns a CompiledPolicy object
+4. Compiles custom resource filters for MetricSource types
+5. Processes patterns into regex or literals
+6. Extracts validity periods and audit config
+7. Generates a hash for change detection
+8. Returns a CompiledPolicy object
 
 **Pattern compilation:**
 - Literal strings stored as-is for fast lookup
@@ -283,6 +334,8 @@ Manages policy storage and indexing in Redis.
 - `store_policy(policy)` - Store compiled policy with indexes
 - `remove_policy(namespace, name)` - Remove policy and indexes
 - `_invalidate_evaluation_caches(...)` - Clear caches for affected users/groups
+- `get_policies_for_custom_type(resource_type)` - Get policies referencing a custom resource type
+- `get_custom_resource_types()` - Get all custom resource types with policies
 
 **Redis structure:**
 ```
@@ -292,6 +345,8 @@ policy:user:{user}:sorted              # Sorted by priority (zset)
 policy:group:{group}                   # Group's policies (set)
 policy:group:{group}:sorted            # Sorted by priority (zset)
 policy:sa:{sa}                         # Service account policies (set)
+policy:customtype:{resource_type}      # Policies by custom resource type (set)
+policy:customtype:{resource_type}:sorted  # Sorted by priority (zset)
 policies:all                           # All policies (set)
 policies:enabled                       # Only enabled policies (set)
 policies:by:priority                   # All policies by priority (zset)
@@ -301,7 +356,7 @@ group:members:{group}                  # Group's members
 ```
 
 **Indexing strategy:**
-- Policies indexed by user, group, and service account
+- Policies indexed by user, group, service account, and custom resource type
 - Priority-sorted sets for efficient lookup
 - Global indexes for all policies
 - Evaluation caches for performance
@@ -322,11 +377,13 @@ Validates policies for expiration and conditions.
 **Main methods:**
 - `validate_policy(namespace, name, spec)` - Validate single policy
 - `validate_all_policies()` - Periodic validation of all policies
+- `_validate_custom_resources(spec)` - Validate custom resource type references
 
 **Validation checks:**
 - `notBefore` date - Policy not yet valid
 - `notAfter` date - Policy expired
 - `enabled` flag - Policy disabled
+- Custom resource type existence warnings
 
 ```python
 async def validate_policy(self, namespace, name, spec):
@@ -375,7 +432,7 @@ Kubernetes operator event handlers using kopf framework.
 
 **`@kopf.on.probe`**
 - Health check endpoint
-- Returns policy counts
+- Returns policy counts and custom resource type count
 
 ## Understanding Policy Compilation
 
@@ -412,6 +469,17 @@ spec:
               visibility: filtered
               filters:
                 allowed: ["team-a-*", "shared-*"]
+            custom:
+              pvc:
+                visibility: filtered
+                filters:
+                  namespaces:
+                    allowed: ["team-a-*"]
+                  fields:
+                    storageClass:
+                      allowed: ["gp3", "io2"]
+                aggregations:
+                  include: ["totalStorage"]
 ```
 
 ### Compilation Process
@@ -431,6 +499,7 @@ spec:
 3. **Compile Cluster Rules:**
    - Process each rule's selector and permissions
    - Compile resource filters (namespaces, nodes, operators, pods)
+   - Compile custom resource filters
    - Convert patterns to regex or literals
 
 4. **Pattern Compilation:**
@@ -463,9 +532,28 @@ spec:
                 "allowed_patterns": [("team-a-*", "^team-a-.*$")],
                 "allowed_literals": [],
                 ...
+            },
+            "custom_resources": {
+                "pvc": {
+                    "resource_type_name": "pvc",
+                    "visibility": "filtered",
+                    "namespace_filter": {...},
+                    "field_filters": {
+                        "storageClass": {
+                            "field_name": "storageClass",
+                            "allowed_literals": ["gp3", "io2"],
+                            ...
+                        }
+                    },
+                    "aggregation_rules": {
+                        "include": ["totalStorage"],
+                        "exclude": []
+                    }
+                }
             }
         }
     ],
+    "custom_resource_types": ["pvc"],
     "compiled_at": "2025-01-15T10:30:00Z",
     "hash": "a1b2c3d4e5f6"
 }
@@ -487,13 +575,131 @@ ZADD policy:user:john.doe:sorted 100 policy:clusterpulse:dev-team-policy
 SADD policy:group:developers policy:clusterpulse:dev-team-policy
 ZADD policy:group:developers:sorted 100 policy:clusterpulse:dev-team-policy
 
+# Index by custom resource types
+SADD policy:customtype:pvc policy:clusterpulse:dev-team-policy
+ZADD policy:customtype:pvc:sorted 100 policy:clusterpulse:dev-team-policy
+
 # Global indexes
 SADD policies:all policy:clusterpulse:dev-team-policy
 SADD policies:enabled policy:clusterpulse:dev-team-policy
 ZADD policies:by:priority 100 policy:clusterpulse:dev-team-policy
 ```
 
-This allows the API to quickly find all policies for a user/group sorted by priority.
+This allows the API to quickly find all policies for a user/group or custom resource type, sorted by priority.
+
+## Custom Resource Filtering
+
+The policy controller supports filtering custom resources defined via MetricSource CRDs. This integrates custom metric sources into the RBAC model.
+
+### Policy Format for Custom Resources
+
+```yaml
+spec:
+  scope:
+    clusters:
+      rules:
+        - selector:
+            names: ["prod-*"]
+          resources:
+            custom:
+              # resourceTypeName from MetricSource
+              pvc:
+                visibility: filtered  # all, none, or filtered
+                filters:
+                  # Filter by namespace (maps to rbac.identifiers.namespace)
+                  namespaces:
+                    allowed: ["app-*"]
+                    denied: ["*-test"]
+                  # Filter by name (maps to rbac.identifiers.name)
+                  names:
+                    allowed: ["data-*"]
+                  # Filter by custom fields (from rbac.filterableFields)
+                  fields:
+                    storageClass:
+                      allowed: ["gp3"]
+                    storageBytes:
+                      conditions:
+                        - operator: greaterThan
+                          value: 1073741824
+                # Control which aggregations are visible
+                aggregations:
+                  include: ["totalStorage", "pvcCount"]
+                  # Or use exclude: ["internalMetric"]
+```
+
+### Compiled Data Structures
+
+**CompiledFieldFilter:**
+Handles field-level filtering with pattern matching and operator conditions.
+
+```python
+@dataclass
+class CompiledFieldFilter:
+    field_name: str
+    allowed_patterns: List[Tuple[str, re.Pattern]]
+    denied_patterns: List[Tuple[str, re.Pattern]]
+    allowed_literals: Set[str]
+    denied_literals: Set[str]
+    conditions: List[Tuple[FilterOperator, Any]]  # (operator, value) pairs
+```
+
+**CompiledAggregationRules:**
+Controls aggregation visibility using include/exclude lists.
+
+```python
+@dataclass
+class CompiledAggregationRules:
+    include: Set[str]  # If non-empty, only these are shown
+    exclude: Set[str]  # If non-empty, these are hidden
+    
+    def is_aggregation_allowed(self, name: str) -> bool:
+        if self.include:
+            return name in self.include
+        if self.exclude:
+            return name not in self.exclude
+        return True
+```
+
+**CompiledCustomResourceFilter:**
+Complete filter for a MetricSource-defined resource type.
+
+```python
+@dataclass
+class CompiledCustomResourceFilter:
+    resource_type_name: str
+    visibility: str  # all, none, filtered
+    namespace_filter: Optional[CompiledResourceFilter]
+    name_filter: Optional[CompiledResourceFilter]
+    field_filters: Dict[str, CompiledFieldFilter]
+    aggregation_rules: Optional[CompiledAggregationRules]
+```
+
+### Filter Operators
+
+The `FilterOperator` enum supports various comparison operators for field-based conditions:
+
+| Operator | Description | Example Value |
+|----------|-------------|---------------|
+| `equals` | Exact match | `"gp3"` |
+| `notEquals` | Not equal | `"gp2"` |
+| `contains` | Substring match | `"prod"` |
+| `startsWith` | Prefix match | `"data-"` |
+| `endsWith` | Suffix match | `"-backup"` |
+| `greaterThan` | Numeric > | `1073741824` |
+| `lessThan` | Numeric < | `10737418240` |
+| `in` | In list | `["gp3", "io2"]` |
+| `notIn` | Not in list | `["gp2"]` |
+| `matches` | Regex match | `"^data-[0-9]+$"` |
+
+### Querying Policies by Custom Resource Type
+
+```python
+# Get all policies that reference a custom resource type
+policies = policy_store.get_policies_for_custom_type("pvc", sorted_by_priority=True)
+
+# Get all custom resource types with policies
+types = policy_store.get_custom_resource_types()
+```
 
 ## Common Tasks
 
@@ -513,16 +719,13 @@ def _validate_spec(self, spec: Dict[str, Any]):
 2. **Extract the field during compilation:**
 
 ```python
-def compile_policy(self, name: str, namespace: str, spec: Dict) -> CompiledPolicy:
-    # Extract new field
-    new_section = spec.get("newSection", {})
-    new_value = new_section.get("newField", "default")
-    
-    # Add to compiled policy
-    return CompiledPolicy(
-        # ... existing fields
-        new_field=new_value,
-    )
+def compile_policy(self, name, namespace, spec):
+    try:
+        self._validate_spec(spec)
+        # ... continue compilation
+    except PolicyValidationError as e:
+        policy_errors.labels(error_type="validation").inc()
+        raise
 ```
 
 3. **Add to CompiledPolicy dataclass:**
@@ -603,6 +806,41 @@ class CompiledClusterRule:
             ),
         }
 ```
+
+### Adding a New Custom Resource Filter Operator
+
+1. **Add to the FilterOperator enum:**
+
+```python
+class FilterOperator(str, Enum):
+    # ... existing operators
+    REGEX_NOT_MATCH = "regexNotMatch"
+```
+
+2. **Handle in _compile_field_filter:**
+
+```python
+def _compile_field_filter(self, field_name: str, field_config: Dict) -> CompiledFieldFilter:
+    # ... existing code
+    
+    for condition in field_config.get("conditions", []):
+        operator_str = condition.get("operator")
+        value = condition.get("value")
+        
+        if operator_str and value is not None:
+            try:
+                operator = FilterOperator(operator_str)
+                
+                # Pre-compile regex for regex-based operators
+                if operator in [FilterOperator.MATCHES, FilterOperator.REGEX_NOT_MATCH]:
+                    value = re.compile(value)
+                
+                filter_obj.conditions.append((operator, value))
+            except ValueError:
+                logger.warning(f"Unknown operator '{operator_str}'")
+```
+
+3. **Update the API** to handle the new operator during evaluation.
 
 ### Adding a New Validation Rule
 
@@ -714,18 +952,26 @@ Tests should cover:
    - Invalid specs raise appropriate errors
    - Pattern compilation (literals vs regex)
    - Filter compilation for each resource type
+   - Custom resource filter compilation
 
-2. **Redis storage:**
+2. **Custom resource filtering:**
+   - Field filter compilation with operators
+   - Aggregation rules compilation
+   - Namespace and name filter compilation
+
+3. **Redis storage:**
    - Policies stored with correct indexes
+   - Custom resource type indexes created
    - Cache invalidation clears correct keys
    - Batch operations work correctly
 
-3. **Validation:**
+4. **Validation:**
    - Time-based validation (notBefore, notAfter)
    - Enabled/disabled flag handling
    - State transitions
+   - Custom resource type existence warnings
 
-4. **Kopf handlers:**
+5. **Kopf handlers:**
    - Create/update handlers compile and store
    - Delete handler removes all traces
    - Status updates work correctly
@@ -761,6 +1007,44 @@ def test_compile_basic_policy():
     assert policy.priority == 100
     assert "test.user" in policy.users
     assert policy.enabled is True
+
+def test_compile_custom_resource_filter():
+    compiler = PolicyCompiler()
+    
+    spec = {
+        "identity": {
+            "priority": 100,
+            "subjects": {"users": ["test.user"]}
+        },
+        "access": {"effect": "Allow", "enabled": True},
+        "scope": {
+            "clusters": {
+                "default": "none",
+                "rules": [{
+                    "selector": {"names": ["*"]},
+                    "permissions": {"view": True},
+                    "resources": {
+                        "custom": {
+                            "pvc": {
+                                "visibility": "filtered",
+                                "filters": {
+                                    "fields": {
+                                        "storageClass": {"allowed": ["gp3"]}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    }
+    
+    policy = compiler.compile_policy("test", "default", spec)
+    
+    assert "pvc" in policy.custom_resource_types
+    assert len(policy.cluster_rules) == 1
+    assert "pvc" in policy.cluster_rules[0].custom_resources
 ```
 
 See `docs/api/tests.md` for more testing patterns.
@@ -849,7 +1133,7 @@ while True:
         break
 ```
 
-### Pattern Compilation
+### Pattern Compilation Caching
 
 Cache compiled patterns:
 
@@ -892,6 +1176,7 @@ async def policy_changed(name, namespace, spec, patch, **kwargs):
             "state": "Active",
             "compiledAt": compiled.compiled_at,
             "hash": compiled.hash,
+            "customResourceTypes": len(compiled.custom_resource_types),
         }
     except PolicyCompilationError as e:
         # Error status
@@ -914,6 +1199,7 @@ def to_dict(self):
         "users": list(self.users),  # Convert sets to lists
         "groups": list(self.groups),
         "cluster_rules": [r.to_dict() for r in self.cluster_rules],  # Nested
+        "custom_resource_types": list(self.custom_resource_types),
         "compiled_at": self.compiled_at,  # ISO format string
     }
 
@@ -1013,14 +1299,14 @@ policy_errors.labels(
 
 1. **Breaking Redis compatibility:**
    ```python
-   # ❌ Wrong - Changes API expects
+   # Wrong - Changes API expects
    def to_dict(self):
        return {
            "policyName": self.policy_name,  # Should be policy_name
            "users": self.users,              # Should be list(self.users)
        }
    
-   # ✅ Right
+   # Right
    def to_dict(self):
        return {
            "policy_name": self.policy_name,
@@ -1030,12 +1316,12 @@ policy_errors.labels(
 
 2. **Not invalidating caches:**
    ```python
-   # ❌ Wrong - API will serve stale decisions
+   # Wrong - API will serve stale decisions
    def store_policy(self, policy):
        self.redis.set(policy_key, data)
        # Forgot to clear caches!
    
-   # ✅ Right
+   # Right
    def store_policy(self, policy):
        self.redis.set(policy_key, data)
        self._invalidate_evaluation_caches(
@@ -1045,10 +1331,10 @@ policy_errors.labels(
 
 3. **Using KEYS instead of SCAN:**
    ```python
-   # ❌ Wrong - Blocks Redis on large datasets
+   # Wrong - Blocks Redis on large datasets
    keys = redis_client.keys("policy:eval:*")
    
-   # ✅ Right
+   # Right
    def _scan_and_delete(self, batch, pattern):
        cursor = 0
        while True:
@@ -1060,22 +1346,22 @@ policy_errors.labels(
 
 4. **Not handling None values:**
    ```python
-   # ❌ Wrong - Will crash on None
+   # Wrong - Will crash on None
    allowed = filters["allowed"]
    
-   # ✅ Right
+   # Right
    allowed = filters.get("allowed", [])
    ```
 
 5. **Forgetting to update status:**
    ```python
-   # ❌ Wrong - User doesn't see compilation errors
+   # Wrong - User doesn't see compilation errors
    @kopf.on.update(...)
    async def policy_changed(name, namespace, spec, **kwargs):
        compiled = compiler.compile_policy(name, namespace, spec)
        # No status update!
    
-   # ✅ Right
+   # Right
    @kopf.on.update(...)
    async def policy_changed(name, namespace, spec, patch, **kwargs):
        try:
@@ -1087,23 +1373,37 @@ policy_errors.labels(
 
 6. **Not using batch processor context manager:**
    ```python
-   # ❌ Wrong - Manual execution
+   # Wrong - Manual execution
    batch = RedisBatchProcessor(redis_client)
    batch.add_operation("set", key, value)
    batch.execute()  # Easy to forget!
    
-   # ✅ Right - Auto-executes
+   # Right - Auto-executes
    with RedisBatchProcessor(redis_client) as batch:
        batch.add_operation("set", key, value)
    ```
 
 7. **Storing sets directly in JSON:**
    ```python
-   # ❌ Wrong - Sets aren't JSON serializable
+   # Wrong - Sets aren't JSON serializable
    json.dumps({"users": policy.users})
    
-   # ✅ Right - Convert to list
+   # Right - Convert to list
    json.dumps({"users": list(policy.users)})
+   ```
+
+8. **Forgetting to index custom resource types:**
+   ```python
+   # Wrong - Can't query policies by custom type
+   def _create_policy_indexes(self, batch, policy, policy_key):
+       # User/group indexes...
+       # Forgot custom resource type indexes!
+   
+   # Right
+   def _create_policy_indexes(self, batch, policy, policy_key):
+       # User/group indexes...
+       for resource_type in policy.custom_resource_types:
+           batch.add_operation("sadd", f"policy:customtype:{resource_type}", policy_key)
    ```
 
 ## Code Style
@@ -1114,13 +1414,13 @@ Use `black` for formatting:
 uv run black policy_controller.py
 ```
 
-Use `autoflake` to remove unused imports and variables
+Use `autoflake` to remove unused imports and variables:
 
 ```bash
 uv run autoflake --remove-all-unused-imports --remove-unused-variables --recursive --in-place policy_controller.py
 ```
 
-Use `isort` to sort imports
+Use `isort` to sort imports:
 
 ```bash
 uv run isort policy_controller.py
@@ -1154,9 +1454,9 @@ def store_policy(self, policy: CompiledPolicy):
 1. **Branch naming:** `feature/add-configmap-filter` or `fix/cache-invalidation`
 
 2. **Commits:**
-   - ✅ "Add ConfigMap resource filter support"
-   - ✅ "Fix cache invalidation for service accounts"
-   - ❌ "WIP" or "Fix stuff"
+   - `"Add ConfigMap resource filter support"`
+   - `"Fix cache invalidation for service accounts"`
+   - Not: `"WIP"` or `"Fix stuff"`
 
 3. **Before submitting:**
    ```bash
@@ -1197,6 +1497,7 @@ The policy-controller and API are tightly coupled through Redis:
     "policy_name": "dev-policy",
     "users": ["user1"],
     "cluster_rules": [...],
+    "custom_resource_types": ["pvc"],
 }
 ```
 
@@ -1206,6 +1507,7 @@ The policy-controller and API are tightly coupled through Redis:
 policy_data = redis.hget(policy_key, "data")
 policy = json.loads(policy_data)
 users = policy["users"]
+custom_types = policy.get("custom_resource_types", [])
 ```
 
 **Critical:** Any change to the compiled format requires coordinated deployment:
@@ -1245,6 +1547,7 @@ MAX_POLICIES_PER_USER=100              # User policy limit
 policy:{namespace}:{name}              # Policy data
 policy:user:{user}                     # User's policies
 policy:group:{group}                   # Group's policies
+policy:customtype:{resource_type}      # Policies by custom resource type
 policy:eval:{identity}:{cluster}       # Evaluation cache
 user:groups:{username}                 # User's groups
 ```
@@ -1273,6 +1576,7 @@ redis-cli
 > KEYS policy:*
 > HGETALL policy:clusterpulse:dev-policy
 > SMEMBERS policy:user:john.doe
+> SMEMBERS policy:customtype:pvc
 
 # Watch logs
 oc logs -f -n clusterpulse deployment/policy-controller
@@ -1308,3 +1612,5 @@ uv run kopf run policy_controller.py --namespace=clusterpulse
 - **Pattern compilation is cached:** Same patterns reused across policies
 - **Status updates in CRD:** Users see compilation errors/success in oc
 - **Metrics for observability:** All operations instrumented with Prometheus
+- **Custom resource indexing:** Policies indexed by MetricSource resourceTypeName for efficient lookup
+- **uv for dependencies:** Fast, reproducible dependency management with lock file

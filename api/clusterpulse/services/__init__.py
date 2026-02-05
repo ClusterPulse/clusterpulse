@@ -1,26 +1,47 @@
 """Business logic services package."""
 
 from .metrics import FilteredMetricsCalculator, create_metrics_calculator
-from .rbac import (Action, Decision, Filter, Principal, RBACDecision,
-                   RBACEngine, Request, Resource, ResourceType, Visibility,
-                   create_rbac_engine, principal_from_user,
-                   resource_from_cluster)
+from .rbac import (
+    # Enums
+    Action,
+    Decision,
+    ResourceType,
+    Visibility,
+    # Standard RBAC classes
+    Filter,
+    Principal,
+    RBACDecision,
+    RBACEngine,
+    Request,
+    Resource,
+    # Custom resource authorization classes
+    CustomResourceDecision,
+    CustomResourceFilter,
+    # Factory functions
+    create_rbac_engine,
+    principal_from_user,
+    resource_from_cluster,
+)
 
 __all__ = [
-    # RBAC
+    # Enums
+    "Action",
+    "Decision",
+    "ResourceType",
+    "Visibility",
+    # Standard RBAC
     "RBACEngine",
     "create_rbac_engine",
     "Principal",
     "Resource",
     "Request",
     "RBACDecision",
-    "Action",
-    "ResourceType",
-    "Decision",
-    "Visibility",
     "Filter",
     "principal_from_user",
     "resource_from_cluster",
+    # Custom resource authorization
+    "CustomResourceDecision",
+    "CustomResourceFilter",
     # Metrics
     "FilteredMetricsCalculator",
     "create_metrics_calculator",

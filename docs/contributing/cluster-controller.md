@@ -54,13 +54,21 @@ cluster-controller/
 │   │   └── pool/            Client connection pooling
 │   ├── controller/          Reconciliation controllers
 │   │   ├── cluster/         ClusterConnection reconciler
-│   │   └── registry/        RegistryConnection reconciler
+│   │   ├── registry/        RegistryConnection reconciler
+│   │   └── metricsource/    MetricSource reconciler
+│   ├── metricsource/        MetricSource collection subsystem
+│   │   ├── aggregator/      Aggregation computation engine
+│   │   ├── collector/       Resource collection from clusters
+│   │   ├── compiler/        CRD spec to runtime compilation
+│   │   ├── expression/      Expression language implementation
+│   │   └── extractor/       Field extraction from resources
 │   ├── store/               Redis storage layer
 │   └── config/              Configuration management
 ├── pkg/
 │   ├── types/               Shared type definitions
 │   │   ├── types.go         Core types (NodeMetrics, ClusterMetrics, etc.)
-│   │   └── resources.go     Resource collection types (PodSummary, etc.)
+│   │   ├── resources.go     Resource collection types (PodSummary, etc.)
+│   │   └── metricsource.go  MetricSource types (CompiledMetricSource, etc.)
 │   └── utils/               Common utilities
 │       ├── parser.go        CPU and memory parsing utilities
 │       └── circuit_breaker.go Circuit breaker implementation
@@ -70,12 +78,13 @@ cluster-controller/
 ### What Each Directory Does
 
 #### `api/v1alpha1/`
-Custom Resource Definitions. These define the API schema for ClusterConnection and RegistryConnection resources.
+Custom Resource Definitions. These define the API schema for ClusterConnection, RegistryConnection, and MetricSource resources.
 
 **Files:**
 - `groupversion_info.go` - API group registration (`clusterpulse.io/v1alpha1`)
 - `clusterconnection_types.go` - ClusterConnection CRD schema
 - `registryconnection_types.go` - RegistryConnection CRD schema
+- `metricsource_types.go` - MetricSource CRD schema
 - `zz_generated.deepcopy.go` - Auto-generated deep copy methods (don't edit)
 
 **When to edit:**
@@ -294,6 +303,363 @@ pred := predicate.Funcs{
 }
 ```
 
+#### `internal/controller/metricsource/`
+MetricSource reconciliation controller. Handles custom resource collection based on user-defined MetricSource CRDs.
+
+**Files:**
+- `metricsource_controller.go` - Reconciler implementation
+
+**Purpose:** Enables users to define custom resource collection configurations that extract specific fields from any Kubernetes resource type, compute derived values, and aggregate metrics across clusters.
+
+**Reconciliation flow:**
+```go
+func (r *MetricSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+    // 1. Fetch MetricSource resource
+    // 2. Handle deletion if needed
+    // 3. Compile the MetricSource spec to runtime structure
+    // 4. Store compiled definition in Redis
+    // 5. Collect from all connected ClusterConnections in parallel
+    //    - For each cluster: create dynamic client, collect resources
+    //    - Extract fields, compute expressions, run aggregations
+    //    - Store results in Redis
+    // 6. Update CRD status with collection summary
+    // 7. Return with RequeueAfter based on collection interval
+    
+    return reconcile.Result{RequeueAfter: interval}, nil
+}
+```
+
+**Key components:**
+- `compiler` - Transforms CRD spec to optimized runtime structure
+- `collector` - Handles resource collection from clusters
+- `compiledCache` - Local cache of compiled MetricSources
+- `clusterClients` - Cache of dynamic clients per cluster
+
+**When to edit:**
+- Changing how MetricSources are compiled
+- Modifying collection parallelism
+- Adding new status fields
+- Changing error handling or retry logic
+
+**Pattern for collecting from clusters:**
+```go
+func (r *MetricSourceReconciler) collectFromAllClusters(ctx context.Context, source *types.CompiledMetricSource) (*CollectionSummary, error) {
+    // List all ClusterConnections
+    clusterConns := &v1alpha1.ClusterConnectionList{}
+    r.List(ctx, clusterConns, k8sclient.InNamespace(r.WatchNamespace))
+    
+    // Collect in parallel using errgroup
+    g, gctx := errgroup.WithContext(ctx)
+    
+    for i := range clusterConns.Items {
+        cc := &clusterConns.Items[i]
+        if cc.Status.Phase != "Connected" {
+            continue
+        }
+        
+        g.Go(func() error {
+            result, err := r.collectFromCluster(gctx, cc, source)
+            // Handle result...
+            return nil
+        })
+    }
+    
+    g.Wait()
+    return summary, nil
+}
+```
+
+#### `internal/metricsource/`
+The MetricSource collection subsystem. This directory contains all the logic for custom resource collection, field extraction, expression evaluation, and aggregation.
+
+##### `internal/metricsource/compiler/`
+Transforms MetricSource CRD specs into optimized runtime structures.
+
+**Files:**
+- `compiler.go` - Main compilation logic
+
+**What it does:**
+1. Validates the MetricSource spec
+2. Parses API version into group/version
+3. Derives resource name from kind (pluralization)
+4. Compiles field extraction paths into segments
+5. Compiles computed field expressions
+6. Compiles aggregation definitions
+7. Compiles namespace include/exclude patterns to regex
+8. Generates a hash for change detection
+
+**Key methods:**
+```go
+// Compile transforms a MetricSource spec into a CompiledMetricSource
+func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSource, error)
+
+// Validates the spec
+func (c *Compiler) validate(ms *v1alpha1.MetricSource) error
+
+// Parses JSONPath into segments for efficient extraction
+func parseJSONPath(path string) []string
+
+// Converts shell-style wildcards to regex
+func wildcardToRegex(pattern string) (*regexp.Regexp, error)
+
+// Handles Kubernetes resource pluralization
+func pluralize(singular string) string
+```
+
+**When to edit:**
+- Adding new compilation features
+- Changing validation rules
+- Supporting new field types
+- Modifying expression compilation
+
+**Pattern for adding new spec features:**
+```go
+// 1. Add to MetricSourceSpec in api/v1alpha1/metricsource_types.go
+// 2. Add compiled type in pkg/types/metricsource.go
+// 3. Add compilation logic in compiler.go:
+
+func (c *Compiler) Compile(ms *v1alpha1.MetricSource) (*types.CompiledMetricSource, error) {
+    // ... existing code ...
+    
+    // Compile new feature
+    compiled.NewFeature = c.compileNewFeature(&ms.Spec.NewFeature)
+    
+    return compiled, nil
+}
+
+func (c *Compiler) compileNewFeature(feature *v1alpha1.NewFeature) types.CompiledNewFeature {
+    // Compilation logic
+}
+```
+
+##### `internal/metricsource/collector/`
+Handles resource collection from Kubernetes clusters using the dynamic client.
+
+**Files:**
+- `collector.go` - Collection logic
+
+**What it does:**
+1. Resolves namespaces to collect from (handling include/exclude patterns)
+2. Lists resources using the dynamic client with pagination
+3. Extracts configured fields from each resource
+4. Evaluates computed expressions
+5. Runs aggregations on collected data
+
+**Key methods:**
+```go
+// Collect gathers resources from a cluster based on MetricSource configuration
+func (c *Collector) Collect(
+    ctx context.Context,
+    dynamicClient dynamic.Interface,
+    source *types.CompiledMetricSource,
+    clusterName string,
+) (*CollectResult, error)
+
+// collectFromScope collects from a single namespace or cluster scope
+func (c *Collector) collectFromScope(
+    ctx context.Context,
+    dynamicClient dynamic.Interface,
+    gvr schema.GroupVersionResource,
+    namespace string,
+    source *types.CompiledMetricSource,
+    limit int,
+) ([]types.CustomCollectedResource, error)
+
+// extractResource extracts fields and computes expressions for a single resource
+func (c *Collector) extractResource(
+    resource *unstructured.Unstructured,
+    source *types.CompiledMetricSource,
+) (*types.CustomCollectedResource, error)
+```
+
+**Collection controls:**
+- `MaxResources` - Limits total resources collected
+- `BatchSize` - API pagination size
+- `Parallelism` - Concurrent namespace collection
+- `TimeoutSeconds` - Per-cluster timeout
+
+**When to edit:**
+- Changing collection parallelism strategy
+- Adding new resource filtering
+- Modifying pagination behavior
+- Adding collection metrics/tracing
+
+##### `internal/metricsource/extractor/`
+Field extraction from unstructured Kubernetes resources.
+
+**Files:**
+- `extractor.go` - Extraction logic
+
+**What it does:**
+1. Navigates object paths using pre-parsed segments
+2. Converts values to configured types
+3. Handles array index notation
+4. Applies default values when paths don't exist
+
+**Key methods:**
+```go
+// ExtractFields extracts all configured fields from a resource
+func (e *Extractor) ExtractFields(
+    resource *unstructured.Unstructured,
+    fields []types.CompiledField,
+) (map[string]interface{}, error)
+
+// navigatePath traverses the object using pre-parsed path segments
+func (e *Extractor) navigatePath(obj interface{}, segments []string) (interface{}, bool, error)
+
+// convertValue converts a raw value to the specified type
+func (e *Extractor) convertValue(value interface{}, fieldType string) (interface{}, error)
+```
+
+**Supported field types:**
+- `string` - String value
+- `integer` - 64-bit integer
+- `float` - 64-bit float
+- `boolean` - Boolean value
+- `quantity` - Kubernetes quantity (memory/CPU) to bytes
+- `timestamp` - RFC3339 timestamp validation
+- `arrayLength` - Length of array or map
+
+**When to edit:**
+- Adding new field types
+- Changing type conversion logic
+- Adding extraction error handling
+
+##### `internal/metricsource/expression/`
+Expression language implementation for computed fields.
+
+**Files:**
+- `types.go` - AST node types and token definitions
+- `tokenizer.go` - Lexical analysis (tokenization)
+- `parser.go` - Recursive descent parser
+- `evaluator.go` - Expression evaluation
+- `functions.go` - Built-in function implementations
+
+**Expression language features:**
+- Arithmetic: `+`, `-`, `*`, `/`, `%`
+- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
+- Logical: `&&`, `||`, `!`
+- Null coalescing: `??`
+- String concatenation: `+` with strings
+- Function calls: `round(value, 2)`, `concat(a, b)`
+
+**Built-in functions:**
+```go
+// String functions
+concat(args...)   // Concatenate strings
+lower(s)          // Lowercase
+upper(s)          // Uppercase
+len(s)            // String length
+substr(s, start, [length])
+contains(s, sub)
+startsWith(s, prefix)
+endsWith(s, suffix)
+
+// Math functions
+round(n, [decimals])
+floor(n)
+ceil(n)
+abs(n)
+min(a, b)
+max(a, b)
+
+// Utility functions
+coalesce(args...) // First non-null value
+now()             // Current timestamp
+age(timestamp)    // Seconds since timestamp
+formatBytes(n)    // Human-readable bytes
+toString(v)
+toNumber(v)
+```
+
+**How parsing works:**
+```
+Expression: "capacity * 0.8 - used"
+
+1. Tokenizer produces tokens:
+   [Ident("capacity"), Star, Number(0.8), Minus, Ident("used")]
+
+2. Parser builds AST:
+   BinaryOp(-)
+   ├── BinaryOp(*)
+   │   ├── Identifier("capacity")
+   │   └── Literal(0.8)
+   └── Identifier("used")
+
+3. Evaluator traverses AST with context values
+```
+
+**When to edit:**
+- Adding new operators
+- Adding built-in functions
+- Changing operator precedence
+- Adding expression validation
+
+**Pattern for adding a function:**
+```go
+// In functions.go
+var BuiltinFunctions = map[string]FunctionDef{
+    // ... existing functions ...
+    
+    "newFunc": {MinArgs: 1, MaxArgs: 2, Fn: fnNewFunc},
+}
+
+func fnNewFunc(args []interface{}) (interface{}, error) {
+    // Implementation
+    return result, nil
+}
+```
+
+##### `internal/metricsource/aggregator/`
+Aggregation computation engine.
+
+**Files:**
+- `types.go` - Aggregation types and filter operators
+- `filter.go` - Filter evaluation logic
+- `aggregator.go` - Aggregation computation
+
+**Supported aggregation functions:**
+- `count` - Count resources (optionally filtered)
+- `sum` - Sum of field values
+- `avg` - Average of field values
+- `min` - Minimum value
+- `max` - Maximum value
+- `percentile` - Percentile calculation (e.g., p95)
+- `distinct` - Count of unique values
+
+**Filter operators:**
+- `equals`, `notEquals`
+- `contains`, `startsWith`, `endsWith`
+- `greaterThan`, `lessThan`
+- `in` - Value in list
+- `matches` - Regex match
+
+**Key methods:**
+```go
+// Compute calculates all aggregations for the given resources
+func (a *Aggregator) Compute(input *AggregationInput) *types.AggregationResults
+
+// computeAggregation handles a single aggregation with optional groupBy
+func (a *Aggregator) computeAggregation(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) interface{}
+
+// FilterEvaluator.Matches checks if a resource passes the filter condition
+func (f *FilterEvaluator) Matches(resource *types.CustomCollectedResource, filter *types.CompiledAggFilter) bool
+```
+
+**Grouping:** Aggregations can be grouped by a field value:
+```yaml
+aggregations:
+  - name: pods_by_status
+    function: count
+    groupBy: status
+# Result: {"Running": 45, "Pending": 3, "Failed": 1}
+```
+
+**When to edit:**
+- Adding new aggregation functions
+- Adding new filter operators
+- Optimizing aggregation performance
+
 #### `internal/store/`
 Redis storage layer. Writes data in Python-compatible format for the API to consume.
 
@@ -301,6 +667,7 @@ Redis storage layer. Writes data in Python-compatible format for the API to cons
 - `client.go` - Main Redis client and cluster/operator storage
 - `registry_storage.go` - Registry-specific storage
 - `resource_storage.go` - Resource collection storage
+- `metricsource_storage.go` - MetricSource data storage
 
 **Critical:** All data must be Python-compatible
 - Arrays must never be `nil` (use `[]string{}` instead)
@@ -345,6 +712,26 @@ StoreResourceCollection(ctx, name, collection)
 StoreRegistrySpec(ctx, name, spec)
 StoreRegistryStatus(ctx, name, status)
 StoreRegistryMetrics(ctx, name, metrics)
+
+// MetricSource data
+StoreCompiledMetricSource(ctx, source)
+GetCompiledMetricSource(ctx, namespace, name)
+DeleteMetricSource(ctx, namespace, name)
+StoreCustomResourceCollection(ctx, clusterName, collection)
+GetCustomResourceCollection(ctx, clusterName, sourceID)
+StoreAggregationResults(ctx, clusterName, results)
+GetAggregationResults(ctx, clusterName, sourceID)
+```
+
+**MetricSource Redis key patterns:**
+```go
+keyMetricSourceDef          = "metricsource:%s:%s"                // namespace:name
+keyMetricSourceResources    = "cluster:%s:custom:%s:resources"    // cluster:sourceId
+keyMetricSourceAggregations = "cluster:%s:custom:%s:aggregations" // cluster:sourceId
+keyMetricSourceMeta         = "cluster:%s:custom:%s:meta"         // cluster:sourceId
+keyMetricSourcesAll         = "metricsources:all"
+keyMetricSourcesEnabled     = "metricsources:enabled"
+keyMetricSourceByType       = "metricsources:by:resourcetype:%s"  // resourceTypeName
 ```
 
 #### `internal/config/`
@@ -394,6 +781,7 @@ func Load() *Config {
 **Files:**
 - `types.go` - Core cluster and node types
 - `resources.go` - Resource collection types for RBAC filtering
+- `metricsource.go` - MetricSource types for custom resource collection
 
 **When to use pkg/types/ vs internal/:**
 - Use `pkg/types/` for types that define the domain model and might be used by external tools
@@ -603,6 +991,116 @@ type CollectionConfig struct {
     MaxConfigMaps int `json:"max_configmaps"`
 }
 ```
+
+**metricsource.go - MetricSource Types:**
+
+Types for the custom resource collection feature:
+
+```go
+// CompiledMetricSource is the internal representation optimized for collection
+type CompiledMetricSource struct {
+    Name      string
+    Namespace string
+
+    Source            CompiledSourceTarget
+    Fields            []CompiledField
+    Computed          []CompiledComputation
+    Aggregations      []CompiledAggregation
+    Collection        CompiledCollectionConf
+    RBAC              CompiledRBAC
+    CompiledAt        string
+    Hash              string
+    FieldNameToIndex  map[string]int       // Runtime index for fast lookup
+    NamespacePatterns *CompiledPatterns    // Compiled regex patterns
+}
+
+// CompiledField represents a field extraction with parsed path
+type CompiledField struct {
+    Name         string
+    Path         string
+    PathSegments []string  // Pre-parsed for efficient extraction
+    Type         string
+    Default      *string
+    Index        int
+}
+
+// CompiledComputation represents a computed field with parsed expression
+type CompiledComputation struct {
+    Name       string
+    Expression string
+    Type       string
+    Compiled   interface{}  // *expression.CompiledExpression at runtime
+}
+
+// CompiledAggregation represents an aggregation with parsed filter
+type CompiledAggregation struct {
+    Name       string
+    Field      string
+    Function   string
+    Filter     *CompiledAggFilter
+    GroupBy    string
+    Percentile int
+}
+
+// CustomCollectedResource represents a single resource instance with extracted values
+type CustomCollectedResource struct {
+    ID        string
+    Namespace string
+    Name      string
+    Labels    map[string]string
+    Values    map[string]interface{}
+}
+
+// CustomResourceCollection holds all collected resources for a cluster/source combination
+type CustomResourceCollection struct {
+    CollectedAt   time.Time
+    SourceID      string
+    ClusterName   string
+    ResourceCount int
+    Truncated     bool
+    DurationMs    int64
+    Resources     []CustomCollectedResource
+}
+
+// AggregationResults holds computed aggregation values for a cluster/source
+type AggregationResults struct {
+    ComputedAt time.Time
+    SourceID   string
+    DurationMs int64
+    Values     map[string]interface{}
+}
+```
+
+**Field type constants:**
+```go
+const (
+    FieldTypeString      = "string"
+    FieldTypeInteger     = "integer"
+    FieldTypeFloat       = "float"
+    FieldTypeBoolean     = "boolean"
+    FieldTypeQuantity    = "quantity"
+    FieldTypeTimestamp   = "timestamp"
+    FieldTypeArrayLength = "arrayLength"
+)
+```
+
+**Aggregation function constants:**
+```go
+const (
+    AggFunctionCount      = "count"
+    AggFunctionSum        = "sum"
+    AggFunctionAvg        = "avg"
+    AggFunctionMin        = "min"
+    AggFunctionMax        = "max"
+    AggFunctionPercentile = "percentile"
+    AggFunctionDistinct   = "distinct"
+)
+```
+
+**When to add types here:**
+- New compiled structures for MetricSource features
+- New collection result types
+- New aggregation-related types
 
 #### `pkg/utils/`
 **Shared utility functions used throughout the project.** These are pure functions with no dependencies on internal implementation details.
@@ -842,6 +1340,70 @@ Reconciliation is the core concept. The controller watches CRDs and reconciles t
                   └──────────────> Loop continues
 ```
 
+### MetricSource Reconciliation Flow
+
+```
+┌─────────────────────────────────────────────────────┐
+│ 1. Watch for MetricSource changes                   │
+│    - Created, Updated, Deleted                      │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│ 2. Compile MetricSource spec                        │
+│    - Validate spec                                  │
+│    - Parse API version, derive resource name        │
+│    - Compile field paths, expressions, aggregations │
+│    - Compile namespace patterns                     │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│ 3. Store compiled definition in Redis               │
+│    - Update indexes (all, enabled, by-type)         │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│ 4. Collect from all connected clusters (parallel)   │
+│    For each cluster:                                │
+│    - Get/create dynamic client                      │
+│    - Resolve namespaces                             │
+│    - List resources with pagination                 │
+│    - Extract fields, compute expressions            │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│ 5. Compute aggregations                             │
+│    - Apply filters                                  │
+│    - Run aggregation functions                      │
+│    - Handle groupBy                                 │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│ 6. Store results in Redis                           │
+│    - Resource collection per cluster                │
+│    - Aggregation results per cluster                │
+│    - Collection metadata                            │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│ 7. Update CRD status                                │
+│    - Resources collected, clusters collected        │
+│    - Duration, errors                               │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│ 8. Return with RequeueAfter                         │
+│    - Use collection interval from spec              │
+│    - Shorter interval if errors occurred            │
+└─────────────────────────────────────────────────────┘
+```
+
 ### Key Principles
 
 **Always requeue:** Every reconciliation must return `RequeueAfter` to ensure periodic monitoring:
@@ -1052,6 +1614,184 @@ if len(ingresses) > 0 {
 }
 ```
 
+### Adding a New MetricSource Field Type
+
+1. **Add the type constant:**
+
+```go
+// pkg/types/metricsource.go
+
+const (
+    // ... existing types
+    FieldTypeDuration = "duration"  // New type for parsing duration strings
+)
+```
+
+2. **Update the CRD validation:**
+
+```go
+// api/v1alpha1/metricsource_types.go
+
+type FieldExtraction struct {
+    // ...
+    // +kubebuilder:validation:Enum=string;integer;float;boolean;quantity;timestamp;arrayLength;duration
+    Type string `json:"type,omitempty"`
+}
+```
+
+3. **Implement extraction in extractor:**
+
+```go
+// internal/metricsource/extractor/extractor.go
+
+func (e *Extractor) convertValue(value interface{}, fieldType string) (interface{}, error) {
+    // ... existing cases
+    
+    case types.FieldTypeDuration:
+        return e.toDuration(value)
+    
+    // ...
+}
+
+func (e *Extractor) toDuration(value interface{}) (int64, error) {
+    str := e.toString(value)
+    if str == "" {
+        return 0, nil
+    }
+    
+    d, err := time.ParseDuration(str)
+    if err != nil {
+        return 0, err
+    }
+    
+    return int64(d.Seconds()), nil
+}
+```
+
+4. **Regenerate CRDs:**
+
+```bash
+controller-gen object paths="./..."
+controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
+```
+
+### Adding a New Expression Function
+
+1. **Add the function definition:**
+
+```go
+// internal/metricsource/expression/functions.go
+
+var BuiltinFunctions = map[string]FunctionDef{
+    // ... existing functions
+    
+    "percentage": {MinArgs: 2, MaxArgs: 2, Fn: fnPercentage},
+}
+
+func fnPercentage(args []interface{}) (interface{}, error) {
+    part := toFloat(args[0])
+    total := toFloat(args[1])
+    
+    if total == 0 {
+        return float64(0), nil
+    }
+    
+    return (part / total) * 100, nil
+}
+```
+
+2. **Use in MetricSource:**
+
+```yaml
+apiVersion: clusterpulse.io/v1alpha1
+kind: MetricSource
+metadata:
+  name: pvc-usage
+spec:
+  source:
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+  fields:
+    - name: used
+      path: .status.capacity.storage
+      type: quantity
+    - name: capacity
+      path: .spec.resources.requests.storage
+      type: quantity
+  computed:
+    - name: usage_percent
+      expression: "percentage(used, capacity)"
+      type: float
+```
+
+### Adding a New Aggregation Function
+
+1. **Add the constant:**
+
+```go
+// pkg/types/metricsource.go
+
+const (
+    // ... existing functions
+    AggFunctionMedian = "median"
+)
+```
+
+2. **Update CRD validation:**
+
+```go
+// api/v1alpha1/metricsource_types.go
+
+type Aggregation struct {
+    // +kubebuilder:validation:Enum=count;sum;avg;min;max;percentile;distinct;median
+    Function string `json:"function"`
+}
+```
+
+3. **Implement in aggregator:**
+
+```go
+// internal/metricsource/aggregator/aggregator.go
+
+func (a *Aggregator) computeSingle(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) interface{} {
+    switch agg.Function {
+    // ... existing cases
+    
+    case types.AggFunctionMedian:
+        return a.computeMedian(resources, agg.Field)
+    }
+}
+
+func (a *Aggregator) computeMedian(resources []types.CustomCollectedResource, field string) interface{} {
+    var values []float64
+    for i := range resources {
+        val := a.getNumericValue(&resources[i], field)
+        if val != nil {
+            values = append(values, *val)
+        }
+    }
+    
+    if len(values) == 0 {
+        return nil
+    }
+    
+    sort.Float64s(values)
+    mid := len(values) / 2
+    
+    if len(values)%2 == 0 {
+        return (values[mid-1] + values[mid]) / 2
+    }
+    return values[mid]
+}
+```
+
+4. **Regenerate CRDs:**
+
+```bash
+controller-gen object paths="./..."
+controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
+```
+
 ### Adding a New Utility Function
 
 When you find yourself repeating logic, consider adding it to `pkg/utils/`:
@@ -1105,6 +1845,8 @@ When you need a new domain model type:
 // pkg/types/types.go (for core types)
 // OR
 // pkg/types/resources.go (for resource collection types)
+// OR
+// pkg/types/metricsource.go (for MetricSource types)
 
 // IngressInfo represents an ingress resource
 type IngressInfo struct {
@@ -1543,6 +2285,63 @@ err := circuitBreaker.Call(ctx, func(ctx context.Context) error {
 })
 ```
 
+### MetricSource Expression Patterns
+
+When working with computed fields:
+
+```go
+// Simple arithmetic
+expression: "capacity - used"
+
+// Percentage calculation
+expression: "round((used / capacity) * 100, 2)"
+
+// Null handling
+expression: "used ?? 0"
+
+// String concatenation
+expression: "concat(namespace, '/', name)"
+
+// Conditional via coalesce
+expression: "coalesce(requestedCPU, 0) + coalesce(limitCPU, 0)"
+```
+
+### MetricSource Aggregation Patterns
+
+```yaml
+# Count all resources
+- name: total_count
+  function: count
+
+# Count with filter
+- name: running_count
+  function: count
+  filter:
+    field: status
+    operator: equals
+    value: "Running"
+
+# Sum with filter
+- name: total_storage_bound
+  field: capacity
+  function: sum
+  filter:
+    field: phase
+    operator: equals
+    value: "Bound"
+
+# Group by field
+- name: count_by_namespace
+  function: count
+  groupBy: namespace
+
+# Percentile
+- name: p95_cpu
+  field: cpu_usage
+  function: percentile
+  percentile: 95
+```
+
 ## Performance Considerations
 
 ### Rate Limiting
@@ -1581,6 +2380,28 @@ opts := metav1.ListOptions{
 }
 
 podList, err := c.clientset.CoreV1().Pods("").List(ctx, opts)
+```
+
+### MetricSource Collection Optimization
+
+MetricSource collection is optimized for performance:
+
+1. **Pre-compiled paths** - JSONPath segments parsed once at compile time
+2. **Pre-compiled expressions** - AST built once, evaluated many times
+3. **Pre-compiled regex** - Namespace patterns compiled once
+4. **Parallel namespace collection** - Configurable parallelism
+5. **Pagination** - Uses API pagination for large resource sets
+6. **Limits** - Configurable max resources per cluster
+
+```go
+// Collection config with limits
+Collection: types.CompiledCollectionConf{
+    IntervalSeconds: 60,
+    TimeoutSeconds:  30,
+    MaxResources:    5000,  // Limit total resources
+    BatchSize:       500,   // API pagination size
+    Parallelism:     3,     // Concurrent namespace collection
+}
 ```
 
 ### Redis Batching
@@ -1805,6 +2626,31 @@ func (c *ClusterClient) GetNodeMetrics(ctx context.Context) ([]types.NodeMetrics
     })
     ```
 
+11. **Not validating MetricSource expressions at compile time:**
+    ```go
+    // ❌ Wrong - invalid expression fails at runtime
+    // Just store the expression string
+    
+    // ✅ Right - validate during compilation
+    compiled, err := expression.Compile(comp.Expression, fieldType)
+    if err != nil {
+        return nil, fmt.Errorf("invalid expression for field '%s': %w", comp.Name, err)
+    }
+    ```
+
+12. **Circular dependencies in computed fields:**
+    ```yaml
+    # ❌ Wrong - circular dependency
+    computed:
+      - name: a
+        expression: "b + 1"
+      - name: b
+        expression: "a + 1"
+    
+    # ✅ Right - compiler detects this
+    # The compiler runs detectCircularDependencies() and returns an error
+    ```
+
 ## Security Considerations
 
 ### Credential Handling
@@ -1847,6 +2693,7 @@ rules:
   resources:
   - clusterconnections
   - registryconnections
+  - metricsources
   verbs:
   - get
   - list
@@ -1858,6 +2705,7 @@ rules:
   resources:
   - clusterconnections/status
   - registryconnections/status
+  - metricsources/status
   verbs:
   - get
   - update
@@ -1927,6 +2775,7 @@ import (
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/apimachinery/pkg/runtime"
     "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/dynamic"
     ctrl "sigs.k8s.io/controller-runtime"
     "sigs.k8s.io/controller-runtime/pkg/client"
     "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -1939,6 +2788,13 @@ import (
     "github.com/clusterpulse/cluster-controller/internal/store"
     "github.com/clusterpulse/cluster-controller/pkg/types"
     "github.com/clusterpulse/cluster-controller/pkg/utils"
+)
+
+// MetricSource-specific
+import (
+    "github.com/clusterpulse/cluster-controller/internal/metricsource/compiler"
+    "github.com/clusterpulse/cluster-controller/internal/metricsource/collector"
+    "github.com/clusterpulse/cluster-controller/internal/metricsource/expression"
 )
 
 // Third-party
@@ -1959,6 +2815,7 @@ go run cmd/manager/main.go --namespace=clusterpulse
 # Testing
 go test ./...
 go test -v ./internal/controller/cluster/
+go test -v ./internal/metricsource/expression/
 go test -v ./pkg/utils/
 go test -cover ./...
 
@@ -1983,13 +2840,14 @@ oc apply -f config/crd/bases/
 - Review Redis storage in `internal/store/` for data format
 - Check utilities in `pkg/utils/` for reusable functions
 - Review types in `pkg/types/` for data models
+- Study the MetricSource subsystem in `internal/metricsource/` for expression and collection patterns
 - Read controller-runtime docs: https://book.kubebuilder.io
 - Check kubebuilder markers: https://book.kubebuilder.io/reference/markers.html
 - Review errgroup examples for parallel operations
 
 ## Project-Specific Notes
 
-- **Two reconcilers:** ClusterConnection and RegistryConnection controllers
+- **Three reconcilers:** ClusterConnection, RegistryConnection, and MetricSource controllers
 - **Redis is the bridge:** Controller writes, API reads
 - **Python compatibility:** All Redis data must work with Python (snake_case, no nil arrays)
 - **Periodic reconciliation:** Always return `RequeueAfter` to ensure monitoring continues
@@ -2001,3 +2859,6 @@ oc apply -f config/crd/bases/
 - **OpenShift support:** Special handling for ClusterVersion, ClusterOperators, and Routes
 - **Shared utilities:** Use `pkg/utils` for parsing and circuit breakers
 - **Domain types:** Define core types in `pkg/types` for reusability
+- **MetricSource subsystem:** Modular design with compiler, collector, expression engine, and aggregator
+- **Expression language:** Supports arithmetic, comparison, logical operators, and built-in functions
+- **Aggregations:** Supports count, sum, avg, min, max, percentile, distinct with filters and grouping

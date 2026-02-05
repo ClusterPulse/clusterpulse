@@ -1,6 +1,6 @@
 """RBAC dependencies and utilities for simplified authorization."""
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from fastapi import Depends
 
@@ -10,7 +10,8 @@ from clusterpulse.db.redis import get_redis_client
 from clusterpulse.models.auth import User
 from clusterpulse.services.rbac import (Action, Principal, RBACDecision,
                                         RBACEngine, Request, Resource,
-                                        ResourceType, create_rbac_engine)
+                                        ResourceType, create_rbac_engine,
+                                        CustomResourceDecision)
 
 # Initialize RBAC engine
 _rbac_engine: Optional[RBACEngine] = None
@@ -103,6 +104,55 @@ class RBACContext:
         decision = self.rbac.authorize(request)
         return decision.allowed
 
+    def get_accessible_custom_types(self) -> List[str]:
+            """Get list of custom resource type names this user can access."""
+            return self.rbac.get_accessible_custom_resource_types(self.principal)
+
+    def check_custom_resource_access(
+        self,
+        resource_type_name: str,
+        cluster: Optional[str] = None,
+        action: Action = Action.VIEW,
+    ) -> CustomResourceDecision:
+        """
+        Check access to a custom resource type and raise if denied.
+
+        Returns CustomResourceDecision if access is allowed.
+        Raises AuthorizationError if access is denied.
+        """
+        decision = self.rbac.authorize_custom_resource(
+            self.principal, resource_type_name, cluster, action
+        )
+        if decision.denied:
+            raise AuthorizationError(
+                f"Access denied to custom resource type '{resource_type_name}': {decision.reason}"
+            )
+        return decision
+
+    def filter_custom_resources(
+        self,
+        resources: List[dict],
+        resource_type_name: str,
+        cluster: str,
+    ) -> List[dict]:
+        """Filter custom resources through RBAC engine."""
+        return self.rbac.filter_custom_resources(
+            principal=self.principal,
+            resources=resources,
+            resource_type_name=resource_type_name,
+            cluster=cluster,
+        )
+
+    def filter_aggregations(
+        self,
+        aggregations: Dict[str, Any],
+        resource_type_name: str,
+        cluster: str,
+    ) -> Dict[str, Any]:
+        """Filter aggregations based on RBAC permissions."""
+        return self.rbac.filter_aggregations(
+            self.principal, aggregations, resource_type_name, cluster
+        )
 
 def get_rbac_context(
     user: User = Depends(get_user_with_groups),

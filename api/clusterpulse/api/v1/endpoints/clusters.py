@@ -16,11 +16,18 @@ from clusterpulse.repositories.redis_base import ClusterDataRepository
 from clusterpulse.services.metrics import create_metrics_calculator
 from clusterpulse.services.rbac import Action, ResourceType
 
+from clusterpulse.api.responses.metricsource import CustomResourceDetailBuilder
+from clusterpulse.api.utils.aggregations import recompute_aggregations
+from clusterpulse.api.utils.pagination import PaginationParams, paginate
+from clusterpulse.repositories.redis_base import MetricSourceRepository
+
+
 logger = get_logger(__name__)
 
 # Initialize dependencies
 redis_client = get_redis_client()
 repo = ClusterDataRepository(redis_client)
+metric_source_repo = MetricSourceRepository(redis_client)
 
 # Import RBAC engine from dependencies to use the singleton
 from clusterpulse.api.dependencies.rbac import get_rbac_engine
@@ -452,3 +459,96 @@ async def get_cluster_events(
         f"for cluster {cluster_name}"
     )
     return filtered_events
+
+@router.get("/{cluster_name}/custom/{resource_type_name}")
+async def get_custom_resources(
+    cluster_name: str,
+    resource_type_name: str,
+    rbac: RBACContext = Depends(get_rbac_context),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(100, ge=1, le=1000, description="Items per page"),
+    include_aggregations: bool = Query(True, description="Include aggregations"),
+    namespace: Optional[str] = Query(None, description="Filter by namespace"),
+    sort_by: Optional[str] = Query(None, description="Field to sort by"),
+    sort_order: str = Query("asc", regex="^(asc|desc)$", description="Sort order"),
+) -> Dict[str, Any]:
+    """Get custom resources for a cluster with RBAC filtering and pagination."""
+    rbac.check_cluster_access(cluster_name)
+    decision = rbac.check_custom_resource_access(resource_type_name, cluster_name)
+
+    source_id = metric_source_repo.get_source_id_for_type(resource_type_name)
+    if not source_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Custom resource type '{resource_type_name}' not found",
+        )
+
+    source = metric_source_repo.get_metric_source(source_id)
+    rbac_config = source.get("rbac", {}) if source else {}
+    filter_aggregations = rbac_config.get("filterAggregations", True)
+
+    resource_data = metric_source_repo.get_custom_resources(source_id, cluster_name)
+    if not resource_data:
+        return (
+            CustomResourceDetailBuilder(resource_type_name, cluster_name)
+            .with_resources([], False)
+            .with_pagination({
+                "total": 0,
+                "page": 1,
+                "pageSize": page_size,
+                "totalPages": 1,
+                "hasNext": False,
+                "hasPrevious": False,
+            })
+            .build()
+        )
+
+    raw_resources = resource_data.get("resources", [])
+    total_before_filter = len(raw_resources)
+
+    filtered_resources = rbac.filter_custom_resources(
+        raw_resources, resource_type_name, cluster_name
+    )
+
+    if namespace:
+        filtered_resources = [
+            r for r in filtered_resources if r.get("_namespace") == namespace
+        ]
+
+    if sort_by:
+        valid_fields = {f.get("name") for f in source.get("fields", [])} if source else set()
+        valid_fields.update({c.get("name") for c in source.get("computed", [])} if source else set())
+        if sort_by not in valid_fields and sort_by not in ("name", "namespace", "_id"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid sort field: {sort_by}",
+            )
+        reverse = sort_order == "desc"
+        filtered_resources.sort(key=lambda x: x.get(sort_by) or "", reverse=reverse)
+
+    params = PaginationParams(page=page, page_size=page_size)
+    paginated = paginate(filtered_resources, params)
+
+    builder = CustomResourceDetailBuilder(resource_type_name, cluster_name)
+    builder.with_collection_metadata({
+        "collectedAt": resource_data.get("collectedAt"),
+        "truncated": resource_data.get("truncated", False),
+    })
+    builder.with_resources(paginated.items, total_before_filter != len(filtered_resources))
+    builder.with_pagination(paginated.to_dict()["pagination"])
+
+    if include_aggregations:
+        agg_data = metric_source_repo.get_custom_aggregations(source_id, cluster_name)
+        if agg_data:
+            values = agg_data.get("values", {})
+            if filter_aggregations and len(filtered_resources) < total_before_filter:
+                agg_specs = source.get("aggregations", []) if source else []
+                values = recompute_aggregations(filtered_resources, agg_specs)
+            values = rbac.filter_aggregations(values, resource_type_name, cluster_name)
+            builder.with_aggregations(values)
+
+    logger.info(
+        f"User {rbac.user.username} accessed {resource_type_name} in {cluster_name}: "
+        f"{total_before_filter} total, {len(filtered_resources)} after RBAC, page {page}"
+    )
+    return builder.build()

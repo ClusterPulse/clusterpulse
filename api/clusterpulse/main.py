@@ -9,8 +9,8 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from clusterpulse.api.middleware.auth import AuthMiddleware
 from clusterpulse.api.middleware.logging import LoggingMiddleware
-from clusterpulse.api.v1.endpoints import (auth, clusters, health, public,
-                                           registries)
+from clusterpulse.api.v1.endpoints import (auth, clusters, custom_resources,
+                                           health, public, registries)
 from clusterpulse.config.settings import settings
 from clusterpulse.core.logging import get_logger, setup_logging
 from clusterpulse.db.redis import close_redis_connection, get_redis_client
@@ -87,6 +87,11 @@ app.include_router(
 )
 app.include_router(
     registries.router, prefix=f"{settings.api_prefix}", tags=["registries"]
+)
+app.include_router(
+    custom_resources.router,
+    prefix=f"{settings.api_prefix}/custom-types",
+    tags=["custom-resources"],
 )
 
 # Register public routes (if anonymous access enabled)
