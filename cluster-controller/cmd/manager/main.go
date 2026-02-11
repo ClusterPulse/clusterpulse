@@ -8,6 +8,7 @@ import (
 	"github.com/clusterpulse/cluster-controller/internal/config"
 	clusterctrl "github.com/clusterpulse/cluster-controller/internal/controller/cluster"
 	metricsourcectrl "github.com/clusterpulse/cluster-controller/internal/controller/metricsource"
+	policyctrl "github.com/clusterpulse/cluster-controller/internal/controller/policy"
 	registryctrl "github.com/clusterpulse/cluster-controller/internal/controller/registry"
 	redis "github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/sirupsen/logrus"
@@ -99,7 +100,7 @@ func main() {
 	logrus.WithFields(logrus.Fields{
 		"namespace": watchNamespace,
 		"logLevel":  logLevel,
-		"version":   "0.2.0",
+		"version":   "0.3.0",
 	}).Info("ClusterPulse Cluster Controller starting")
 
 	// Initialize Redis client
@@ -166,6 +167,35 @@ func main() {
 		WatchNamespace: watchNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MetricSource")
+		os.Exit(1)
+	}
+
+	// Setup Policy controller
+	if err = (&policyctrl.PolicyReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		RedisClient:    redisClient,
+		Config:         cfg,
+		WatchNamespace: watchNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MonitorAccessPolicy")
+		os.Exit(1)
+	}
+
+	// Register periodic policy validator
+	if err = mgr.Add(&policyctrl.PeriodicValidator{
+		RedisClient: redisClient,
+		Config:      cfg,
+	}); err != nil {
+		setupLog.Error(err, "unable to add periodic policy validator")
+		os.Exit(1)
+	}
+
+	// Register startup eval cache cleaner
+	if err = mgr.Add(&policyctrl.EvalCacheCleaner{
+		RedisClient: redisClient,
+	}); err != nil {
+		setupLog.Error(err, "unable to add eval cache cleaner")
 		os.Exit(1)
 	}
 

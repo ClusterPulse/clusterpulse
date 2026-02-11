@@ -1,19 +1,30 @@
 # Build stage
-FROM golang:1.25.1-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25.1-alpine AS builder
 
-RUN apk add --no-cache git make
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG GIT_TREE_STATE=unknown
+ARG BUILD_DATE=unknown
 
 WORKDIR /app
+
+RUN apk add --no-cache git make
 
 # Copy go mod files
 COPY cluster-controller/go.* ./
 RUN go mod download
 
-# Copy source code
 COPY cluster-controller/ .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o cluster-controller cmd/manager/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
+    -ldflags="-s -w \
+    -X github.com/clusterpulse/clusterpulse/internal/version.Version=${VERSION} \
+    -X github.com/clusterpulse/clusterpulse/internal/version.GitCommit=${GIT_COMMIT} \
+    -X github.com/clusterpulse/clusterpulse/internal/version.GitTreeState=${GIT_TREE_STATE} \
+    -X github.com/clusterpulse/clusterpulse/internal/version.BuildDate=${BUILD_DATE}" \
+    -o cluster-controller cmd/manager/main.go
 
 # Final stage
 FROM alpine:3.19
