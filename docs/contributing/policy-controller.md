@@ -1,14 +1,12 @@
 # Contributing to ClusterPulse Policy Controller
 
-> **Note:** As of v0.3.0, the policy controller has been migrated from Python/Kopf to Go using controller-runtime. It now runs as a fourth controller within the unified `cluster-controller` binary.
+> **Note:** As of v0.3.0, the policy controller has been migrated from Python/Kopf to Go using controller-runtime. It runs as a controller within the unified manager binary.
 
 ## Getting Started
 
 ### Local Setup
 
 ```bash
-cd cluster-controller
-
 # Install dependencies
 go mod tidy
 
@@ -21,10 +19,10 @@ export REDIS_PORT=6379
 docker run -d -p 6379:6379 redis:latest
 
 # Build
-go build ./cmd/manager/
+go build -o bin/manager ./cmd/manager/
 
 # Run locally (connects to your current kubeconfig cluster)
-./manager --namespace=clusterpulse
+./bin/manager --namespace=clusterpulse
 ```
 
 ### Prerequisites
@@ -51,10 +49,9 @@ go build ./cmd/manager/
 
 ## Project Structure
 
-The policy controller is integrated into the cluster-controller binary. Key files:
+The policy controller is integrated into the manager binary. Key files:
 
 ```
-cluster-controller/
 ├── api/v1alpha1/
 │   └── monitoraccesspolicy_types.go   # CRD type definitions with kubebuilder markers
 ├── pkg/types/
@@ -78,16 +75,11 @@ cluster-controller/
 After modifying CRD types in `api/v1alpha1/monitoraccesspolicy_types.go`:
 
 ```bash
-cd cluster-controller
-
 # Generate DeepCopy methods
 controller-gen object paths="./api/v1alpha1/..."
 
 # Generate CRD YAML
-controller-gen crd paths="./api/v1alpha1/..." output:crd:dir=../config/crd/bases
-
-# Copy CRD to cluster-controller config
-cp ../config/crd/bases/clusterpulse.io_monitoraccesspolicies.yaml config/crd/bases/
+controller-gen crd paths="./api/v1alpha1/..." output:crd:dir=config/crd/bases
 
 # Verify build
 go build ./...
@@ -289,15 +281,13 @@ kubectl get monitoraccesspolicies -o wide
 ## Build and Verify
 
 ```bash
-cd cluster-controller
-
 # Build
-go build ./cmd/manager/
+go build -o bin/manager ./cmd/manager/
 
 # Vet
 go vet ./...
 
 # Generate code
 controller-gen object paths="./api/v1alpha1/..."
-controller-gen crd paths="./api/v1alpha1/..." output:crd:dir=../config/crd/bases
+controller-gen crd paths="./api/v1alpha1/..." output:crd:dir=config/crd/bases
 ```

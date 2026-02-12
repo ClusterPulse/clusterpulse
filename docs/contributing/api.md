@@ -5,8 +5,6 @@
 ### Local Setup
 
 ```bash
-cd cluster-controller
-
 # Start Redis
 docker run -d -p 6379:6379 redis:latest
 
@@ -19,30 +17,29 @@ ENVIRONMENT=development OAUTH_PROXY_ENABLED=false REDIS_HOST=localhost ./bin/api
 
 API health check at `http://localhost:8080/healthz`
 
-### Go API Structure
+### Project Structure
 
 ```
-cluster-controller/
-  cmd/api/main.go                 # Entrypoint
-  internal/rbac/
+cmd/api/main.go                   # Entrypoint
+internal/rbac/
     types.go                      # RBAC types (Action, ResourceType, Filter, etc.)
     engine.go                     # Core RBAC engine (authorize, filter)
     filter.go                     # Filter compilation and matching helpers
     cache.go                      # Decision cache (Redis-backed)
-    metrics.go                    # FilteredMetricsCalculator
-  internal/api/
-    config.go                     # API configuration (env vars)
-    server.go                     # Chi router + middleware + graceful shutdown
-    middleware.go                 # Auth + optional auth middleware + security headers
-    handlers.go                   # Health endpoints
-    clusters.go                   # Cluster route handlers
-    auth.go                       # Auth introspection handlers (status, me, permissions, policies, logout, cache)
-    registries.go                 # Registry status handler
-    custom_types.go               # Custom resource type discovery handlers
-    aggregations.go               # Aggregation recomputation utility
-  internal/store/
-    reader.go                     # Redis read operations for API
-    client.go                     # Shared Redis client (+ RedisClient() accessor)
+  metrics.go                      # FilteredMetricsCalculator
+internal/api/
+  config.go                       # API configuration (env vars)
+  server.go                       # Chi router + middleware + graceful shutdown
+  middleware.go                   # Auth + optional auth middleware + security headers
+  handlers.go                     # Health endpoints
+  clusters.go                     # Cluster route handlers
+  auth.go                         # Auth introspection handlers (status, me, permissions, policies, logout, cache)
+  registries.go                   # Registry status handler
+  custom_types.go                 # Custom resource type discovery handlers
+  aggregations.go                 # Aggregation recomputation utility
+internal/store/
+  reader.go                       # Redis read operations for API
+  client.go                       # Shared Redis client (+ RedisClient() accessor)
 ```
 
 ### Configuration

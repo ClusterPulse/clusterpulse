@@ -9,10 +9,13 @@ WORKDIR /app
 RUN apk add --no-cache git make
 
 # Copy go mod files
-COPY cluster-controller/go.* ./
+COPY go.mod go.sum ./
 RUN go mod download
 
-COPY cluster-controller/ .
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY api/ ./api/
+COPY pkg/ ./pkg/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
     -ldflags="-s -w" \

@@ -39,7 +39,7 @@ The API Server handles all user requests:
 - Resolves group membership from OpenShift User/Group resources
 - Evaluates RBAC policies for every request via the built-in RBAC engine
 - Filters resources based on user permissions
-- Lives in `cluster-controller/cmd/api/` alongside the controller manager
+- Lives in `cmd/api/` alongside the controller manager
 
 [Learn more →](../contributing/api.md)
 

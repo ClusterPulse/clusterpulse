@@ -7,8 +7,8 @@ This document covers the configuration required to use an external Redis instanc
 ClusterPulse uses Redis as a shared data store and cache layer across three components:
 
 - `api` - REST API server
-- `clusterEngine` (cluster-controller) - Cluster connection reconciler
-- `policyEngine` (policy-controller) - MonitorAccessPolicy reconciler
+- `clusterEngine` - Cluster connection reconciler
+- `policyEngine` - MonitorAccessPolicy reconciler (runs within the cluster-controller binary)
 
 Each component independently reads Redis connection parameters from its respective values block. When using an external Redis, you must configure all three components and disable the built-in Redis subchart.
 
@@ -125,11 +125,8 @@ After deployment, verify connectivity from each component:
 # Check API pod logs
 kubectl logs -n clusterpulse deployment/clusterpulse-api | grep -i redis
 
-# Check cluster controller logs
+# Check cluster controller logs (includes policy controller)
 kubectl logs -n clusterpulse deployment/clusterpulse-cluster-controller | grep -i redis
-
-# Check policy controller logs
-kubectl logs -n clusterpulse deployment/clusterpulse-policy-controller | grep -i redis
 ```
 
 Successful startup logs should indicate a connection to Redis without errors. Failed connections will present as connection refused or authentication errors in the pod logs.
