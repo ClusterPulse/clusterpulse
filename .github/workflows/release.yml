@@ -18,7 +18,6 @@ jobs:
     outputs:
       api: ${{ steps.filter.outputs.api }}
       cluster-controller: ${{ steps.filter.outputs.cluster-controller }}
-      policy-controller: ${{ steps.filter.outputs.policy-controller }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,14 +37,21 @@ jobs:
           base: ${{ steps.prev-tag.outputs.tag || github.event.repository.default_branch }}
           filters: |
             api:
-              - 'api/**'
+              - 'cmd/api/**'
+              - 'internal/api/**'
+              - 'internal/rbac/**'
+              - 'internal/store/**'
+              - 'go.mod'
+              - 'go.sum'
               - 'Dockerfile.api'
             cluster-controller:
-              - 'cluster-controller/**'
+              - 'cmd/manager/**'
+              - 'internal/**'
+              - 'api/**'
+              - 'pkg/**'
+              - 'go.mod'
+              - 'go.sum'
               - 'Dockerfile.cluster-controller'
-            policy-controller:
-              - 'policy-controller/**'
-              - 'Dockerfile.policy-controller'
 
   # Build and push API
   build-api:
@@ -129,47 +135,6 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=min
 
-  # Build and push Policy Controller
-  build-policy-controller:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.policy-controller == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_TOKEN }}
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ${{ env.REGISTRY }}/clusterpulse/policy-controller
-          tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
-            type=sha,prefix=sha-
-            type=raw,value=latest
-      - uses: docker/build-push-action@v6
-        id: build
-        with:
-          context: .
-          file: Dockerfile.policy-controller
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=min
-
   # Build and deploy documentation
   deploy-docs:
     runs-on: ubuntu-latest
@@ -196,7 +161,7 @@ jobs:
   # Release summary
   release-summary:
     if: always()
-    needs: [detect-changes, build-api, build-cluster-controller, build-policy-controller, deploy-docs]
+    needs: [detect-changes, build-api, build-cluster-controller, deploy-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Generate release summary
@@ -228,15 +193,6 @@ jobs:
             echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Pushed | \`${{ needs.build-cluster-controller.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Failed | — |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          # Policy Controller
-          if [[ "${{ needs.detect-changes.outputs.policy-controller }}" != "true" ]]; then
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/policy-controller\` | Skipped (no changes) | — |" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.build-policy-controller.result }}" == "success" ]]; then
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/policy-controller\` | Pushed | \`${{ needs.build-policy-controller.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/policy-controller\` | Failed | — |" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY

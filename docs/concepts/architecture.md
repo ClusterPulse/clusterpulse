@@ -19,9 +19,10 @@ The Cluster Controller is a Kubernetes operator that:
 
 [Learn more →](../contributing/cluster-controller.md)
 
-### Policy Controller (Python)
+### Policy Controller (Go)
 
-The Policy Controller compiles RBAC policies:
+The Policy Controller compiles RBAC policies and runs as part of the unified
+`cluster-controller` binary (`cmd/manager/`), not as a standalone process.
 
 - Watches `MonitorAccessPolicy` CRDs
 - Compiles policies into efficient evaluation structures
@@ -30,15 +31,15 @@ The Policy Controller compiles RBAC policies:
 
 [Learn more →](../contributing/policy-controller.md)
 
-### API Server (Python/FastAPI)
+### API Server (Go/Chi)
 
 The API Server handles all user requests:
 
-- Authenticates users via OAuth/OIDC
-- Resolves group membership in real-time
-- Evaluates RBAC policies for every request
+- Authenticates users via OAuth proxy headers
+- Resolves group membership from OpenShift User/Group resources
+- Evaluates RBAC policies for every request via the built-in RBAC engine
 - Filters resources based on user permissions
-- Serves the web UI
+- Lives in `cmd/api/` alongside the controller manager
 
 [Learn more →](../contributing/api.md)
 

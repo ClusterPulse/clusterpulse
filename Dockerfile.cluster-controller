@@ -3,27 +3,29 @@ FROM --platform=$BUILDPLATFORM golang:1.25.1-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+<<<<<<< HEAD
+=======
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG GIT_TREE_STATE=unknown
 ARG BUILD_DATE=unknown
+>>>>>>> main
 
 WORKDIR /app
 
 RUN apk add --no-cache git make
 
 # Copy go mod files
-COPY cluster-controller/go.* ./
+COPY go.mod go.sum ./
 RUN go mod download
 
-COPY cluster-controller/ .
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY api/ ./api/
+COPY pkg/ ./pkg/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
-    -ldflags="-s -w \
-    -X github.com/clusterpulse/clusterpulse/internal/version.Version=${VERSION} \
-    -X github.com/clusterpulse/clusterpulse/internal/version.GitCommit=${GIT_COMMIT} \
-    -X github.com/clusterpulse/clusterpulse/internal/version.GitTreeState=${GIT_TREE_STATE} \
-    -X github.com/clusterpulse/clusterpulse/internal/version.BuildDate=${BUILD_DATE}" \
+    -ldflags="-s -w" \
     -o cluster-controller cmd/manager/main.go
 
 # Final stage
@@ -35,5 +37,12 @@ WORKDIR /
 
 # Copy the binary from builder
 COPY --from=builder /app/cluster-controller .
+
+USER 65532
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -qO- http://localhost:8081/healthz || exit 1
 
 ENTRYPOINT ["/cluster-controller"]

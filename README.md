@@ -37,8 +37,8 @@ ClusterPulse follows a microservices architecture with four core components:
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **Cluster Controller** | Go | Connects to target clusters, collects metrics, and stores in Redis |
-| **Policy Controller** | Python, Kopf | Compiles RBAC policies into optimized structures for real-time evaluation |
-| **API** | Python, FastAPI | Serves filtered cluster data based on user permissions |
+| **Policy Controller** | Go | Compiles RBAC policies into optimized structures (runs within cluster-controller) |
+| **API** | Go, Chi | Serves filtered cluster data based on user permissions |
 | **Frontend** | React, TypeScript, PatternFly | Provides intuitive dashboard for cluster monitoring |
 
 ### Data Flow
@@ -91,15 +91,15 @@ helm install clusterpulse ./helm-charts/clusterpulse		# Will install ClusterPuls
 
 Detailed documentation for each component:
 
-- [API Documentation](./api/README.md) - Backend API service and RBAC engine
-- [Frontend Documentation](./frontend/README.md) - React dashboard and UI components
-- [Cluster Controller Documentation](./cluster-controller/README.md) - Cluster connection manager
-- [Policy Engine Documentation](./policy-engine/README.md) - Policy compilation and management
+- [Full Documentation](https://clusterpulse.github.io/clusterpulse/latest/) - Hosted docs site
+- [API Contributing Guide](./docs/contributing/api.md) - Go API server and RBAC engine
+- [Cluster Controller Guide](./docs/contributing/cluster-controller.md) - Cluster connection manager
+- [Policy Controller Guide](./docs/contributing/policy-controller.md) - Policy compilation and management
 
 ### Technology Stack
 
-- **Backend**: Python (FastAPI)
-- **Controllers**: Python (Kopf), Go
+- **Backend**: Go (Chi)
+- **Controllers**: Go (controller-runtime)
 - **Frontend**: React, TypeScript
 - **Storage**: Redis
 - **Container**: Kubernetes/OpenShift

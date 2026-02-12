@@ -44,7 +44,6 @@ Here's what goes where and why it's organized this way.
 ### Directory Layout
 
 ```
-cluster-controller/
 ├── api/v1alpha1/            Custom Resource Definitions (CRDs)
 ├── cmd/manager/             Main entry point
 ├── internal/
