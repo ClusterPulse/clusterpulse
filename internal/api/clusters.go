@@ -61,12 +61,12 @@ func (h *ClusterHandler) ListClusters(w http.ResponseWriter, r *http.Request) {
 		cluster := map[string]any{
 			"name":           name,
 			"accessible":     true,
-			"displayName":    specDisplayName(bundle.Spec, name),
-			"labels":         specLabels(bundle.Spec),
+			"spec":           ensureMap(bundle.Spec),
+			"info":           ensureMap(bundle.Info),
+			"metrics":        ensureMap(bundle.Metrics),
 			"status":         statusWithFallback(bundle.Status),
 			"operator_count": len(filteredOps),
 		}
-		applyInfoFields(cluster, bundle.Info)
 
 		clusters = append(clusters, cluster)
 	}
@@ -94,14 +94,12 @@ func (h *ClusterHandler) GetCluster(w http.ResponseWriter, r *http.Request) {
 	resourceMeta, _ := h.store.GetClusterResourceMetadata(ctx, clusterName)
 
 	result := map[string]any{
-		"name":        clusterName,
-		"displayName": specDisplayName(bundle.Spec, clusterName),
-		"labels":      specLabels(bundle.Spec),
-		"spec":        bundle.Spec,
-		"status":      statusWithFallback(bundle.Status),
-		"info":        bundle.Info,
+		"name":    clusterName,
+		"spec":    ensureMap(bundle.Spec),
+		"info":    ensureMap(bundle.Info),
+		"metrics": ensureMap(bundle.Metrics),
+		"status":  statusWithFallback(bundle.Status),
 	}
-	applyInfoFields(result, bundle.Info)
 
 	if resourceMeta != nil {
 		result["resource_collection"] = map[string]any{
@@ -615,29 +613,6 @@ func (h *ClusterHandler) getAllowedNamespaces(ctx context.Context, clusterName s
 	return result
 }
 
-// specDisplayName extracts displayName from spec with fallback to cluster name.
-func specDisplayName(spec map[string]any, fallback string) string {
-	if spec != nil {
-		if dn, ok := spec["displayName"].(string); ok && dn != "" {
-			return dn
-		}
-		if dn, ok := spec["display_name"].(string); ok && dn != "" {
-			return dn
-		}
-	}
-	return fallback
-}
-
-// specLabels extracts labels from spec, always returning a non-nil map.
-func specLabels(spec map[string]any) map[string]any {
-	if spec != nil {
-		if labels, ok := spec["labels"].(map[string]any); ok {
-			return labels
-		}
-	}
-	return map[string]any{}
-}
-
 // statusWithFallback returns the status or a sensible default.
 func statusWithFallback(status map[string]any) map[string]any {
 	if status != nil {
@@ -649,20 +624,11 @@ func statusWithFallback(status map[string]any) map[string]any {
 	}
 }
 
-// applyInfoFields extracts top-level fields from info onto the response map.
-func applyInfoFields(result map[string]any, info map[string]any) {
-	if info == nil {
-		return
+// ensureMap returns m if non-nil, otherwise an empty map.
+func ensureMap(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
 	}
-	result["console_url"] = info["console_url"]
-	result["api_url"] = info["api_url"]
-
-	platform, _ := info["platform"].(string)
-	if platform == "" {
-		platform = "OpenShift"
-	}
-	result["platform"] = platform
-	result["version"] = info["version"]
-	result["channel"] = info["channel"]
+	return m
 }
 

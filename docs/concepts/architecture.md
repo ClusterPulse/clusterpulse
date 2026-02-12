@@ -21,7 +21,8 @@ The Cluster Controller is a Kubernetes operator that:
 
 ### Policy Controller (Go)
 
-The Policy Controller compiles RBAC policies:
+The Policy Controller compiles RBAC policies and runs as part of the unified
+`cluster-controller` binary (`cmd/manager/`), not as a standalone process.
 
 - Watches `MonitorAccessPolicy` CRDs
 - Compiles policies into efficient evaluation structures
