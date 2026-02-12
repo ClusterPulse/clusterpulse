@@ -1,54 +1,100 @@
 # Contributing to ClusterPulse API
 
-## Getting Started
+> **Note:** The API was rewritten from Python/FastAPI to Go/Chi in v0.4.0.
+> The Python reference docs below are retained for context but the active codebase is Go.
+
+## Getting Started (Go API)
 
 ### Local Setup
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies (uses uv.lock for reproducible builds)
-uv sync
-
-# Set up environment
-cp .env.example .env
-# Edit .env - set ENVIRONMENT=development, DEBUG=True
+cd cluster-controller
 
 # Start Redis
 docker run -d -p 6379:6379 redis:latest
 
-# Run the API
-uv run uvicorn clusterpulse.main:app --reload --host 0.0.0.0 --port 8080
+# Build the API
+go build -o bin/api ./cmd/api/
+
+# Run in development mode (no OAuth required)
+ENVIRONMENT=development OAUTH_PROXY_ENABLED=false REDIS_HOST=localhost ./bin/api
 ```
 
-API docs available at `http://localhost:8080/api/v1/docs`
+API health check at `http://localhost:8090/healthz`
 
-### Dependency Management
+### Go API Structure
 
-ClusterPulse uses [uv](https://docs.astral.sh/uv/) for Python dependency management. Key commands:
-
-```bash
-# Install all dependencies (including dev/test)
-uv sync
-
-# Install only production dependencies
-uv sync --no-dev
-
-# Add a new dependency
-uv add <package>
-
-# Add a dev dependency
-uv add --dev <package>
-
-# Update dependencies
-uv lock --upgrade
-
-# Run commands in the virtual environment
-uv run <command>
+```
+cluster-controller/
+  cmd/api/main.go                 # Entrypoint
+  internal/rbac/
+    types.go                      # RBAC types (Action, ResourceType, Filter, etc.)
+    engine.go                     # Core RBAC engine (authorize, filter)
+    filter.go                     # Filter compilation and matching helpers
+    cache.go                      # Decision cache (Redis-backed)
+    metrics.go                    # FilteredMetricsCalculator
+  internal/api/
+    config.go                     # API configuration (env vars)
+    server.go                     # Chi router + middleware + graceful shutdown
+    middleware.go                 # Auth + optional auth middleware + security headers
+    handlers.go                   # Health endpoints
+    clusters.go                   # Cluster route handlers
+    auth.go                       # Auth introspection handlers (status, me, permissions, policies, logout, cache)
+    registries.go                 # Registry status handler
+    custom_types.go               # Custom resource type discovery handlers
+    aggregations.go               # Aggregation recomputation utility
+  internal/store/
+    reader.go                     # Redis read operations for API
+    client.go                     # Shared Redis client (+ RedisClient() accessor)
 ```
 
-The `uv.lock` file ensures reproducible builds across environments. Always commit changes to both `pyproject.toml` and `uv.lock` when modifying dependencies.
+### Configuration
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `API_PORT` | 8090 | Server port |
+| `API_HOST` | 0.0.0.0 | Bind address |
+| `CORS_ORIGINS` | * | Allowed CORS origins |
+| `OAUTH_PROXY_ENABLED` | true | Enable OAuth proxy headers |
+| `OAUTH_HEADER_USER` | X-Forwarded-User | Username header |
+| `OAUTH_HEADER_EMAIL` | X-Forwarded-Email | Email header |
+| `ENVIRONMENT` | production | development/production |
+| `RBAC_CACHE_TTL` | 0 | Cache TTL seconds (0=disabled) |
+
+### API Routes
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/healthz` | None | Health check |
+| GET | `/readyz` | None | Readiness (pings Redis) |
+| GET | `/api/v1/auth/status` | Optional | Authentication status |
+| GET | `/api/v1/auth/me` | Required | Current user info with groups |
+| GET | `/api/v1/auth/permissions` | Required | Per-cluster permission summary |
+| GET | `/api/v1/auth/policies` | Required | Applied policies sorted by priority |
+| POST | `/api/v1/auth/logout` | Required | Clear RBAC + group + permission caches |
+| POST | `/api/v1/auth/cache/clear` | Required | Clear RBAC cache for current user |
+| GET | `/api/v1/registries/status` | Required | Registry availability (pipelined) |
+| GET | `/api/v1/clusters` | Required | List accessible clusters |
+| GET | `/api/v1/clusters/{name}` | Required | Cluster detail |
+| GET | `/api/v1/clusters/{name}/nodes` | Required | Cluster nodes |
+| GET | `/api/v1/clusters/{name}/nodes/{node}` | Required | Node detail |
+| GET | `/api/v1/clusters/{name}/operators` | Required | Cluster operators |
+| GET | `/api/v1/clusters/{name}/namespaces` | Required | Cluster namespaces |
+| GET | `/api/v1/clusters/{name}/alerts` | Required | Cluster alerts |
+| GET | `/api/v1/clusters/{name}/events` | Required | Cluster events |
+| GET | `/api/v1/clusters/{name}/custom/{type}` | Required | Custom resources |
+| GET | `/api/v1/custom-types` | Required | Accessible custom resource types |
+| GET | `/api/v1/custom-types/clusters` | Required | Resource counts per type per cluster |
+
+---
+
+## Legacy Python API Reference
+
+The sections below document the original Python implementation for historical reference.
+
+### Legacy Dependency Management
+
+ClusterPulse originally used [uv](https://docs.astral.sh/uv/) for Python dependency management.
 
 ## Project Structure
 

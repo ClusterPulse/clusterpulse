@@ -846,6 +846,11 @@ func (c *Client) DeleteClusterData(ctx context.Context, name string) error {
 	return iter.Err()
 }
 
+// RedisClient returns the underlying redis.Client for direct access.
+func (c *Client) RedisClient() *redis.Client {
+	return c.client
+}
+
 // Close closes the Redis connection
 func (c *Client) Close() error {
 	return c.client.Close()
