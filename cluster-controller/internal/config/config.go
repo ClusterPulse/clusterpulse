@@ -35,6 +35,12 @@ type Config struct {
 
 	// Resource Collection Settings
 	ResourceCollection types.CollectionConfig
+
+	// Policy Controller Settings
+	PolicyCacheTTL             int
+	GroupCacheTTL              int
+	MaxPoliciesPerUser         int
+	PolicyValidationInterval   int
 }
 
 // Load loads configuration from environment variables
@@ -56,6 +62,12 @@ func Load() *Config {
 		MemoryWarningThreshold:  getEnvFloat("MEMORY_WARNING_THRESHOLD", 85),
 		MemoryCriticalThreshold: getEnvFloat("MEMORY_CRITICAL_THRESHOLD", 90),
 		NodeUnhealthyThreshold:  getEnvFloat("NODE_UNHEALTHY_THRESHOLD", 0.5),
+
+		// Policy Controller Configuration
+		PolicyCacheTTL:           getEnvIntWithMin("POLICY_CACHE_TTL", 300, 60),
+		GroupCacheTTL:            getEnvIntWithMin("GROUP_CACHE_TTL", 300, 60),
+		MaxPoliciesPerUser:       getEnvIntWithMin("MAX_POLICIES_PER_USER", 100, 1),
+		PolicyValidationInterval: getEnvIntWithMin("POLICY_VALIDATION_INTERVAL", 300, 60),
 
 		// Resource Collection Configuration
 		ResourceCollection: types.CollectionConfig{
