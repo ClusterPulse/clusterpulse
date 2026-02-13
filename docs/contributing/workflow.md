@@ -34,4 +34,5 @@ Use **squash and merge** for all PRs. This keeps the main branch history clean â
 5. The release workflow automatically:
     - Builds and pushes Docker images for changed services
     - Deploys documentation via MkDocs/mike
+    - Opens a PR against `ClusterPulse/operator` with updated image tags and regenerated CRDs
     - Appends a **Build Summary** to the release body with image digests, tags, and docs status
