@@ -6,6 +6,37 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// PolicyPermissions defines the known permission flags for cluster access
+type PolicyPermissions struct {
+	// View grants basic cluster visibility
+	// +optional
+	View *bool `json:"view,omitempty"`
+
+	// ViewMetrics grants access to cluster metrics
+	// +optional
+	ViewMetrics *bool `json:"viewMetrics,omitempty"`
+
+	// ViewSensitive grants access to sensitive data
+	// +optional
+	ViewSensitive *bool `json:"viewSensitive,omitempty"`
+
+	// ViewCosts grants access to cost data
+	// +optional
+	ViewCosts *bool `json:"viewCosts,omitempty"`
+
+	// ViewSecrets grants access to secrets
+	// +optional
+	ViewSecrets *bool `json:"viewSecrets,omitempty"`
+
+	// ViewMetadata grants access to metadata
+	// +optional
+	ViewMetadata *bool `json:"viewMetadata,omitempty"`
+
+	// ViewAuditInfo grants access to audit information
+	// +optional
+	ViewAuditInfo *bool `json:"viewAuditInfo,omitempty"`
+}
+
 // MonitorAccessPolicySpec defines the desired state of MonitorAccessPolicy
 type MonitorAccessPolicySpec struct {
 	// Identity defines who this policy applies to
@@ -78,10 +109,6 @@ type PolicyAccess struct {
 type PolicyScope struct {
 	// Clusters defines cluster access rules
 	Clusters PolicyClusters `json:"clusters"`
-
-	// Restrictions defines global restrictions
-	// +optional
-	Restrictions *apiextensionsv1.JSON `json:"restrictions,omitempty"`
 }
 
 // PolicyClusters defines cluster-level access
@@ -103,7 +130,7 @@ type PolicyClusterRule struct {
 
 	// Permissions defines what actions are allowed
 	// +optional
-	Permissions map[string]bool `json:"permissions,omitempty"`
+	Permissions *PolicyPermissions `json:"permissions,omitempty"`
 
 	// Resources defines resource-level filtering
 	// +optional
@@ -129,35 +156,123 @@ type PolicyClusterSelector struct {
 type PolicyResources struct {
 	// Nodes defines node visibility and filters
 	// +optional
-	Nodes *ResourceConfig `json:"nodes,omitempty"`
+	Nodes *NodeResourceConfig `json:"nodes,omitempty"`
 
 	// Operators defines operator visibility and filters
 	// +optional
-	Operators *ResourceConfig `json:"operators,omitempty"`
+	Operators *OperatorResourceConfig `json:"operators,omitempty"`
 
 	// Namespaces defines namespace visibility and filters
 	// +optional
-	Namespaces *ResourceConfig `json:"namespaces,omitempty"`
+	Namespaces *NamespaceResourceConfig `json:"namespaces,omitempty"`
 
 	// Pods defines pod visibility and filters
 	// +optional
-	Pods *ResourceConfig `json:"pods,omitempty"`
+	Pods *PodResourceConfig `json:"pods,omitempty"`
 
 	// Custom defines filters for custom resource types keyed by resourceTypeName
 	// +optional
 	Custom map[string]CustomResourceConfig `json:"custom,omitempty"`
 }
 
-// ResourceConfig defines visibility and filters for a built-in resource type
-type ResourceConfig struct {
+// NodeResourceConfig defines visibility and filters for nodes
+type NodeResourceConfig struct {
 	// Visibility level
 	// +kubebuilder:validation:Enum=all;none;filtered
 	// +kubebuilder:default=all
 	Visibility string `json:"visibility,omitempty"`
 
-	// Filters defines the filter criteria
+	// Filters defines node filter criteria
 	// +optional
-	Filters *apiextensionsv1.JSON `json:"filters,omitempty"`
+	Filters *NodeFilters `json:"filters,omitempty"`
+}
+
+// NodeFilters defines filter criteria specific to nodes
+type NodeFilters struct {
+	// LabelSelector filters nodes by labels
+	// +optional
+	LabelSelector map[string]string `json:"labelSelector,omitempty"`
+
+	// HideMasters hides master/control-plane nodes
+	// +optional
+	HideMasters bool `json:"hideMasters,omitempty"`
+
+	// HideByLabels hides nodes matching specific label conditions
+	// +optional
+	HideByLabels *apiextensionsv1.JSON `json:"hideByLabels,omitempty"`
+}
+
+// OperatorResourceConfig defines visibility and filters for operators
+type OperatorResourceConfig struct {
+	// Visibility level
+	// +kubebuilder:validation:Enum=all;none;filtered
+	// +kubebuilder:default=all
+	Visibility string `json:"visibility,omitempty"`
+
+	// Filters defines operator filter criteria
+	// +optional
+	Filters *OperatorFilters `json:"filters,omitempty"`
+}
+
+// OperatorFilters defines filter criteria specific to operators
+type OperatorFilters struct {
+	// AllowedNamespaces restricts to operators in these namespaces (supports wildcards)
+	// +optional
+	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
+
+	// DeniedNamespaces excludes operators in these namespaces
+	// +optional
+	DeniedNamespaces []string `json:"deniedNamespaces,omitempty"`
+
+	// AllowedNames restricts to operators matching these names (supports wildcards)
+	// +optional
+	AllowedNames []string `json:"allowedNames,omitempty"`
+
+	// DeniedNames excludes operators matching these names
+	// +optional
+	DeniedNames []string `json:"deniedNames,omitempty"`
+}
+
+// NamespaceResourceConfig defines visibility and filters for namespaces
+type NamespaceResourceConfig struct {
+	// Visibility level
+	// +kubebuilder:validation:Enum=all;none;filtered
+	// +kubebuilder:default=all
+	Visibility string `json:"visibility,omitempty"`
+
+	// Filters defines namespace filter criteria
+	// +optional
+	Filters *NamespaceFilters `json:"filters,omitempty"`
+}
+
+// NamespaceFilters defines filter criteria specific to namespaces
+type NamespaceFilters struct {
+	// Allowed namespace patterns (supports wildcards)
+	// +optional
+	Allowed []string `json:"allowed,omitempty"`
+
+	// Denied namespace patterns
+	// +optional
+	Denied []string `json:"denied,omitempty"`
+}
+
+// PodResourceConfig defines visibility and filters for pods
+type PodResourceConfig struct {
+	// Visibility level
+	// +kubebuilder:validation:Enum=all;none;filtered
+	// +kubebuilder:default=all
+	Visibility string `json:"visibility,omitempty"`
+
+	// Filters defines pod filter criteria
+	// +optional
+	Filters *PodFilters `json:"filters,omitempty"`
+}
+
+// PodFilters defines filter criteria specific to pods
+type PodFilters struct {
+	// AllowedNamespaces restricts to pods in these namespaces (supports wildcards)
+	// +optional
+	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 }
 
 // CustomResourceConfig defines filter configuration for a custom resource type
@@ -206,11 +321,11 @@ type PatternFilter struct {
 type FieldFilterConfig struct {
 	// Allowed values or patterns
 	// +optional
-	Allowed []apiextensionsv1.JSON `json:"allowed,omitempty"`
+	Allowed []string `json:"allowed,omitempty"`
 
 	// Denied values or patterns
 	// +optional
-	Denied []apiextensionsv1.JSON `json:"denied,omitempty"`
+	Denied []string `json:"denied,omitempty"`
 
 	// Conditions defines operator-based filter conditions
 	// +optional

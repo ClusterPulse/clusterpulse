@@ -6,27 +6,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// parseFilterSpecs compiles literal values and pattern specifications.
-// patterns is [][2]string where [0]=original, [1]=regex.
-func parseFilterSpecs(literals []string, patterns [][2]string) (map[string]struct{}, []CompiledPattern) {
-	literalSet := make(map[string]struct{}, len(literals))
-	for _, l := range literals {
-		literalSet[l] = struct{}{}
-	}
-
-	var compiled []CompiledPattern
-	for _, spec := range patterns {
-		re, err := regexp.Compile(spec[1])
-		if err != nil {
-			logrus.Warnf("Invalid regex pattern '%s': %v", spec[1], err)
-			continue
-		}
-		compiled = append(compiled, CompiledPattern{Original: spec[0], Regexp: re})
-	}
-
-	return literalSet, compiled
-}
-
 // parseFilterSpecsFromAny handles the JSON-decoded format where patterns come as []any.
 func parseFilterSpecsFromAny(literals []any, patterns []any) (map[string]struct{}, []CompiledPattern) {
 	literalSet := make(map[string]struct{}, len(literals))

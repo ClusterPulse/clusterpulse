@@ -189,7 +189,6 @@ The `CompiledPolicy` struct uses snake_case JSON tags matching the Python `to_di
       }
     }
   }],
-  "global_restrictions": {},
   "not_before": null,
   "not_after": null,
   "audit_config": {"log_access": false, "require_reason": false},
@@ -213,20 +212,27 @@ The `Compiler` in `internal/controller/policy/compiler.go` mirrors the Python `P
 
 ### Built-in Resource Filters
 
-| Resource | Filter Key | Pattern Prefix |
-|----------|-----------|---------------|
-| Nodes | `filters.labelSelector`, `filters.hideMasters`, `filters.hideByLabels` | (none) |
-| Operators | `filters.allowedNamespaces/deniedNamespaces/allowedNames/deniedNames` | `ns:` / `name:` |
-| Namespaces | `filters.allowed/denied` | (none) |
-| Pods | `filters.allowedNamespaces` | (none) |
+| Resource | Config Struct | Filter Struct | Pattern Prefix |
+|----------|--------------|---------------|----------------|
+| Nodes | `NodeResourceConfig` | `NodeFilters` (LabelSelector, HideMasters, HideByLabels) | (none) |
+| Operators | `OperatorResourceConfig` | `OperatorFilters` (AllowedNamespaces, DeniedNamespaces, AllowedNames, DeniedNames) | `ns:` / `name:` |
+| Namespaces | `NamespaceResourceConfig` | `NamespaceFilters` (Allowed, Denied) | (none) |
+| Pods | `PodResourceConfig` | `PodFilters` (AllowedNamespaces) | (none) |
 
 ### Custom Resource Filters
 
-Custom resource filters support:
-- Namespace filtering (allowed/denied patterns)
-- Name filtering (allowed/denied patterns)
-- Field-based filters with operators: `equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `greaterThan`, `lessThan`, `in`, `notIn`, `matches`
-- Aggregation visibility rules (include/exclude lists)
+The `custom` field on `PolicyResources` is a `map[string]CustomResourceConfig` where each key must match a MetricSource's `spec.rbac.resourceTypeName`. Custom resources use implicit deny — only types explicitly listed in a policy are visible.
+
+| CRD Struct | Purpose |
+|------------|---------|
+| `CustomResourceConfig` | Top-level per-type config (visibility, filters, aggregations) |
+| `CustomResourceFilters` | Filter container (namespaces, names, fields) |
+| `PatternFilter` | Allowed/denied string patterns (shared with namespace/name filtering) |
+| `FieldFilterConfig` | Per-field allowed/denied patterns + operator conditions |
+| `FieldCondition` | Operator-based condition (Value is `apiextensionsv1.JSON` — polymorphic) |
+| `AggregationVisibility` | Include/exclude lists for aggregation names |
+
+Field filters can only reference fields listed in the MetricSource's `spec.rbac.filterableFields`. Supported condition operators: `equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `greaterThan`, `lessThan`, `in`, `notIn`, `matches`.
 
 ## Common Tasks
 

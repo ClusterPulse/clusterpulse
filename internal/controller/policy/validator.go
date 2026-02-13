@@ -10,40 +10,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// ValidatePolicy checks a policy's lifecycle validity and returns its status
-func ValidatePolicy(spec map[string]interface{}) (string, string) {
-	now := time.Now().UTC()
-
-	lifecycle, _ := spec["lifecycle"].(map[string]interface{})
-	if lifecycle != nil {
-		validity, _ := lifecycle["validity"].(map[string]interface{})
-		if validity != nil {
-			if nb, ok := validity["notBefore"].(string); ok && nb != "" {
-				notBefore, err := time.Parse(time.RFC3339, nb)
-				if err == nil && now.Before(notBefore) {
-					return types.PolicyStateInactive, "Policy not yet valid (starts at " + nb + ")"
-				}
-			}
-
-			if na, ok := validity["notAfter"].(string); ok && na != "" {
-				notAfter, err := time.Parse(time.RFC3339, na)
-				if err == nil && now.After(notAfter) {
-					return types.PolicyStateExpired, "Policy expired at " + na
-				}
-			}
-		}
-	}
-
-	access, _ := spec["access"].(map[string]interface{})
-	if access != nil {
-		if enabled, ok := access["enabled"].(bool); ok && !enabled {
-			return types.PolicyStateInactive, "Policy is disabled"
-		}
-	}
-
-	return types.PolicyStateActive, "Policy is active"
-}
-
 // ValidateCompiledPolicy checks validity from a compiled policy
 func ValidateCompiledPolicy(policy *types.CompiledPolicy) (string, string) {
 	now := time.Now().UTC()
