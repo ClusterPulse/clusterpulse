@@ -1,3 +1,4 @@
+- [PR & Release Workflow](workflow.md)
 - [Contribute to the API](api.md)
 - [Contribute to the Cluster Controller](cluster-controller.md)
 - [Contribute to the Policy Controller](policy-controller.md)

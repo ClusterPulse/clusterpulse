@@ -1,12 +1,11 @@
-# Release workflow - triggers on version tags
+# Release workflow - triggers when a release is published via GitHub UI
 # Only builds services that have changed since the last tag
 
 name: Release
 
 on:
-  push:
-    tags:
-      - '*.*.*'
+  release:
+    types: [published]
 
 env:
   REGISTRY: quay.io
@@ -158,60 +157,74 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
       - run: mike deploy --push --update-aliases ${{ github.ref_name }} latest
 
-  # Release summary
-  release-summary:
+  # Update the GitHub Release with build info
+  update-release:
     if: always()
     needs: [detect-changes, build-api, build-cluster-controller, deploy-docs]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Generate release summary
+      - uses: actions/checkout@v4
+
+      - name: Build release body and update release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "# Release Summary — ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** [\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          TAG="${{ github.ref_name }}"
 
-          echo "## Images" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Service | Status | Digest |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Build Summary"
+            echo ""
+            echo "**Triggered by:** ${{ github.actor }}"
+            echo "**Commit:** [\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})"
+            echo ""
+            echo "### Images"
+            echo ""
+            echo "| Service | Status | Digest |"
+            echo "|---------|--------|--------|"
 
-          # API
-          if [[ "${{ needs.detect-changes.outputs.api }}" != "true" ]]; then
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Skipped (no changes) | — |" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.build-api.result }}" == "success" ]]; then
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Pushed | \`${{ needs.build-api.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Failed | — |" >> $GITHUB_STEP_SUMMARY
-          fi
+            # API
+            if [[ "${{ needs.detect-changes.outputs.api }}" != "true" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Skipped (no changes) | — |"
+            elif [[ "${{ needs.build-api.result }}" == "success" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Pushed | \`${{ needs.build-api.outputs.digest }}\` |"
+            else
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Failed | — |"
+            fi
 
-          # Cluster Controller
-          if [[ "${{ needs.detect-changes.outputs.cluster-controller }}" != "true" ]]; then
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Skipped (no changes) | — |" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.build-cluster-controller.result }}" == "success" ]]; then
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Pushed | \`${{ needs.build-cluster-controller.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Failed | — |" >> $GITHUB_STEP_SUMMARY
-          fi
+            # Cluster Controller
+            if [[ "${{ needs.detect-changes.outputs.cluster-controller }}" != "true" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Skipped (no changes) | — |"
+            elif [[ "${{ needs.build-cluster-controller.result }}" == "success" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Pushed | \`${{ needs.build-cluster-controller.outputs.digest }}\` |"
+            else
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Failed | — |"
+            fi
 
-          echo "" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "### Tags"
+            echo ""
+            echo "All pushed images were tagged with:"
+            echo ""
+            echo "- \`v${TAG}\`"
+            echo "- \`sha-${GITHUB_SHA::7}\`"
+            echo "- \`latest\`"
+            echo ""
+            echo "### Documentation"
+            echo ""
+            if [[ "${{ needs.deploy-docs.result }}" == "success" ]]; then
+              echo "Docs deployed for version \`${TAG}\` (aliased to \`latest\`)."
+            else
+              echo "Docs deployment **failed**."
+            fi
+          } > release-body.md
 
-          # Tags pushed (from any image that was built)
-          echo "## Tags" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "All pushed images were tagged with:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- \`v${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`sha-${GITHUB_SHA::7}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          # Also write to step summary
+          cat release-body.md >> "$GITHUB_STEP_SUMMARY"
 
-          # Docs
-          echo "## Documentation" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ needs.deploy-docs.result }}" == "success" ]]; then
-            echo "Docs deployed successfully for version \`${{ github.ref_name }}\` (aliased to \`latest\`)." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "Docs deployment **failed**." >> $GITHUB_STEP_SUMMARY
-          fi
+          # Append build info to existing release body
+          EXISTING=$(gh release view "$TAG" --json body -q '.body')
+          SEPARATOR="---"
+          BODY=$(printf '%s\n\n%s\n\n%s' "$EXISTING" "$SEPARATOR" "$(cat release-body.md)")
+          gh release edit "$TAG" --notes "$BODY"
