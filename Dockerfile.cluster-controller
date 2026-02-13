@@ -22,7 +22,11 @@ COPY api/ ./api/
 COPY pkg/ ./pkg/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
-    -ldflags="-s -w" \
+    -ldflags="-s -w \
+    -X github.com/clusterpulse/cluster-controller/internal/version.Version=${VERSION} \
+    -X github.com/clusterpulse/cluster-controller/internal/version.GitCommit=${GIT_COMMIT} \
+    -X github.com/clusterpulse/cluster-controller/internal/version.GitTreeState=${GIT_TREE_STATE} \
+    -X github.com/clusterpulse/cluster-controller/internal/version.BuildDate=${BUILD_DATE}" \
     -o cluster-controller cmd/manager/main.go
 
 # Final stage
