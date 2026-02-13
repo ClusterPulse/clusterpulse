@@ -3,6 +3,10 @@ FROM --platform=$BUILDPLATFORM golang:1.25.1-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG GIT_TREE_STATE=unknown
+ARG BUILD_DATE=unknown
 
 WORKDIR /app
 
@@ -18,7 +22,11 @@ COPY api/ ./api/
 COPY pkg/ ./pkg/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
-    -ldflags="-s -w" \
+    -ldflags="-s -w \
+    -X github.com/clusterpulse/cluster-controller/internal/version.Version=${VERSION} \
+    -X github.com/clusterpulse/cluster-controller/internal/version.GitCommit=${GIT_COMMIT} \
+    -X github.com/clusterpulse/cluster-controller/internal/version.GitTreeState=${GIT_TREE_STATE} \
+    -X github.com/clusterpulse/cluster-controller/internal/version.BuildDate=${BUILD_DATE}" \
     -o clusterpulse-api cmd/api/main.go
 
 # Final stage

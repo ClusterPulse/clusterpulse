@@ -11,6 +11,7 @@ import (
 	policyctrl "github.com/clusterpulse/cluster-controller/internal/controller/policy"
 	registryctrl "github.com/clusterpulse/cluster-controller/internal/controller/registry"
 	redis "github.com/clusterpulse/cluster-controller/internal/store"
+	"github.com/clusterpulse/cluster-controller/internal/version"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -100,7 +101,8 @@ func main() {
 	logrus.WithFields(logrus.Fields{
 		"namespace": watchNamespace,
 		"logLevel":  logLevel,
-		"version":   "0.3.0",
+		"version":   version.Version,
+		"commit":    version.GitCommit,
 	}).Info("ClusterPulse Cluster Controller starting")
 
 	// Initialize Redis client

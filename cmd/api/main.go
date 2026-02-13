@@ -10,6 +10,7 @@ import (
 	"github.com/clusterpulse/cluster-controller/internal/api"
 	"github.com/clusterpulse/cluster-controller/internal/rbac"
 	store "github.com/clusterpulse/cluster-controller/internal/store"
+	"github.com/clusterpulse/cluster-controller/internal/version"
 	"github.com/sirupsen/logrus"
 )
 
@@ -34,7 +35,10 @@ func main() {
 		DisableColors:   false,
 	})
 
-	logrus.WithField("version", "0.3.0").Info("ClusterPulse API starting")
+	logrus.WithFields(logrus.Fields{
+		"version": version.Version,
+		"commit":  version.GitCommit,
+	}).Info("ClusterPulse API starting")
 
 	// Load configuration
 	cfg := api.LoadAPIConfig()

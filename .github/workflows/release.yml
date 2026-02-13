@@ -89,6 +89,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TREE_STATE=clean
+            BUILD_DATE=${{ github.event.release.published_at }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=min
@@ -130,6 +135,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TREE_STATE=clean
+            BUILD_DATE=${{ github.event.release.published_at }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=min
