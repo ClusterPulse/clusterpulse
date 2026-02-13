@@ -63,8 +63,8 @@ func (r *ClusterReconciler) getReconcileInterval(clusterConn *v1alpha1.ClusterCo
 		if specInterval >= 30 {
 			interval = specInterval
 		} else {
-			logrus.Debugf("Cluster %s requested interval %d, using minimum of 30",
-				clusterConn.Name, specInterval)
+			logrus.WithField("cluster", clusterConn.Name).Debugf("Requested interval %d, using minimum of 30",
+				specInterval)
 			interval = 30
 		}
 	}
@@ -191,11 +191,8 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	g, gctx := errgroup.WithContext(ctx)
 
 	var nodeMetrics []types.NodeMetrics
-	var clusterMetrics *types.ClusterMetrics
 	var clusterInfo map[string]interface{}
 	var operators []types.OperatorInfo
-	var resourceCollection *types.ResourceCollection
-	var namespaceList []string
 	var clusterOperators []types.ClusterOperatorInfo
 
 	// Node metrics
@@ -204,31 +201,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		nodeMetrics, err = clusterClient.GetNodeMetrics(gctx)
 		if err != nil {
 			return fmt.Errorf("failed to get node metrics: %w", err)
-		}
-		return nil
-	})
-
-	// Cluster metrics
-	g.Go(func() error {
-		var err error
-		clusterMetrics, err = clusterClient.GetClusterMetrics(gctx)
-		if err != nil {
-			return fmt.Errorf("failed to get cluster metrics: %w", err)
-		}
-		log.Debugf("Retrieved cluster metrics: %d namespaces, %d nodes",
-			clusterMetrics.Namespaces, clusterMetrics.Nodes)
-		return nil
-	})
-
-	// Explicit namespace collection as fallback
-	g.Go(func() error {
-		var err error
-		namespaceList, err = clusterClient.GetNamespaces(gctx)
-		if err != nil {
-			log.Debug("Failed to get namespaces directly")
-			// Non-critical, don't fail reconciliation
-		} else {
-			log.Debugf("Retrieved %d namespaces", len(namespaceList))
 		}
 		return nil
 	})
@@ -269,34 +241,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		return nil
 	})
 
-	// Collect detailed resources if enabled
-	if r.Config.ResourceCollection.Enabled {
-		g.Go(func() error {
-			var err error
-
-			// Use a shorter timeout for resource collection to prevent blocking
-			collectionCtx, cancel := context.WithTimeout(gctx, 10*time.Second)
-			defer cancel()
-
-			resourceCollection, err = clusterClient.GetResourceCollection(collectionCtx, r.Config.ResourceCollection)
-			if err != nil {
-				// Log but don't fail - this is supplementary data
-				log.Debug("Failed to collect detailed resources")
-				return nil // Don't fail reconciliation
-			}
-
-			if resourceCollection != nil {
-				log.Debugf("Collected resources: %d pods, %d deployments, %d services (took %dms)",
-					len(resourceCollection.Pods),
-					len(resourceCollection.Deployments),
-					len(resourceCollection.Services),
-					resourceCollection.CollectionTimeMs)
-			}
-
-			return nil
-		})
-	}
-
 	// Operators - check based on operator scan interval
 	g.Go(func() error {
 		// Check if we need to fetch operators based on the operator scan interval
@@ -330,27 +274,9 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		return err
 	}
 
-	// If cluster metrics namespace list is empty but direct collection succeeded, use that
-	if clusterMetrics != nil && len(clusterMetrics.NamespaceList) == 0 && len(namespaceList) > 0 {
-		log.Debug("Using directly collected namespaces")
-		clusterMetrics.NamespaceList = namespaceList
-		clusterMetrics.Namespaces = len(namespaceList)
-	}
-
 	// Store metrics in Redis
 	if err := r.RedisClient.StoreNodeMetrics(ctx, clusterConn.Name, nodeMetrics); err != nil {
 		log.WithError(err).Debug("Failed to store node metrics")
-	}
-
-	if err := r.RedisClient.StoreClusterMetrics(ctx, clusterConn.Name, clusterMetrics); err != nil {
-		log.WithError(err).Debug("Failed to store cluster metrics")
-	}
-
-	// Also explicitly store namespaces if we have them
-	if len(namespaceList) > 0 {
-		if err := r.RedisClient.StoreNamespaces(ctx, clusterConn.Name, namespaceList); err != nil {
-			log.WithError(err).Debug("Failed to store namespaces")
-		}
 	}
 
 	if clusterInfo != nil {
@@ -372,21 +298,14 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		}
 	}
 
-	// Store resource collection if collected
-	if resourceCollection != nil {
-		if err := r.RedisClient.StoreResourceCollection(ctx, clusterConn.Name, resourceCollection); err != nil {
-			log.WithError(err).Debug("Failed to store resource collection")
-		}
-	}
-
 	// Store cluster labels if present
 	if len(clusterConn.Spec.Labels) > 0 {
 		r.RedisClient.StoreClusterLabels(ctx, clusterConn.Name, clusterConn.Spec.Labels)
 	}
 
-	// Calculate health
-	health := r.calculateClusterHealth(clusterMetrics)
-	message := r.generateHealthMessage(clusterMetrics, health)
+	// Health: cluster is reachable and we have node/operator data
+	health := types.HealthHealthy
+	message := "Cluster is reachable"
 
 	// Update CRD status - use patch to avoid triggering reconciliation
 	originalClusterConn := clusterConn.DeepCopy()
@@ -395,9 +314,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	clusterConn.Status.Message = message
 	now := metav1.Now()
 	clusterConn.Status.LastSyncTime = &now
-	clusterConn.Status.Nodes = clusterMetrics.Nodes
-	clusterConn.Status.Namespaces = clusterMetrics.Namespaces
-
 	// Only patch if status actually changed
 	if !r.statusEqual(originalClusterConn.Status, clusterConn.Status) {
 		if err := r.Status().Patch(ctx, clusterConn, k8sclient.MergeFrom(originalClusterConn)); err != nil {
@@ -411,22 +327,12 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	// Publish event
 	r.RedisClient.PublishEvent("cluster.reconciled", clusterConn.Name, map[string]interface{}{
 		"health":       health,
-		"nodes":        clusterMetrics.Nodes,
-		"nodes_ready":  clusterMetrics.NodesReady,
-		"namespaces":   clusterMetrics.Namespaces,
 		"display_name": clusterConn.Spec.DisplayName,
 	})
 
 	// Log health status changes at Info level
 	if originalClusterConn.Status.Health != string(health) {
-		if health == types.HealthHealthy {
-			log.Infof("Cluster %s is healthy (%d nodes, %d namespaces)",
-				clusterConn.Name, clusterMetrics.Nodes, clusterMetrics.Namespaces)
-		} else if health == types.HealthDegraded {
-			log.Warnf("Cluster %s is degraded: %s", clusterConn.Name, message)
-		} else if health == types.HealthUnhealthy {
-			log.Errorf("Cluster %s is unhealthy: %s", clusterConn.Name, message)
-		}
+		log.Infof("Cluster %s health changed to %s: %s", clusterConn.Name, health, message)
 	}
 
 	return nil
@@ -436,9 +342,7 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 func (r *ClusterReconciler) statusEqual(a, b v1alpha1.ClusterConnectionStatus) bool {
 	return a.Phase == b.Phase &&
 		a.Health == b.Health &&
-		a.Message == b.Message &&
-		a.Nodes == b.Nodes &&
-		a.Namespaces == b.Namespaces
+		a.Message == b.Message
 }
 
 func (r *ClusterReconciler) getClusterClient(ctx context.Context, clusterConn *v1alpha1.ClusterConnection) (*cluster.ClusterClient, error) {
@@ -485,52 +389,6 @@ func (r *ClusterReconciler) getClusterClient(ctx context.Context, clusterConn *v
 	)
 }
 
-func (r *ClusterReconciler) calculateClusterHealth(metrics *types.ClusterMetrics) types.ClusterHealth {
-	if metrics.NodesNotReady > 0 {
-		notReadyRatio := float64(metrics.NodesNotReady) / float64(metrics.Nodes)
-		if notReadyRatio >= 0.5 {
-			return types.HealthUnhealthy
-		}
-		return types.HealthDegraded
-	}
-
-	if metrics.CPUUsagePercent > r.Config.CPUCriticalThreshold {
-		return types.HealthDegraded
-	}
-
-	if metrics.MemoryUsagePercent > r.Config.MemoryCriticalThreshold {
-		return types.HealthDegraded
-	}
-
-	return types.HealthHealthy
-}
-
-func (r *ClusterReconciler) generateHealthMessage(metrics *types.ClusterMetrics, health types.ClusterHealth) string {
-	if health == types.HealthHealthy {
-		return "Cluster is healthy"
-	}
-
-	var messages []string
-
-	if metrics.NodesNotReady > 0 {
-		messages = append(messages, fmt.Sprintf("%d nodes not ready", metrics.NodesNotReady))
-	}
-
-	if metrics.CPUUsagePercent > r.Config.CPUWarningThreshold {
-		messages = append(messages, fmt.Sprintf("High CPU usage: %.2f%%", metrics.CPUUsagePercent))
-	}
-
-	if metrics.MemoryUsagePercent > r.Config.MemoryWarningThreshold {
-		messages = append(messages, fmt.Sprintf("High memory usage: %.2f%%", metrics.MemoryUsagePercent))
-	}
-
-	if len(messages) > 0 {
-		return fmt.Sprintf("Issues: %s", messages[0])
-	}
-
-	return "Unknown issues"
-}
-
 func countAvailable(operators []types.ClusterOperatorInfo) int {
 	count := 0
 	for _, op := range operators {
@@ -559,7 +417,7 @@ func (r *ClusterReconciler) updateClusterStatus(ctx context.Context, name string
 	}
 
 	if err := r.RedisClient.StoreClusterStatus(ctx, name, status); err != nil {
-		logrus.WithError(err).Debug("Failed to update cluster status")
+		logrus.WithField("cluster", name).WithError(err).Debug("Failed to update cluster status")
 	}
 }
 

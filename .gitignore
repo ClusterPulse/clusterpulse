@@ -84,4 +84,4 @@ kubeconfig
 .tmp/
 
 # Build artifacts
-/openshift-cluster-monitor
+bin/

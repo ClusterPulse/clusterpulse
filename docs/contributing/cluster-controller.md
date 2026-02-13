@@ -237,8 +237,7 @@ ClusterConnection reconciliation controller. This is where the main cluster moni
 
 **When to edit:**
 - Changing reconciliation interval logic
-- Adding new metrics collection
-- Modifying health calculation
+- Modifying node metrics or operator collection
 - Changing status update logic
 
 **Reconciliation flow:**
@@ -248,25 +247,24 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request
     // 2. Handle deletion if needed
     // 3. Get cluster client from pool
     // 4. Test connection
-    // 5. Collect metrics in parallel (errgroup)
+    // 5. Collect data in parallel (errgroup)
     //    - Node metrics
-    //    - Cluster metrics
-    //    - Operators
-    //    - Resource collection (if enabled)
+    //    - Cluster info
+    //    - Operators (OLM)
     //    - ClusterOperators (OpenShift)
-    // 6. Store everything in Redis
-    // 7. Calculate health status
-    // 8. Update CRD status
-    // 9. Return with RequeueAfter for periodic reconciliation
-    
+    // 6. Store in Redis (node metrics, cluster info, operators, labels)
+    // 7. Update CRD status (health = healthy if reachable)
+    // 8. Return with RequeueAfter for periodic reconciliation
+
     return reconcile.Result{RequeueAfter: time.Duration(interval) * time.Second}, nil
 }
 ```
 
 **Critical points:**
 - Always returns `RequeueAfter` to ensure periodic reconciliation
-- Uses `errgroup` for parallel metric collection
-- Stores data in Python-compatible format in Redis
+- Uses `errgroup` for parallel data collection
+- Cluster-level aggregated metrics and resource collection are handled by MetricSource CRDs
+- Health is set to "healthy" when the cluster is reachable; connection failures set "unhealthy"
 - Updates status using `Patch` to avoid triggering reconciliation
 - Only logs at Info level for significant events
 
@@ -768,11 +766,10 @@ func Load() *Config {
 
 **Available config:**
 - `ReconciliationInterval` - How often to reconcile (default 30s)
+- `OperatorScanInterval` - How often to scan for operators (default 300s)
 - `ConnectTimeout` - Cluster connection timeout (default 10s)
 - `CacheTTL` - Redis cache TTL (default 600s)
 - `MetricsRetention` - How long to keep time series (default 3600s)
-- `ResourceCollection` - Resource collection limits and settings
-- Threshold values for health calculations
 
 #### `pkg/types/`
 **Shared type definitions that are used across the project.** This is the key distinction from `internal/` - types in `pkg/` can be imported by external packages.
@@ -1310,23 +1307,23 @@ Reconciliation is the core concept. The controller watches CRDs and reconciles t
                   │
                   ▼
 ┌─────────────────────────────────────────────────────┐
-│ 5. Collect metrics (parallel)                       │
-│    - Node metrics + cluster metrics + operators     │
-│    - Resource collection (if enabled)               │
-│    - ClusterOperators (OpenShift)                   │
+│ 5. Collect data (parallel via errgroup)             │
+│    - Node metrics                                   │
+│    - Cluster info                                   │
+│    - Operators (OLM) + ClusterOperators (OpenShift) │
 └─────────────────┬───────────────────────────────────┘
                   │
                   ▼
 ┌─────────────────────────────────────────────────────┐
-│ 6. Store in Redis (Python-compatible format)        │
-│    - Metrics, status, info, operators               │
+│ 6. Store in Redis                                   │
+│    - Node metrics, cluster info, operators, labels  │
 └─────────────────┬───────────────────────────────────┘
                   │
                   ▼
 ┌─────────────────────────────────────────────────────┐
-│ 7. Calculate health and update status               │
-│    - Update ClusterConnection.Status                │
-│    - Use Patch to avoid reconciliation trigger      │
+│ 7. Update status (healthy if reachable)             │
+│    - Patch ClusterConnection.Status                 │
+│    - Update Redis status                            │
 └─────────────────┬───────────────────────────────────┘
                   │
                   ▼
@@ -1522,96 +1519,9 @@ EOF
 
 ### Adding New Metrics Collection
 
-1. **Define the collection method in the client:**
+New metrics collection should be implemented as MetricSource CRDs rather than hard-coded in the cluster controller. See the MetricSource documentation for details on creating custom metric collectors.
 
-```go
-// internal/client/cluster/client.go
-
-func (c *ClusterClient) GetIngresses(ctx context.Context) ([]types.IngressInfo, error) {
-    c.updateLastUsed()
-    
-    var ingresses []types.IngressInfo
-    
-    err := c.circuitBreaker.Call(ctx, func(ctx context.Context) error {
-        ingressList, err := c.clientset.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
-        if err != nil {
-            return fmt.Errorf("failed to list ingresses: %w", err)
-        }
-        
-        for _, ing := range ingressList.Items {
-            ingresses = append(ingresses, types.IngressInfo{
-                Name:      ing.Name,
-                Namespace: ing.Namespace,
-                Hosts:     ing.Spec.Rules[0].Host,
-            })
-        }
-        
-        return nil
-    })
-    
-    return ingresses, err
-}
-```
-
-2. **Call it in the reconciler:**
-
-```go
-// internal/controller/cluster/cluster_controller.go
-
-func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v1alpha1.ClusterConnection) error {
-    // ... existing code
-    
-    // Add to errgroup
-    g.Go(func() error {
-        ingresses, err = clusterClient.GetIngresses(gctx)
-        if err != nil {
-            log.Debug("Failed to get ingresses")
-            return nil // Non-critical
-        }
-        return nil
-    })
-    
-    // After g.Wait()...
-}
-```
-
-3. **Store in Redis:**
-
-```go
-// internal/store/client.go
-
-func (c *Client) StoreIngresses(ctx context.Context, clusterName string, ingresses []types.IngressInfo) error {
-    // Convert to Python-compatible format
-    ingressList := make([]map[string]interface{}, len(ingresses))
-    for i, ing := range ingresses {
-        ingressList[i] = map[string]interface{}{
-            "name":      ing.Name,
-            "namespace": ing.Namespace,
-            "hosts":     ing.Hosts,
-        }
-    }
-    
-    data, err := json.Marshal(ingressList)
-    if err != nil {
-        return err
-    }
-    
-    key := fmt.Sprintf("cluster:%s:ingresses", clusterName)
-    return c.client.Set(ctx, key, string(data), time.Duration(c.config.CacheTTL)*time.Second).Err()
-}
-```
-
-4. **Call storage:**
-
-```go
-// Back in cluster_controller.go after g.Wait()
-
-if len(ingresses) > 0 {
-    if err := r.RedisClient.StoreIngresses(ctx, clusterConn.Name, ingresses); err != nil {
-        log.WithError(err).Debug("Failed to store ingresses")
-    }
-}
-```
+The cluster controller only collects foundational connection-level data: node metrics, cluster info, operators, and labels.
 
 ### Adding a New MetricSource Field Type
 
@@ -2568,13 +2478,14 @@ func (c *ClusterClient) GetNodeMetrics(ctx context.Context) ([]types.NodeMetrics
    ```
 
 6. **Failing reconciliation for non-critical operations:**
+   The cluster controller collects operators, cluster info, and ClusterOperators as non-critical data. Only node metrics are critical. Non-critical failures should be logged and skipped:
    ```go
    // ❌ Wrong - operators are optional
    operators, err := client.GetOperators(ctx)
    if err != nil {
        return err  // Fails entire reconciliation
    }
-   
+
    // ✅ Right - log and continue
    operators, err := client.GetOperators(ctx)
    if err != nil {
