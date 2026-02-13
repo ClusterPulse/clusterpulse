@@ -96,11 +96,7 @@ nav:
     - Policy Evaluation: concepts/policy-evaluation.md
   - References:
     - references/index.md
-    - CRDs:
-      - ClusterConnection: references/crds/clusterconnection.md
-      - MonitorAccessPolicy: references/crds/monitoraccesspolicy.md
-      - RegistryConnection: references/crds/registryconnection.md
-      - MetricSource: references/crds/metricsource.md
+    - CRD API Reference: references/crds.md
     #- API: reference/api/overview.md
   - Contributing:
     - contributing/index.md
