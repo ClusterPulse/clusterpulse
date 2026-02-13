@@ -29,6 +29,7 @@ jobs:
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           echo "tag=${PREV_TAG}" >> $GITHUB_OUTPUT
 
+      # Currently doesn't do much as these will both build pretty much every time
       - name: Detect changes
         uses: dorny/paths-filter@v3
         id: filter
@@ -37,9 +38,9 @@ jobs:
           filters: |
             api:
               - 'cmd/api/**'
-              - 'internal/api/**'
-              - 'internal/rbac/**'
-              - 'internal/store/**'
+              - 'internal/**'
+              - 'api/**'
+              - 'pkg/**'
               - 'go.mod'
               - 'go.sum'
               - 'Dockerfile.api'
