@@ -162,6 +162,17 @@ jobs:
         with:
           python-version: '3.x'
       - run: pip install mkdocs-material mike mkdocs-mermaid2-plugin
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Generate CRD reference docs
+        run: |
+          go install github.com/elastic/crd-ref-docs@v0.3.0
+          crd-ref-docs \
+            --source-path=api/v1alpha1 \
+            --config=docs/crd-ref-docs.yaml \
+            --renderer=markdown \
+            --output-path=docs/references/crds.md
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
