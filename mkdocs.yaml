@@ -104,6 +104,7 @@ nav:
     #- API: reference/api/overview.md
   - Contributing:
     - contributing/index.md
+    - PR & Release Workflow: contributing/workflow.md
     - API Development: contributing/api.md
     - Cluster Controller: contributing/cluster-controller.md
     - Policy Controller: contributing/policy-controller.md

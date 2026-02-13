@@ -1,0 +1,16 @@
+name: Require PR Label
+
+on:
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize]
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify PR has a changelog label
+        uses: mheap/github-action-required-labels@v5
+        with:
+          mode: minimum
+          count: 1
+          labels: "breaking-change, enhancement, feature, bug, fix, documentation"

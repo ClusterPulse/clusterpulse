@@ -3,13 +3,10 @@ FROM --platform=$BUILDPLATFORM golang:1.25.1-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-<<<<<<< HEAD
-=======
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG GIT_TREE_STATE=unknown
 ARG BUILD_DATE=unknown
->>>>>>> main
 
 WORKDIR /app
 
