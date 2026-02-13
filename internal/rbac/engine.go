@@ -155,13 +155,13 @@ func (e *Engine) AuthorizeCustomResource(ctx context.Context, principal *Princip
 		clusterRequest := &Request{Principal: principal, Action: action, Resource: clusterResource}
 		if e.Authorize(ctx, clusterRequest).Denied() {
 			return &CustomResourceDecision{
-				Decision:         DecisionDeny,
-				ResourceTypeName: typeName,
-				Cluster:          cluster,
-				Reason:           fmt.Sprintf("Access denied to cluster '%s'", cluster),
-				Filters:          NewCustomResourceFilter(),
+				Decision:           DecisionDeny,
+				ResourceTypeName:   typeName,
+				Cluster:            cluster,
+				Reason:             fmt.Sprintf("Access denied to cluster '%s'", cluster),
+				Filters:            NewCustomResourceFilter(),
 				DeniedAggregations: make(map[string]struct{}),
-				Permissions:      make(map[Action]struct{}),
+				Permissions:        make(map[Action]struct{}),
 			}
 		}
 	}
@@ -275,65 +275,6 @@ func (e *Engine) ClearCache(ctx context.Context, principal *Principal) int {
 		pattern = fmt.Sprintf("rbac:decision:%s:*", principal.CacheKey())
 	}
 	return e.cache.ClearDecisions(ctx, pattern)
-}
-
-// ClearCustomResourceCache clears custom resource cache.
-func (e *Engine) ClearCustomResourceCache(ctx context.Context, principal *Principal, typeName string) int {
-	if !e.cacheEnabled {
-		return 0
-	}
-	parts := []string{"rbac:custom"}
-	if principal != nil {
-		parts = append(parts, principal.CacheKey())
-	} else {
-		parts = append(parts, "*")
-	}
-	if typeName != "" {
-		parts = append(parts, typeName)
-	} else {
-		parts = append(parts, "*")
-	}
-	parts = append(parts, "*", "*") // cluster, action
-	pattern := ""
-	for i, p := range parts {
-		if i > 0 {
-			pattern += ":"
-		}
-		pattern += p
-	}
-	return e.cache.ClearCustomDecisions(ctx, pattern)
-}
-
-// CreateAnonymousPrincipal creates a principal for unauthenticated users.
-func (e *Engine) CreateAnonymousPrincipal() *Principal {
-	return &Principal{
-		Username:   "anonymous",
-		Email:      "anonymous@system",
-		Groups:     []string{"anonymous", "public"},
-		Attributes: map[string]any{"anonymous": true},
-	}
-}
-
-// AuthorizeAnonymous authorizes anonymous access.
-func (e *Engine) AuthorizeAnonymous(action Action, resource *Resource) *RBACDecision {
-	principal := e.CreateAnonymousPrincipal()
-	request := &Request{Principal: principal, Action: action, Resource: resource}
-
-	if action != ActionView || resource.Type != ResourceCluster {
-		return &RBACDecision{
-			Decision: DecisionDeny,
-			Request:  request,
-			Reason:   "Anonymous access only allows viewing cluster health",
-		}
-	}
-
-	return &RBACDecision{
-		Decision:    DecisionAllow,
-		Request:     request,
-		Reason:      "Anonymous access to public cluster information",
-		Permissions: map[Action]struct{}{ActionView: {}},
-		Metadata:    map[string]any{"anonymous": true, "restricted": true},
-	}
 }
 
 // =========================================================================

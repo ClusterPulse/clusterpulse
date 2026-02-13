@@ -77,11 +77,11 @@ var PermissionMapping = map[string]Action{
 
 // Principal represents the entity making the request.
 type Principal struct {
-	Username         string            `json:"username"`
-	Email            string            `json:"email,omitempty"`
-	Groups           []string          `json:"groups"`
-	IsServiceAccount bool              `json:"is_service_account"`
-	Attributes       map[string]any    `json:"attributes,omitempty"`
+	Username         string         `json:"username"`
+	Email            string         `json:"email,omitempty"`
+	Groups           []string       `json:"groups"`
+	IsServiceAccount bool           `json:"is_service_account"`
+	Attributes       map[string]any `json:"attributes,omitempty"`
 }
 
 // CacheKey returns a stable cache key for the principal.
@@ -201,14 +201,14 @@ func (f *Filter) Matches(item string, labels map[string]string) bool {
 
 // RBACDecision represents an authorization decision result.
 type RBACDecision struct {
-	Decision        Decision                    `json:"decision"`
-	Request         *Request                    `json:"-"`
-	Reason          string                      `json:"reason"`
-	Filters         map[ResourceType]*Filter    `json:"-"`
-	Permissions     map[Action]struct{}         `json:"-"`
-	Metadata        map[string]any              `json:"metadata,omitempty"`
-	AppliedPolicies []string                    `json:"applied_policies,omitempty"`
-	Cached          bool                        `json:"cached,omitempty"`
+	Decision        Decision                 `json:"decision"`
+	Request         *Request                 `json:"-"`
+	Reason          string                   `json:"reason"`
+	Filters         map[ResourceType]*Filter `json:"-"`
+	Permissions     map[Action]struct{}      `json:"-"`
+	Metadata        map[string]any           `json:"metadata,omitempty"`
+	AppliedPolicies []string                 `json:"applied_policies,omitempty"`
+	Cached          bool                     `json:"cached,omitempty"`
 }
 
 // Allowed returns true if decision allows access.
@@ -237,35 +237,35 @@ func (d *RBACDecision) GetFilter(rt ResourceType) *Filter {
 
 // FieldFilter holds allowed/denied literals and patterns for a single field.
 type FieldFilter struct {
-	AllowedLiterals  map[string]struct{}
-	AllowedPatterns  []CompiledPattern
-	DeniedLiterals   map[string]struct{}
-	DeniedPatterns   []CompiledPattern
+	AllowedLiterals map[string]struct{}
+	AllowedPatterns []CompiledPattern
+	DeniedLiterals  map[string]struct{}
+	DeniedPatterns  []CompiledPattern
 }
 
 // CustomResourceFilter supports namespace, name, and field-based filtering.
 type CustomResourceFilter struct {
-	Visibility              Visibility
-	NamespaceLiterals       map[string]struct{}
-	NamespacePatterns       []CompiledPattern
+	Visibility               Visibility
+	NamespaceLiterals        map[string]struct{}
+	NamespacePatterns        []CompiledPattern
 	NamespaceExcludeLiterals map[string]struct{}
 	NamespaceExcludePatterns []CompiledPattern
-	NameLiterals            map[string]struct{}
-	NamePatterns            []CompiledPattern
-	NameExcludeLiterals     map[string]struct{}
-	NameExcludePatterns     []CompiledPattern
-	FieldFilters            map[string]*FieldFilter
+	NameLiterals             map[string]struct{}
+	NamePatterns             []CompiledPattern
+	NameExcludeLiterals      map[string]struct{}
+	NameExcludePatterns      []CompiledPattern
+	FieldFilters             map[string]*FieldFilter
 }
 
 // NewCustomResourceFilter creates a CustomResourceFilter with defaults.
 func NewCustomResourceFilter() *CustomResourceFilter {
 	return &CustomResourceFilter{
-		Visibility:              VisibilityAll,
-		NamespaceLiterals:       make(map[string]struct{}),
+		Visibility:               VisibilityAll,
+		NamespaceLiterals:        make(map[string]struct{}),
 		NamespaceExcludeLiterals: make(map[string]struct{}),
-		NameLiterals:            make(map[string]struct{}),
-		NameExcludeLiterals:     make(map[string]struct{}),
-		FieldFilters:            make(map[string]*FieldFilter),
+		NameLiterals:             make(map[string]struct{}),
+		NameExcludeLiterals:      make(map[string]struct{}),
+		FieldFilters:             make(map[string]*FieldFilter),
 	}
 }
 
@@ -401,11 +401,6 @@ type CustomResourceDecision struct {
 	AppliedPolicies     []string
 	Metadata            map[string]any
 	Cached              bool
-}
-
-// Allowed returns true if decision allows access.
-func (d *CustomResourceDecision) Allowed() bool {
-	return d.Decision == DecisionAllow || d.Decision == DecisionPartial
 }
 
 // Denied returns true if decision denies access.

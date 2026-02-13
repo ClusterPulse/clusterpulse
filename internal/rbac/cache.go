@@ -26,9 +26,6 @@ func NewCache(redis *goredis.Client, ttlSeconds int) *Cache {
 	}
 }
 
-// Enabled returns whether caching is active.
-func (c *Cache) Enabled() bool { return c.enabled }
-
 // --- Standard Decision Cache ---
 
 // GetDecision retrieves a cached standard RBAC decision.
@@ -168,13 +165,13 @@ func (c *Cache) GetCustomDecision(ctx context.Context, key string) *CustomResour
 	}
 
 	d := &CustomResourceDecision{
-		Decision:         Decision(strVal(raw, "decision")),
-		ResourceTypeName: strVal(raw, "resource_type_name"),
-		Cluster:          strVal(raw, "cluster"),
-		Reason:           strVal(raw, "reason"),
-		Permissions:      make(map[Action]struct{}),
+		Decision:           Decision(strVal(raw, "decision")),
+		ResourceTypeName:   strVal(raw, "resource_type_name"),
+		Cluster:            strVal(raw, "cluster"),
+		Reason:             strVal(raw, "reason"),
+		Permissions:        make(map[Action]struct{}),
 		DeniedAggregations: make(map[string]struct{}),
-		Metadata:         mapVal(raw, "metadata"),
+		Metadata:           mapVal(raw, "metadata"),
 	}
 
 	if perms, ok := raw["permissions"].([]any); ok {
@@ -240,8 +237,8 @@ func (c *Cache) SetCustomDecision(ctx context.Context, key string, d *CustomReso
 	}
 
 	data := map[string]any{
-		"decision":              string(d.Decision),
-		"resource_type_name":    d.ResourceTypeName,
+		"decision":             string(d.Decision),
+		"resource_type_name":   d.ResourceTypeName,
 		"cluster":              d.Cluster,
 		"reason":               d.Reason,
 		"permissions":          perms,
@@ -259,11 +256,6 @@ func (c *Cache) SetCustomDecision(ctx context.Context, key string, d *CustomReso
 	if err := c.redis.SetEX(ctx, key, string(raw), c.ttl).Err(); err != nil {
 		logrus.Debugf("Custom cache storage failed: %v", err)
 	}
-}
-
-// ClearCustomDecisions clears custom resource cache matching a pattern.
-func (c *Cache) ClearCustomDecisions(ctx context.Context, pattern string) int {
-	return c.scanAndDelete(ctx, pattern)
 }
 
 // --- Internal helpers ---

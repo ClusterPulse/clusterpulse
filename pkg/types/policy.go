@@ -21,7 +21,6 @@ type CompiledPolicy struct {
 	ServiceAccounts      []string                  `json:"service_accounts"`
 	DefaultClusterAccess string                    `json:"default_cluster_access"`
 	ClusterRules         []CompiledClusterRule     `json:"cluster_rules"`
-	GlobalRestrictions   map[string]interface{}    `json:"global_restrictions"`
 	NotBefore            *string                   `json:"not_before"`
 	NotAfter             *string                   `json:"not_after"`
 	AuditConfig          map[string]bool           `json:"audit_config"`

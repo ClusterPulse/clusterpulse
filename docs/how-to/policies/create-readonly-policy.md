@@ -38,9 +38,6 @@ spec:
           permissions:
             view: true
             viewMetrics: true
-            exec: false
-            portForward: false
-            logs: false
 ```
 
 Apply the policy:

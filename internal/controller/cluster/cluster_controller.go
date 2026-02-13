@@ -285,7 +285,7 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		}
 	}
 
-	if operators != nil && len(operators) > 0 {
+	if len(operators) > 0 {
 		if err := r.RedisClient.StoreOperators(ctx, clusterConn.Name, operators); err != nil {
 			log.WithError(err).Debug("Failed to store operators")
 		}
