@@ -178,10 +178,92 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
       - run: mike deploy --push --update-aliases ${{ github.ref_name }} latest
 
+  # Update operator repo with new image tags and CRDs
+  update-operator:
+    needs: [build-api, build-cluster-controller]
+    if: >-
+      !cancelled() &&
+      needs.build-api.result != 'failure' &&
+      needs.build-cluster-controller.result != 'failure' &&
+      (needs.build-api.result == 'success' || needs.build-cluster-controller.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate deployer token
+        id: deployer-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYER_APP_ID }}
+          private-key: ${{ secrets.DEPLOYER_APP_PRIVATE_KEY }}
+          owner: ClusterPulse
+          repositories: operator
+
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+        with:
+          path: main-repo
+
+      - name: Checkout operator repo
+        uses: actions/checkout@v4
+        with:
+          repository: ClusterPulse/operator
+          token: ${{ steps.deployer-token.outputs.token }}
+          path: operator-repo
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: main-repo/go.mod
+
+      - name: Update images and generate CRDs
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VALUES="operator-repo/helm-charts/clusterpulse/values.yaml"
+          KUSTOMIZATION="operator-repo/config/crd/kustomization.yaml"
+
+          # Update image tags
+          sed -i "s|image: quay.io/clusterpulse/api:.*|image: quay.io/clusterpulse/api:${VERSION}|" "$VALUES"
+          sed -i "s|image: quay.io/clusterpulse/cluster-controller:.*|image: quay.io/clusterpulse/cluster-controller:${VERSION}|" "$VALUES"
+
+          # Generate CRDs from Go types
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+          controller-gen crd paths="./main-repo/api/v1alpha1/..." output:crd:dir=operator-repo/config/crd/bases
+
+          # Add any new CRDs to kustomization.yaml
+          for crd in operator-repo/config/crd/bases/*.yaml; do
+            filename="bases/$(basename "$crd")"
+            if ! grep -qF "$filename" "$KUSTOMIZATION"; then
+              sed -i "/# +kubebuilder:scaffold:crdkustomizeresource/i - ${filename}" "$KUSTOMIZATION"
+            fi
+          done
+
+      - name: Create pull request
+        env:
+          VERSION: ${{ github.ref_name }}
+          GH_TOKEN: ${{ steps.deployer-token.outputs.token }}
+        working-directory: operator-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="release/${VERSION}"
+          git checkout -b "$BRANCH"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update images and CRDs for ${VERSION}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "ClusterPulse release ${VERSION}" \
+            --body "Automated update of image tags and CRDs for release ${VERSION}." \
+            --base main
+
   # Update the GitHub Release with build info
   update-release:
     if: always()
-    needs: [detect-changes, build-api, build-cluster-controller, deploy-docs]
+    needs: [detect-changes, build-api, build-cluster-controller, deploy-docs, update-operator]
     runs-on: ubuntu-latest
     permissions:
       contents: write
