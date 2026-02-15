@@ -10,6 +10,7 @@ import (
 	"github.com/clusterpulse/cluster-controller/internal/client/cluster"
 	"github.com/clusterpulse/cluster-controller/internal/client/pool"
 	"github.com/clusterpulse/cluster-controller/internal/config"
+	"github.com/clusterpulse/cluster-controller/internal/ingester"
 	"github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/clusterpulse/cluster-controller/pkg/types"
 	"github.com/sirupsen/logrus"
@@ -21,6 +22,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -31,6 +34,7 @@ type ClusterReconciler struct {
 	RedisClient       *redis.Client
 	Config            *config.Config
 	WatchNamespace    string
+	Ingester          *ingester.Server
 	clientPool        *pool.ClientPool
 	lastOperatorFetch map[string]time.Time // Track last operator fetch time per cluster
 }
@@ -40,13 +44,20 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.clientPool = pool.NewClientPool(30 * time.Minute)
 	r.lastOperatorFetch = make(map[string]time.Time)
 
-	// Build the controller without predicates that might interfere with reconciliation
+	// Only reconcile on spec changes (generation bump) or creation/deletion.
+	// Status-only patches do not increment generation, so they won't re-trigger.
+	// Periodic reconciliation still works via RequeueAfter.
+	pred := predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+		},
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.ClusterConnection{}).
+		WithEventFilter(pred).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 3,
-			// Add a reconcile time to ensure periodic reconciliation
-			// This is a workaround for the RequeueAfter issue
 		}).
 		Complete(r)
 }
@@ -105,7 +116,49 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request
 
 	log.Debug("Starting reconciliation")
 
-	// Reconcile the cluster
+	// For push-mode clusters, update collector status and skip pull-based collection
+	// if the collector is actively connected.
+	if clusterConn.Spec.CollectionMode == "push" && r.Ingester != nil {
+		connected, lastHeartbeat, ver := r.Ingester.GetConnectionInfo(clusterConn.Name)
+
+		// Only patch CollectorStatus if it actually changed
+		cs := clusterConn.Status.CollectorStatus
+		statusChanged := cs == nil ||
+			cs.Connected != connected ||
+			cs.Version != ver
+
+		if statusChanged {
+			originalClusterConn := clusterConn.DeepCopy()
+			if clusterConn.Status.CollectorStatus == nil {
+				clusterConn.Status.CollectorStatus = &v1alpha1.CollectorAgentStatus{}
+			}
+			clusterConn.Status.CollectorStatus.Connected = connected
+			clusterConn.Status.CollectorStatus.Version = ver
+			if !lastHeartbeat.IsZero() {
+				hb := metav1.NewTime(lastHeartbeat)
+				clusterConn.Status.CollectorStatus.LastHeartbeat = &hb
+			}
+
+			if err := r.Status().Patch(ctx, clusterConn, k8sclient.MergeFrom(originalClusterConn)); err != nil {
+				log.WithError(err).Debug("Failed to patch collector status")
+			}
+		}
+
+		if connected {
+			log.Debug("Push-mode collector connected, skipping pull-based collection")
+			return reconcile.Result{RequeueAfter: time.Duration(interval) * time.Second}, nil
+		}
+
+		// Collector not connected — ensure it's deployed, then wait
+		if err := r.ensureCollectorDeployed(ctx, clusterConn); err != nil {
+			log.WithError(err).Warn("Failed to deploy collector agent")
+		}
+
+		log.Debug("Push-mode collector not yet connected, waiting for connection")
+		return reconcile.Result{RequeueAfter: time.Duration(interval) * time.Second}, nil
+	}
+
+	// Reconcile the cluster (pull-based)
 	if err := r.reconcileCluster(ctx, clusterConn); err != nil {
 		log.WithError(err).Error("Failed to reconcile cluster")
 

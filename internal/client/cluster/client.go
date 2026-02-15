@@ -77,6 +77,11 @@ func NewClusterClient(name, endpoint, token string, caCert []byte) (*ClusterClie
 	}, nil
 }
 
+// DynamicClient returns the underlying dynamic.Interface for direct resource operations.
+func (c *ClusterClient) DynamicClient() dynamic.Interface {
+	return c.dynamicClient
+}
+
 // TestConnection tests the connection to the cluster
 func (c *ClusterClient) TestConnection(ctx context.Context) error {
 	return c.circuitBreaker.Call(ctx, func(ctx context.Context) error {

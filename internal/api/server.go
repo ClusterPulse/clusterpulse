@@ -50,6 +50,11 @@ func NewServer(cfg *APIConfig, s *store.Client, engine *rbac.Engine) *Server {
 	regH := NewRegistryHandler(s)
 	customH := NewCustomTypeHandler(s, engine)
 
+	var historyH *HistoryHandler
+	if cfg.VMEnabled {
+		historyH = NewHistoryHandler(cfg.VMEndpoint, engine)
+	}
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Auth routes (mixed auth requirements)
 		r.Route("/auth", func(r chi.Router) {
@@ -82,6 +87,12 @@ func NewServer(cfg *APIConfig, s *store.Client, engine *rbac.Engine) *Server {
 					r.Get("/alerts", clusterH.GetClusterAlerts)
 					r.Get("/events", clusterH.GetClusterEvents)
 					r.Get("/custom/{type}", clusterH.GetCustomResources)
+
+					// History endpoints (require VictoriaMetrics)
+					if historyH != nil {
+						r.Get("/metrics/history", historyH.GetClusterMetricsHistory)
+						r.Get("/nodes/{node}/metrics/history", historyH.GetNodeMetricsHistory)
+					}
 				})
 			})
 

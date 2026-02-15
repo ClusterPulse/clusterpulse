@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/pkg/types"
@@ -87,6 +88,15 @@ func (c *Client) GetCompiledMetricSource(ctx context.Context, namespace, name st
 	}
 
 	return &source, nil
+}
+
+// GetCompiledMetricSourceByID retrieves a compiled MetricSource by its "namespace/name" ID.
+func (c *Client) GetCompiledMetricSourceByID(ctx context.Context, id string) (*types.CompiledMetricSource, error) {
+	parts := strings.SplitN(id, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid metric source ID: %s", id)
+	}
+	return c.GetCompiledMetricSource(ctx, parts[0], parts[1])
 }
 
 // DeleteMetricSource removes a MetricSource and all its associated data

@@ -29,6 +29,14 @@ type Config struct {
 	GroupCacheTTL            int
 	MaxPoliciesPerUser       int
 	PolicyValidationInterval int
+
+	// Ingester Settings
+	IngesterEnabled bool
+	IngesterPort    int
+
+	// VictoriaMetrics Settings
+	VMEnabled  bool
+	VMEndpoint string
 }
 
 // Load loads configuration from environment variables
@@ -50,6 +58,14 @@ func Load() *Config {
 		GroupCacheTTL:            getEnvIntWithMin("GROUP_CACHE_TTL", 300, 60),
 		MaxPoliciesPerUser:       getEnvIntWithMin("MAX_POLICIES_PER_USER", 100, 1),
 		PolicyValidationInterval: getEnvIntWithMin("POLICY_VALIDATION_INTERVAL", 300, 60),
+
+		// Ingester Configuration
+		IngesterEnabled: getEnvBool("INGESTER_ENABLED", true),
+		IngesterPort:    getEnvIntWithMin("INGESTER_PORT", 9443, 1024),
+
+		// VictoriaMetrics Configuration
+		VMEnabled:  getEnvBool("VM_ENABLED", false),
+		VMEndpoint: getEnv("VM_ENDPOINT", "http://victoriametrics:8428"),
 	}
 
 	// Only log essential configuration at Info level
@@ -80,6 +96,13 @@ func getEnvInt(key string, defaultValue int) int {
 		} else {
 			logrus.Debugf("Invalid integer value for %s: %s, using default %d", key, value, defaultValue)
 		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		return value == "true" || value == "1" || value == "yes"
 	}
 	return defaultValue
 }
