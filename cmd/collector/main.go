@@ -11,6 +11,7 @@ import (
 	"github.com/clusterpulse/cluster-controller/internal/version"
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
@@ -54,7 +55,12 @@ func main() {
 		logrus.WithError(err).Fatal("Failed to create dynamic client")
 	}
 
-	agent := collector.NewAgent(cfg, dynamicClient)
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		logrus.WithError(err).Fatal("Failed to create kubernetes clientset")
+	}
+
+	agent := collector.NewAgent(cfg, dynamicClient, clientset)
 
 	// Run with signal handling
 	ctx, cancel := signal.NotifyContext(

@@ -68,6 +68,18 @@ func (w *VMWriter) WriteNodeMetrics(ctx context.Context, cluster string, nodes [
 	w.send(ctx, lines)
 }
 
+// WriteCustomResourceMetrics sends custom resource aggregation values to VictoriaMetrics.
+func (w *VMWriter) WriteCustomResourceMetrics(ctx context.Context, cluster, sourceID string, aggregations map[string]float64) {
+	ts := time.Now().UnixMilli()
+	var lines []string
+	for name, value := range aggregations {
+		metric := fmt.Sprintf("clusterpulse_custom_resource_%s", name)
+		line := fmt.Sprintf(`%s{cluster="%s",source="%s"} %v %d`, metric, cluster, sourceID, value, ts)
+		lines = append(lines, line)
+	}
+	w.send(ctx, lines)
+}
+
 func formatLine[T int | int32 | int64 | float64](metric, cluster, node string, value T, ts int64) string {
 	labels := fmt.Sprintf(`cluster="%s"`, cluster)
 	if node != "" {
@@ -100,5 +112,8 @@ func (w *VMWriter) send(ctx context.Context, lines []string) {
 
 	if resp.StatusCode >= 300 {
 		logrus.WithField("status", resp.StatusCode).Debug("VictoriaMetrics write returned non-2xx")
+		return
 	}
+
+	logrus.WithField("lines", len(lines)).Debug("Wrote metrics to VictoriaMetrics")
 }

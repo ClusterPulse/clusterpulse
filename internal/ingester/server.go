@@ -41,6 +41,9 @@ func NewServer(cfg *config.Config, redisClient *redis.Client) *Server {
 	var vmw *VMWriter
 	if cfg.VMEnabled {
 		vmw = NewVMWriter(cfg.VMEndpoint)
+		logrus.WithField("endpoint", cfg.VMEndpoint).Info("VictoriaMetrics writer enabled")
+	} else {
+		logrus.Info("VictoriaMetrics writer disabled (VM_ENABLED not set)")
 	}
 
 	s := &Server{

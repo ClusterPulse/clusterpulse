@@ -11,6 +11,7 @@ import (
 	mscollector "github.com/clusterpulse/cluster-controller/internal/metricsource/collector"
 	"github.com/clusterpulse/cluster-controller/internal/version"
 	"github.com/clusterpulse/cluster-controller/pkg/types"
+	"github.com/clusterpulse/cluster-controller/pkg/utils"
 	pb "github.com/clusterpulse/cluster-controller/proto/collectorpb"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
@@ -19,7 +20,10 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
 
 // Agent is the collector agent that runs on managed clusters.
@@ -28,8 +32,9 @@ type Agent struct {
 	config  *Config
 	collect *mscollector.Collector
 
-	// K8s dynamic client for in-cluster collection
+	// K8s clients for in-cluster collection
 	dynamicClient dynamic.Interface
+	clientset     kubernetes.Interface
 
 	// gRPC connection
 	conn   *grpc.ClientConn
@@ -46,11 +51,12 @@ type Agent struct {
 }
 
 // NewAgent creates a new collector agent.
-func NewAgent(cfg *Config, dynamicClient dynamic.Interface) *Agent {
+func NewAgent(cfg *Config, dynamicClient dynamic.Interface, clientset kubernetes.Interface) *Agent {
 	return &Agent{
 		config:        cfg,
 		collect:       mscollector.NewCollector(),
 		dynamicClient: dynamicClient,
+		clientset:     clientset,
 		buffer:        NewBuffer(cfg.BufferSize),
 		startTime:     time.Now(),
 	}
@@ -249,6 +255,15 @@ func (a *Agent) collectMetrics(ctx context.Context) (*pb.MetricsBatch, error) {
 		CollectedAt: timestamppb.Now(),
 	}
 
+	// Collect cluster and node metrics
+	clusterMetrics, nodeMetrics, err := a.collectClusterAndNodeMetrics(ctx)
+	if err != nil {
+		logrus.WithError(err).Warn("Failed to collect cluster/node metrics")
+	} else {
+		batch.ClusterMetrics = clusterMetrics
+		batch.NodeMetrics = nodeMetrics
+	}
+
 	// Collect custom resources from MetricSources
 	a.mu.RLock()
 	sources := a.sources
@@ -292,6 +307,178 @@ func (a *Agent) collectMetrics(ctx context.Context) (*pb.MetricsBatch, error) {
 	}
 
 	return batch, nil
+}
+
+func (a *Agent) collectClusterAndNodeMetrics(ctx context.Context) (*pb.ClusterMetrics, []*pb.NodeMetrics, error) {
+	nodes, err := a.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list nodes: %w", err)
+	}
+
+	pods, err := a.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	// Group pods by node
+	podsByNode := make(map[string][]corev1.Pod)
+	for _, pod := range pods.Items {
+		if pod.Spec.NodeName != "" {
+			podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
+		}
+	}
+
+	cm := &pb.ClusterMetrics{}
+	var pbNodes []*pb.NodeMetrics
+
+	for _, node := range nodes.Items {
+		nm := a.extractNodeMetrics(&node, podsByNode[node.Name])
+		pbNodes = append(pbNodes, nm)
+
+		// Aggregate into cluster metrics
+		if nm.Status == string(types.NodeReady) {
+			cm.NodesReady++
+		} else {
+			cm.NodesNotReady++
+		}
+		cm.CpuCapacity += nm.CpuCapacity
+		cm.CpuAllocatable += nm.CpuAllocatable
+		cm.CpuRequested += nm.CpuRequested
+		cm.MemoryCapacity += nm.MemoryCapacity
+		cm.MemoryAllocatable += nm.MemoryAllocatable
+		cm.MemoryRequested += nm.MemoryRequested
+		cm.StorageCapacity += nm.StorageCapacity
+		cm.Pods += nm.PodsTotal
+		cm.PodsRunning += nm.PodsRunning
+		cm.PodsPending += nm.PodsPending
+		cm.PodsFailed += nm.PodsFailed
+	}
+
+	cm.Nodes = int32(len(nodes.Items))
+	if cm.CpuAllocatable > 0 {
+		cm.CpuUsagePercent = (cm.CpuRequested / cm.CpuAllocatable) * 100
+	}
+	if cm.MemoryAllocatable > 0 {
+		cm.MemoryUsagePercent = float64(cm.MemoryRequested) / float64(cm.MemoryAllocatable) * 100
+	}
+
+	// Namespaces
+	namespaces, err := a.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logrus.WithError(err).Debug("Failed to list namespaces")
+	} else {
+		cm.Namespaces = int32(len(namespaces.Items))
+		for _, ns := range namespaces.Items {
+			cm.NamespaceList = append(cm.NamespaceList, ns.Name)
+		}
+	}
+
+	// Workload counts
+	if deps, err := a.clientset.AppsV1().Deployments("").List(ctx, metav1.ListOptions{}); err == nil {
+		cm.Deployments = int32(len(deps.Items))
+	}
+	if sts, err := a.clientset.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{}); err == nil {
+		cm.Statefulsets = int32(len(sts.Items))
+	}
+	if ds, err := a.clientset.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{}); err == nil {
+		cm.Daemonsets = int32(len(ds.Items))
+	}
+	if svcs, err := a.clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{}); err == nil {
+		cm.Services = int32(len(svcs.Items))
+	}
+	if pvcs, err := a.clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{}); err == nil {
+		cm.Pvcs = int32(len(pvcs.Items))
+	}
+
+	return cm, pbNodes, nil
+}
+
+func (a *Agent) extractNodeMetrics(node *corev1.Node, pods []corev1.Pod) *pb.NodeMetrics {
+	nm := &pb.NodeMetrics{
+		Name:   node.Name,
+		Labels: node.Labels,
+	}
+
+	// Roles
+	for label := range node.Labels {
+		if len(label) > 23 && label[:23] == "node-role.kubernetes.io/" {
+			nm.Roles = append(nm.Roles, label[23:])
+		}
+	}
+
+	// Status from conditions
+	nm.Status = string(types.NodeUnknown)
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == corev1.NodeReady {
+			if condition.Status == corev1.ConditionTrue {
+				nm.Status = string(types.NodeReady)
+			} else {
+				nm.Status = string(types.NodeNotReady)
+			}
+		}
+	}
+	if node.Spec.Unschedulable {
+		nm.Status = string(types.NodeSchedulingDisabled)
+	}
+
+	// Capacity & allocatable
+	nm.CpuCapacity = utils.ParseCPU(node.Status.Capacity.Cpu().String())
+	nm.MemoryCapacity = utils.ParseMemory(node.Status.Capacity.Memory().String())
+	nm.StorageCapacity = utils.ParseMemory(node.Status.Capacity.StorageEphemeral().String())
+	nm.PodsCapacity = int32(node.Status.Capacity.Pods().Value())
+	nm.CpuAllocatable = utils.ParseCPU(node.Status.Allocatable.Cpu().String())
+	nm.MemoryAllocatable = utils.ParseMemory(node.Status.Allocatable.Memory().String())
+	nm.StorageAllocatable = utils.ParseMemory(node.Status.Allocatable.StorageEphemeral().String())
+	nm.PodsAllocatable = int32(node.Status.Allocatable.Pods().Value())
+
+	// Pod counts and resource requests
+	var cpuRequested float64
+	var memoryRequested int64
+	podsByPhase := make(map[corev1.PodPhase]int32)
+	for _, pod := range pods {
+		podsByPhase[pod.Status.Phase]++
+		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending {
+			for _, container := range pod.Spec.Containers {
+				if container.Resources.Requests != nil {
+					cpuRequested += utils.ParseCPU(container.Resources.Requests.Cpu().String())
+					memoryRequested += utils.ParseMemory(container.Resources.Requests.Memory().String())
+				}
+			}
+		}
+	}
+	nm.CpuRequested = cpuRequested
+	nm.MemoryRequested = memoryRequested
+	nm.PodsRunning = podsByPhase[corev1.PodRunning]
+	nm.PodsPending = podsByPhase[corev1.PodPending]
+	nm.PodsFailed = podsByPhase[corev1.PodFailed]
+	nm.PodsSucceeded = podsByPhase[corev1.PodSucceeded]
+	nm.PodsTotal = int32(len(pods))
+
+	if nm.CpuAllocatable > 0 {
+		nm.CpuUsagePercent = (cpuRequested / nm.CpuAllocatable) * 100
+	}
+	if nm.MemoryAllocatable > 0 {
+		nm.MemoryUsagePercent = float64(memoryRequested) / float64(nm.MemoryAllocatable) * 100
+	}
+
+	// System info
+	nm.KernelVersion = node.Status.NodeInfo.KernelVersion
+	nm.OsImage = node.Status.NodeInfo.OSImage
+	nm.ContainerRuntime = node.Status.NodeInfo.ContainerRuntimeVersion
+	nm.KubeletVersion = node.Status.NodeInfo.KubeletVersion
+	nm.Architecture = node.Status.NodeInfo.Architecture
+
+	// Network
+	for _, addr := range node.Status.Addresses {
+		switch addr.Type {
+		case corev1.NodeInternalIP:
+			nm.InternalIp = addr.Address
+		case corev1.NodeHostName:
+			nm.Hostname = addr.Address
+		}
+	}
+
+	return nm
 }
 
 func (a *Agent) flushBuffer(ctx context.Context, stream pb.CollectorService_ConnectClient) {

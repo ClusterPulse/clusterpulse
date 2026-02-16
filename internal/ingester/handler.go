@@ -90,6 +90,9 @@ func (h *Handler) ProcessBatch(ctx context.Context, batch *pb.MetricsBatch) erro
 			if err := h.redisClient.StoreAggregationResults(ctx, cluster, aggregations); err != nil {
 				log.WithError(err).Warn("Failed to store aggregations")
 			}
+			if h.vmWriter != nil && len(crBatch.AggregationValues) > 0 {
+				h.vmWriter.WriteCustomResourceMetrics(ctx, cluster, crBatch.SourceId, crBatch.AggregationValues)
+			}
 		}
 	}
 
