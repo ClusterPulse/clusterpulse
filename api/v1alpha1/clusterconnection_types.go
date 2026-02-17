@@ -33,6 +33,11 @@ type ClusterConnectionSpec struct {
 	// Required when collectionMode is "push". Example: "hub.example.com:9443"
 	// +optional
 	IngesterAddress string `json:"ingesterAddress,omitempty"`
+
+	// CollectorVersion overrides the collector agent image tag for this cluster.
+	// If empty, defaults to the controller's own version.
+	// +optional
+	CollectorVersion string `json:"collectorVersion,omitempty"`
 }
 
 // CredentialsReference references a secret containing credentials

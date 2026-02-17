@@ -38,17 +38,6 @@ func (r *ClusterReconciler) ensureCollectorDeployed(ctx context.Context, cluster
 		return fmt.Errorf("dynamic client not available for cluster %s", clusterConn.Name)
 	}
 
-	// Check if collector Deployment already exists — skip if so
-	deployGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	_, err = dynClient.Resource(deployGVR).Namespace(collectorNamespace).Get(ctx, collectorDeploymentName, metav1.GetOptions{})
-	if err == nil {
-		log.Debug("Collector deployment already exists, skipping deploy")
-		return nil
-	}
-	if !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to check collector deployment: %w", err)
-	}
-
 	// Ingester address reachable from managed cluster
 	ingesterAddr := clusterConn.Spec.IngesterAddress
 	if ingesterAddr == "" {
@@ -78,7 +67,7 @@ func (r *ClusterReconciler) ensureCollectorDeployed(ctx context.Context, cluster
 	if err := ensureCollectorSecret(ctx, dynClient, collectorNamespace, token); err != nil {
 		return fmt.Errorf("secret: %w", err)
 	}
-	if err := ensureCollectorDeployment(ctx, dynClient, collectorNamespace, clusterConn.Name, ingesterAddr); err != nil {
+	if err := ensureCollectorDeployment(ctx, dynClient, collectorNamespace, clusterConn.Name, ingesterAddr, clusterConn.Spec.CollectorVersion); err != nil {
 		return fmt.Errorf("deployment: %w", err)
 	}
 
@@ -226,10 +215,13 @@ func ensureCollectorSecret(ctx context.Context, client dynamic.Interface, namesp
 	return err
 }
 
-func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, namespace, clusterName, ingesterAddr string) error {
+func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, namespace, clusterName, ingesterAddr, collectorVersion string) error {
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-	imageTag := version.Version
+	imageTag := collectorVersion
+	if imageTag == "" {
+		imageTag = version.Version
+	}
 	if imageTag == "" || imageTag == "dev" {
 		imageTag = "latest"
 	}

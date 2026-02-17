@@ -160,6 +160,7 @@ oc describe clusterconnection my-openshift-cluster -n clusterpulse
 | `labels` | map | No | Key-value pairs for categorization |
 | `monitoring.interval` | int32 | No | Reconciliation interval in seconds (minimum 30, default 30) |
 | `monitoring.timeout` | int32 | No | Connection timeout in seconds (minimum 5, default 10) |
+| `collectorVersion` | string | No | Overrides the collector agent image tag for this cluster. Defaults to the controller's own version. |
 
 ### Credentials Secret Format
 
