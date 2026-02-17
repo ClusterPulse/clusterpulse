@@ -345,7 +345,7 @@ def test_view_metrics_permission(authenticated_client, fake_redis):
     
     response = authenticated_client.get("/api/v1/clusters/test/metrics")
     assert response.status_code == 200
-    assert "cpu_usage_percent" in response.json()
+    assert "cpu_capacity" in response.json()
 
 def test_no_metrics_permission(authenticated_client, fake_redis):
     """User without viewMetrics permission cannot see metrics."""

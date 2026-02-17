@@ -473,45 +473,24 @@ func (c *ClusterClient) GetClusterMetrics(ctx context.Context) (*types.ClusterMe
 		for _, nm := range nodeMetrics {
 			if nm.Status == string(types.NodeReady) {
 				metrics.NodesReady++
-			} else {
-				metrics.NodesNotReady++
 			}
 
 			metrics.CPUCapacity += nm.CPUCapacity
-			metrics.CPUAllocatable += nm.CPUAllocatable
-			metrics.CPURequested += nm.CPURequested
-
 			metrics.MemoryCapacity += nm.MemoryCapacity
-			metrics.MemoryAllocatable += nm.MemoryAllocatable
-			metrics.MemoryRequested += nm.MemoryRequested
-
-			metrics.StorageCapacity += nm.StorageCapacity
-
 			metrics.PodsRunning += int(nm.PodsRunning)
-			metrics.PodsPending += int(nm.PodsPending)
-			metrics.PodsFailed += int(nm.PodsFailed)
 			metrics.Pods += int(nm.PodsTotal)
 		}
 
 		metrics.Nodes = len(nodeMetrics)
 
-		if metrics.CPUAllocatable > 0 {
-			metrics.CPUUsagePercent = (metrics.CPURequested / metrics.CPUAllocatable) * 100
-		}
-		if metrics.MemoryAllocatable > 0 {
-			metrics.MemoryUsagePercent = float64(metrics.MemoryRequested) / float64(metrics.MemoryAllocatable) * 100
-		}
-
 		// Get namespaces
 		namespaces, err := c.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 		if err != nil {
 			logrus.WithError(err).Debug("Failed to list namespaces")
-			// Don't fail the whole metrics collection, but log the error
 			metrics.Namespaces = 0
 			metrics.NamespaceList = []string{}
 		} else {
 			metrics.Namespaces = len(namespaces.Items)
-			// Initialize with capacity for efficiency
 			metrics.NamespaceList = make([]string, 0, len(namespaces.Items))
 			for _, ns := range namespaces.Items {
 				metrics.NamespaceList = append(metrics.NamespaceList, ns.Name)
@@ -519,40 +498,12 @@ func (c *ClusterClient) GetClusterMetrics(ctx context.Context) (*types.ClusterMe
 			logrus.Debugf("Collected %d namespaces for metrics", len(metrics.NamespaceList))
 		}
 
-		// Get other resources
-		pvcs, err := c.clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
-		if err == nil {
-			metrics.PVCs = len(pvcs.Items)
-		} else {
-			logrus.WithError(err).Debug("Failed to list PVCs")
-		}
-
-		services, err := c.clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
-		if err == nil {
-			metrics.Services = len(services.Items)
-		} else {
-			logrus.WithError(err).Debug("Failed to list services")
-		}
-
+		// Workload counts
 		deployments, err := c.clientset.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
 		if err == nil {
 			metrics.Deployments = len(deployments.Items)
 		} else {
 			logrus.WithError(err).Debug("Failed to list deployments")
-		}
-
-		statefulsets, err := c.clientset.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{})
-		if err == nil {
-			metrics.StatefulSets = len(statefulsets.Items)
-		} else {
-			logrus.WithError(err).Debug("Failed to list statefulsets")
-		}
-
-		daemonsets, err := c.clientset.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{})
-		if err == nil {
-			metrics.DaemonSets = len(daemonsets.Items)
-		} else {
-			logrus.WithError(err).Debug("Failed to list daemonsets")
 		}
 
 		return nil

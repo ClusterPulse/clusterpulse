@@ -93,34 +93,13 @@ type ClusterMetrics struct {
 	Timestamp     time.Time `json:"timestamp"`
 	Nodes         int       `json:"nodes"`
 	NodesReady    int       `json:"nodesReady"`
-	NodesNotReady int       `json:"nodesNotReady"`
 	Namespaces    int       `json:"namespaces"`
 	NamespaceList []string  `json:"namespace_list"`
 	Pods          int       `json:"pods"`
 	PodsRunning   int       `json:"podsRunning"`
-	PodsPending   int       `json:"podsPending"`
-	PodsFailed    int       `json:"podsFailed"`
-
-	// Aggregated resources
-	CPUCapacity     float64 `json:"cpuCapacity"`
-	CPUAllocatable  float64 `json:"cpuAllocatable"`
-	CPURequested    float64 `json:"cpuRequested"`
-	CPUUsagePercent float64 `json:"cpuUsagePercent"`
-
-	MemoryCapacity     int64   `json:"memoryCapacity"`
-	MemoryAllocatable  int64   `json:"memoryAllocatable"`
-	MemoryRequested    int64   `json:"memoryRequested"`
-	MemoryUsagePercent float64 `json:"memoryUsagePercent"`
-
-	StorageCapacity int64 `json:"storageCapacity"`
-	StorageUsed     int64 `json:"storageUsed"`
-
-	// Additional metrics
-	PVCs         int `json:"pvcs"`
-	Services     int `json:"services"`
-	Deployments  int `json:"deployments"`
-	StatefulSets int `json:"statefulsets"`
-	DaemonSets   int `json:"daemonsets"`
+	CPUCapacity   float64   `json:"cpuCapacity"`
+	MemoryCapacity int64   `json:"memoryCapacity"`
+	Deployments   int       `json:"deployments"`
 }
 
 // OperatorInfo contains information about an installed operator

@@ -384,33 +384,12 @@ func (c *Client) StoreClusterMetrics(ctx context.Context, name string, metrics *
 		"timestamp":       metrics.Timestamp.Format(time.RFC3339),
 		"nodes":           metrics.Nodes,
 		"nodes_ready":     metrics.NodesReady,
-		"nodes_not_ready": metrics.NodesNotReady,
 		"namespaces":      metrics.Namespaces, // Just the count
 		"pods":            metrics.Pods,
 		"pods_running":    metrics.PodsRunning,
-		"pods_pending":    metrics.PodsPending,
-		"pods_failed":     metrics.PodsFailed,
-
-		// Aggregated resources
-		"cpu_capacity":      metrics.CPUCapacity,
-		"cpu_allocatable":   metrics.CPUAllocatable,
-		"cpu_requested":     metrics.CPURequested,
-		"cpu_usage_percent": metrics.CPUUsagePercent,
-
-		"memory_capacity":      metrics.MemoryCapacity,
-		"memory_allocatable":   metrics.MemoryAllocatable,
-		"memory_requested":     metrics.MemoryRequested,
-		"memory_usage_percent": metrics.MemoryUsagePercent,
-
-		"storage_capacity": metrics.StorageCapacity,
-		"storage_used":     metrics.StorageUsed,
-
-		// Additional metrics
-		"pvcs":         metrics.PVCs,
-		"services":     metrics.Services,
-		"deployments":  metrics.Deployments,
-		"statefulsets": metrics.StatefulSets,
-		"daemonsets":   metrics.DaemonSets,
+		"cpu_capacity":    metrics.CPUCapacity,
+		"memory_capacity": metrics.MemoryCapacity,
+		"deployments":     metrics.Deployments,
 	}
 
 	data, err := json.Marshal(metricsDict)

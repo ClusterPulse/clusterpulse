@@ -60,32 +60,21 @@ message MetricsBatch {
 message ClusterMetrics {
   int32 nodes = 1;
   int32 nodes_ready = 2;
-  int32 nodes_not_ready = 3;
   int32 namespaces = 4;
   repeated string namespace_list = 5;
   int32 pods = 6;
   int32 pods_running = 7;
-  int32 pods_pending = 8;
-  int32 pods_failed = 9;
 
   double cpu_capacity = 10;
-  double cpu_allocatable = 11;
-  double cpu_requested = 12;
-  double cpu_usage_percent = 13;
-
   int64 memory_capacity = 14;
-  int64 memory_allocatable = 15;
-  int64 memory_requested = 16;
-  double memory_usage_percent = 17;
-
-  int64 storage_capacity = 18;
-  int64 storage_used = 19;
-
-  int32 pvcs = 20;
-  int32 services = 21;
   int32 deployments = 22;
-  int32 statefulsets = 23;
-  int32 daemonsets = 24;
+
+  reserved 3, 8, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 23, 24;
+  reserved "nodes_not_ready", "pods_pending", "pods_failed",
+           "cpu_allocatable", "cpu_requested", "cpu_usage_percent",
+           "memory_allocatable", "memory_requested", "memory_usage_percent",
+           "storage_capacity", "storage_used", "pvcs", "services",
+           "statefulsets", "daemonsets";
 }
 
 // NodeMetrics mirrors pkg/types.NodeMetrics in protobuf form.

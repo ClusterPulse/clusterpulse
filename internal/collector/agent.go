@@ -338,29 +338,14 @@ func (a *Agent) collectClusterAndNodeMetrics(ctx context.Context) (*pb.ClusterMe
 		// Aggregate into cluster metrics
 		if nm.Status == string(types.NodeReady) {
 			cm.NodesReady++
-		} else {
-			cm.NodesNotReady++
 		}
 		cm.CpuCapacity += nm.CpuCapacity
-		cm.CpuAllocatable += nm.CpuAllocatable
-		cm.CpuRequested += nm.CpuRequested
 		cm.MemoryCapacity += nm.MemoryCapacity
-		cm.MemoryAllocatable += nm.MemoryAllocatable
-		cm.MemoryRequested += nm.MemoryRequested
-		cm.StorageCapacity += nm.StorageCapacity
 		cm.Pods += nm.PodsTotal
 		cm.PodsRunning += nm.PodsRunning
-		cm.PodsPending += nm.PodsPending
-		cm.PodsFailed += nm.PodsFailed
 	}
 
 	cm.Nodes = int32(len(nodes.Items))
-	if cm.CpuAllocatable > 0 {
-		cm.CpuUsagePercent = (cm.CpuRequested / cm.CpuAllocatable) * 100
-	}
-	if cm.MemoryAllocatable > 0 {
-		cm.MemoryUsagePercent = float64(cm.MemoryRequested) / float64(cm.MemoryAllocatable) * 100
-	}
 
 	// Namespaces
 	namespaces, err := a.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
@@ -376,18 +361,6 @@ func (a *Agent) collectClusterAndNodeMetrics(ctx context.Context) (*pb.ClusterMe
 	// Workload counts
 	if deps, err := a.clientset.AppsV1().Deployments("").List(ctx, metav1.ListOptions{}); err == nil {
 		cm.Deployments = int32(len(deps.Items))
-	}
-	if sts, err := a.clientset.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{}); err == nil {
-		cm.Statefulsets = int32(len(sts.Items))
-	}
-	if ds, err := a.clientset.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{}); err == nil {
-		cm.Daemonsets = int32(len(ds.Items))
-	}
-	if svcs, err := a.clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{}); err == nil {
-		cm.Services = int32(len(svcs.Items))
-	}
-	if pvcs, err := a.clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{}); err == nil {
-		cm.Pvcs = int32(len(pvcs.Items))
 	}
 
 	return cm, pbNodes, nil

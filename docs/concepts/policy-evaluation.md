@@ -368,9 +368,6 @@ Affected metrics:
 | `pods` | Sum of pods in visible namespaces |
 | `pods_running` | Running pods in visible namespaces |
 | `deployments` | Deployments in visible namespaces |
-| `services` | Services in visible namespaces |
-| `statefulsets` | StatefulSets in visible namespaces |
-| `daemonsets` | DaemonSets in visible namespaces |
 
 ## Node Filtering Impact
 
@@ -382,8 +379,6 @@ Node filters affect capacity metrics:
 | `nodes_ready` | Ready nodes that are visible |
 | `cpu_capacity` | Sum of CPU from visible nodes |
 | `memory_capacity` | Sum of memory from visible nodes |
-| `cpu_usage_percent` | Recalculated from visible nodes |
-| `memory_usage_percent` | Recalculated from visible nodes |
 
 ## Multiple Policy Handling
 

@@ -38,8 +38,6 @@ func (w *VMWriter) WriteClusterMetrics(ctx context.Context, cluster string, m *t
 		formatLine("clusterpulse_cluster_nodes_ready", cluster, "", m.NodesReady, ts),
 		formatLine("clusterpulse_cluster_pods_total", cluster, "", m.Pods, ts),
 		formatLine("clusterpulse_cluster_pods_running", cluster, "", m.PodsRunning, ts),
-		formatLine("clusterpulse_cluster_cpu_usage_percent", cluster, "", m.CPUUsagePercent, ts),
-		formatLine("clusterpulse_cluster_memory_usage_percent", cluster, "", m.MemoryUsagePercent, ts),
 		formatLine("clusterpulse_cluster_cpu_capacity", cluster, "", m.CPUCapacity, ts),
 		formatLine("clusterpulse_cluster_memory_capacity_bytes", cluster, "", m.MemoryCapacity, ts),
 		formatLine("clusterpulse_cluster_namespaces_total", cluster, "", m.Namespaces, ts),

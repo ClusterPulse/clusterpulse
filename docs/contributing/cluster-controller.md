@@ -965,32 +965,16 @@ type NodeMetrics struct {
 
 // ClusterMetrics contains cluster-wide aggregated metrics
 type ClusterMetrics struct {
-    Timestamp     time.Time
-    Nodes         int
-    NodesReady    int
-    NodesNotReady int
-    Namespaces    int
-    NamespaceList []string
-    Pods          int
-    PodsRunning   int
-    PodsPending   int
-    PodsFailed    int
-    
-    // Aggregated resources
-    CPUCapacity        float64
-    CPUAllocatable     float64
-    CPURequested       float64
-    CPUUsagePercent    float64
-    MemoryCapacity     int64
-    MemoryAllocatable  int64
-    MemoryRequested    int64
-    MemoryUsagePercent float64
-    
-    // Workload counts
-    Services     int
-    Deployments  int
-    StatefulSets int
-    DaemonSets   int
+    Timestamp      time.Time
+    Nodes          int
+    NodesReady     int
+    Namespaces     int
+    NamespaceList  []string
+    Pods           int
+    PodsRunning    int
+    CPUCapacity    float64
+    MemoryCapacity int64
+    Deployments    int
 }
 
 // OperatorInfo for OLM operators

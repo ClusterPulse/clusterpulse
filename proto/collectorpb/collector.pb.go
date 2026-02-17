@@ -371,33 +371,18 @@ func (x *MetricsBatch) GetClusterOperators() []*ClusterOperatorInfo {
 
 // ClusterMetrics mirrors pkg/types.ClusterMetrics in protobuf form.
 type ClusterMetrics struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	Nodes              int32                  `protobuf:"varint,1,opt,name=nodes,proto3" json:"nodes,omitempty"`
-	NodesReady         int32                  `protobuf:"varint,2,opt,name=nodes_ready,json=nodesReady,proto3" json:"nodes_ready,omitempty"`
-	NodesNotReady      int32                  `protobuf:"varint,3,opt,name=nodes_not_ready,json=nodesNotReady,proto3" json:"nodes_not_ready,omitempty"`
-	Namespaces         int32                  `protobuf:"varint,4,opt,name=namespaces,proto3" json:"namespaces,omitempty"`
-	NamespaceList      []string               `protobuf:"bytes,5,rep,name=namespace_list,json=namespaceList,proto3" json:"namespace_list,omitempty"`
-	Pods               int32                  `protobuf:"varint,6,opt,name=pods,proto3" json:"pods,omitempty"`
-	PodsRunning        int32                  `protobuf:"varint,7,opt,name=pods_running,json=podsRunning,proto3" json:"pods_running,omitempty"`
-	PodsPending        int32                  `protobuf:"varint,8,opt,name=pods_pending,json=podsPending,proto3" json:"pods_pending,omitempty"`
-	PodsFailed         int32                  `protobuf:"varint,9,opt,name=pods_failed,json=podsFailed,proto3" json:"pods_failed,omitempty"`
-	CpuCapacity        float64                `protobuf:"fixed64,10,opt,name=cpu_capacity,json=cpuCapacity,proto3" json:"cpu_capacity,omitempty"`
-	CpuAllocatable     float64                `protobuf:"fixed64,11,opt,name=cpu_allocatable,json=cpuAllocatable,proto3" json:"cpu_allocatable,omitempty"`
-	CpuRequested       float64                `protobuf:"fixed64,12,opt,name=cpu_requested,json=cpuRequested,proto3" json:"cpu_requested,omitempty"`
-	CpuUsagePercent    float64                `protobuf:"fixed64,13,opt,name=cpu_usage_percent,json=cpuUsagePercent,proto3" json:"cpu_usage_percent,omitempty"`
-	MemoryCapacity     int64                  `protobuf:"varint,14,opt,name=memory_capacity,json=memoryCapacity,proto3" json:"memory_capacity,omitempty"`
-	MemoryAllocatable  int64                  `protobuf:"varint,15,opt,name=memory_allocatable,json=memoryAllocatable,proto3" json:"memory_allocatable,omitempty"`
-	MemoryRequested    int64                  `protobuf:"varint,16,opt,name=memory_requested,json=memoryRequested,proto3" json:"memory_requested,omitempty"`
-	MemoryUsagePercent float64                `protobuf:"fixed64,17,opt,name=memory_usage_percent,json=memoryUsagePercent,proto3" json:"memory_usage_percent,omitempty"`
-	StorageCapacity    int64                  `protobuf:"varint,18,opt,name=storage_capacity,json=storageCapacity,proto3" json:"storage_capacity,omitempty"`
-	StorageUsed        int64                  `protobuf:"varint,19,opt,name=storage_used,json=storageUsed,proto3" json:"storage_used,omitempty"`
-	Pvcs               int32                  `protobuf:"varint,20,opt,name=pvcs,proto3" json:"pvcs,omitempty"`
-	Services           int32                  `protobuf:"varint,21,opt,name=services,proto3" json:"services,omitempty"`
-	Deployments        int32                  `protobuf:"varint,22,opt,name=deployments,proto3" json:"deployments,omitempty"`
-	Statefulsets       int32                  `protobuf:"varint,23,opt,name=statefulsets,proto3" json:"statefulsets,omitempty"`
-	Daemonsets         int32                  `protobuf:"varint,24,opt,name=daemonsets,proto3" json:"daemonsets,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Nodes          int32                  `protobuf:"varint,1,opt,name=nodes,proto3" json:"nodes,omitempty"`
+	NodesReady     int32                  `protobuf:"varint,2,opt,name=nodes_ready,json=nodesReady,proto3" json:"nodes_ready,omitempty"`
+	Namespaces     int32                  `protobuf:"varint,4,opt,name=namespaces,proto3" json:"namespaces,omitempty"`
+	NamespaceList  []string               `protobuf:"bytes,5,rep,name=namespace_list,json=namespaceList,proto3" json:"namespace_list,omitempty"`
+	Pods           int32                  `protobuf:"varint,6,opt,name=pods,proto3" json:"pods,omitempty"`
+	PodsRunning    int32                  `protobuf:"varint,7,opt,name=pods_running,json=podsRunning,proto3" json:"pods_running,omitempty"`
+	CpuCapacity    float64                `protobuf:"fixed64,10,opt,name=cpu_capacity,json=cpuCapacity,proto3" json:"cpu_capacity,omitempty"`
+	MemoryCapacity int64                  `protobuf:"varint,14,opt,name=memory_capacity,json=memoryCapacity,proto3" json:"memory_capacity,omitempty"`
+	Deployments    int32                  `protobuf:"varint,22,opt,name=deployments,proto3" json:"deployments,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ClusterMetrics) Reset() {
@@ -444,13 +429,6 @@ func (x *ClusterMetrics) GetNodesReady() int32 {
 	return 0
 }
 
-func (x *ClusterMetrics) GetNodesNotReady() int32 {
-	if x != nil {
-		return x.NodesNotReady
-	}
-	return 0
-}
-
 func (x *ClusterMetrics) GetNamespaces() int32 {
 	if x != nil {
 		return x.Namespaces
@@ -479,44 +457,9 @@ func (x *ClusterMetrics) GetPodsRunning() int32 {
 	return 0
 }
 
-func (x *ClusterMetrics) GetPodsPending() int32 {
-	if x != nil {
-		return x.PodsPending
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetPodsFailed() int32 {
-	if x != nil {
-		return x.PodsFailed
-	}
-	return 0
-}
-
 func (x *ClusterMetrics) GetCpuCapacity() float64 {
 	if x != nil {
 		return x.CpuCapacity
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetCpuAllocatable() float64 {
-	if x != nil {
-		return x.CpuAllocatable
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetCpuRequested() float64 {
-	if x != nil {
-		return x.CpuRequested
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetCpuUsagePercent() float64 {
-	if x != nil {
-		return x.CpuUsagePercent
 	}
 	return 0
 }
@@ -528,72 +471,9 @@ func (x *ClusterMetrics) GetMemoryCapacity() int64 {
 	return 0
 }
 
-func (x *ClusterMetrics) GetMemoryAllocatable() int64 {
-	if x != nil {
-		return x.MemoryAllocatable
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetMemoryRequested() int64 {
-	if x != nil {
-		return x.MemoryRequested
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetMemoryUsagePercent() float64 {
-	if x != nil {
-		return x.MemoryUsagePercent
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetStorageCapacity() int64 {
-	if x != nil {
-		return x.StorageCapacity
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetStorageUsed() int64 {
-	if x != nil {
-		return x.StorageUsed
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetPvcs() int32 {
-	if x != nil {
-		return x.Pvcs
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetServices() int32 {
-	if x != nil {
-		return x.Services
-	}
-	return 0
-}
-
 func (x *ClusterMetrics) GetDeployments() int32 {
 	if x != nil {
 		return x.Deployments
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetStatefulsets() int32 {
-	if x != nil {
-		return x.Statefulsets
-	}
-	return 0
-}
-
-func (x *ClusterMetrics) GetDaemonsets() int32 {
-	if x != nil {
-		return x.Daemonsets
 	}
 	return 0
 }
@@ -1436,38 +1316,22 @@ const file_collector_proto_rawDesc = "" +
 	"\fnode_metrics\x18\x05 \x03(\v2&.clusterpulse.collector.v1.NodeMetricsR\vnodeMetrics\x12Y\n" +
 	"\x10custom_resources\x18\x06 \x03(\v2..clusterpulse.collector.v1.CustomResourceBatchR\x0fcustomResources\x12E\n" +
 	"\toperators\x18\a \x03(\v2'.clusterpulse.collector.v1.OperatorInfoR\toperators\x12[\n" +
-	"\x11cluster_operators\x18\b \x03(\v2..clusterpulse.collector.v1.ClusterOperatorInfoR\x10clusterOperators\"\xe7\x06\n" +
+	"\x11cluster_operators\x18\b \x03(\v2..clusterpulse.collector.v1.ClusterOperatorInfoR\x10clusterOperators\"\xf2\x04\n" +
 	"\x0eClusterMetrics\x12\x14\n" +
 	"\x05nodes\x18\x01 \x01(\x05R\x05nodes\x12\x1f\n" +
 	"\vnodes_ready\x18\x02 \x01(\x05R\n" +
-	"nodesReady\x12&\n" +
-	"\x0fnodes_not_ready\x18\x03 \x01(\x05R\rnodesNotReady\x12\x1e\n" +
+	"nodesReady\x12\x1e\n" +
 	"\n" +
 	"namespaces\x18\x04 \x01(\x05R\n" +
 	"namespaces\x12%\n" +
 	"\x0enamespace_list\x18\x05 \x03(\tR\rnamespaceList\x12\x12\n" +
 	"\x04pods\x18\x06 \x01(\x05R\x04pods\x12!\n" +
 	"\fpods_running\x18\a \x01(\x05R\vpodsRunning\x12!\n" +
-	"\fpods_pending\x18\b \x01(\x05R\vpodsPending\x12\x1f\n" +
-	"\vpods_failed\x18\t \x01(\x05R\n" +
-	"podsFailed\x12!\n" +
 	"\fcpu_capacity\x18\n" +
 	" \x01(\x01R\vcpuCapacity\x12'\n" +
-	"\x0fcpu_allocatable\x18\v \x01(\x01R\x0ecpuAllocatable\x12#\n" +
-	"\rcpu_requested\x18\f \x01(\x01R\fcpuRequested\x12*\n" +
-	"\x11cpu_usage_percent\x18\r \x01(\x01R\x0fcpuUsagePercent\x12'\n" +
-	"\x0fmemory_capacity\x18\x0e \x01(\x03R\x0ememoryCapacity\x12-\n" +
-	"\x12memory_allocatable\x18\x0f \x01(\x03R\x11memoryAllocatable\x12)\n" +
-	"\x10memory_requested\x18\x10 \x01(\x03R\x0fmemoryRequested\x120\n" +
-	"\x14memory_usage_percent\x18\x11 \x01(\x01R\x12memoryUsagePercent\x12)\n" +
-	"\x10storage_capacity\x18\x12 \x01(\x03R\x0fstorageCapacity\x12!\n" +
-	"\fstorage_used\x18\x13 \x01(\x03R\vstorageUsed\x12\x12\n" +
-	"\x04pvcs\x18\x14 \x01(\x05R\x04pvcs\x12\x1a\n" +
-	"\bservices\x18\x15 \x01(\x05R\bservices\x12 \n" +
-	"\vdeployments\x18\x16 \x01(\x05R\vdeployments\x12\"\n" +
-	"\fstatefulsets\x18\x17 \x01(\x05R\fstatefulsets\x12\x1e\n" +
-	"\n" +
-	"daemonsets\x18\x18 \x01(\x05R\n" +
+	"\x0fmemory_capacity\x18\x0e \x01(\x03R\x0ememoryCapacity\x12 \n" +
+	"\vdeployments\x18\x16 \x01(\x05R\vdeploymentsJ\x04\b\x03\x10\x04J\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"J\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11J\x04\b\x11\x10\x12J\x04\b\x12\x10\x13J\x04\b\x13\x10\x14J\x04\b\x14\x10\x15J\x04\b\x15\x10\x16J\x04\b\x17\x10\x18J\x04\b\x18\x10\x19R\x0fnodes_not_readyR\fpods_pendingR\vpods_failedR\x0fcpu_allocatableR\rcpu_requestedR\x11cpu_usage_percentR\x12memory_allocatableR\x10memory_requestedR\x14memory_usage_percentR\x10storage_capacityR\fstorage_usedR\x04pvcsR\bservicesR\fstatefulsetsR\n" +
 	"daemonsets\"\xfa\b\n" +
 	"\vNodeMetrics\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
