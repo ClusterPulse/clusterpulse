@@ -77,6 +77,10 @@ internal/store/
 | GET | `/api/v1/clusters/{name}/alerts` | Required | Cluster alerts |
 | GET | `/api/v1/clusters/{name}/events` | Required | Cluster events |
 | GET | `/api/v1/clusters/{name}/custom/{type}` | Required | Custom resources |
+| GET | `/api/v1/clusters/{name}/metrics/history` | Required | Cluster metric time-series (requires VM) |
+| GET | `/api/v1/clusters/{name}/nodes/{node}/metrics/history` | Required | Node metric time-series (requires VM) |
+| GET | `/api/v1/clusters/{name}/custom-resources/{sourceId}/metrics/history` | Required | Custom resource aggregation time-series (requires VM) |
+| GET | `/api/v1/clusters/{name}/operators/metrics/history` | Required | Cluster operator metric time-series (requires VM) |
 | GET | `/api/v1/custom-types` | Required | Accessible custom resource types |
 | GET | `/api/v1/custom-types/clusters` | Required | Resource counts per type per cluster |
 

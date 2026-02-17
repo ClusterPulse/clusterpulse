@@ -65,19 +65,26 @@ func (h *Handler) ProcessBatch(ctx context.Context, batch *pb.MetricsBatch) erro
 	}
 
 	// Store operators
+	var ops []types.OperatorInfo
 	if len(batch.Operators) > 0 {
-		ops := protoToOperators(batch.Operators)
+		ops = protoToOperators(batch.Operators)
 		if err := h.redisClient.StoreOperators(ctx, cluster, ops); err != nil {
 			log.WithError(err).Warn("Failed to store operators")
 		}
 	}
 
 	// Store cluster operators
+	var cops []types.ClusterOperatorInfo
 	if len(batch.ClusterOperators) > 0 {
-		cops := protoToClusterOperators(batch.ClusterOperators)
+		cops = protoToClusterOperators(batch.ClusterOperators)
 		if err := h.redisClient.StoreClusterOperators(ctx, cluster, cops); err != nil {
 			log.WithError(err).Warn("Failed to store cluster operators")
 		}
+	}
+
+	// Write operator metrics to VictoriaMetrics
+	if h.vmWriter != nil && (len(ops) > 0 || len(cops) > 0) {
+		h.vmWriter.WriteOperatorMetrics(ctx, cluster, ops, cops)
 	}
 
 	// Store custom resource collections

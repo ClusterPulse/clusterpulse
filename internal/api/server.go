@@ -92,6 +92,8 @@ func NewServer(cfg *APIConfig, s *store.Client, engine *rbac.Engine) *Server {
 					if historyH != nil {
 						r.Get("/metrics/history", historyH.GetClusterMetricsHistory)
 						r.Get("/nodes/{node}/metrics/history", historyH.GetNodeMetricsHistory)
+						r.Get("/custom-resources/{sourceId}/metrics/history", historyH.GetCustomResourceMetricsHistory)
+						r.Get("/operators/metrics/history", historyH.GetOperatorMetricsHistory)
 					}
 				})
 			})

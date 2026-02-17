@@ -60,6 +60,17 @@ func (w *VMWriter) WriteNodeMetrics(ctx context.Context, cluster string, nodes [
 			formatLine("clusterpulse_node_pods_running", cluster, n.Name, n.PodsRunning, ts),
 			formatLine("clusterpulse_node_cpu_capacity", cluster, n.Name, n.CPUCapacity, ts),
 			formatLine("clusterpulse_node_memory_capacity_bytes", cluster, n.Name, n.MemoryCapacity, ts),
+			formatLine("clusterpulse_node_storage_capacity_bytes", cluster, n.Name, n.StorageCapacity, ts),
+			formatLine("clusterpulse_node_pods_capacity", cluster, n.Name, n.PodsCapacity, ts),
+			formatLine("clusterpulse_node_cpu_allocatable", cluster, n.Name, n.CPUAllocatable, ts),
+			formatLine("clusterpulse_node_memory_allocatable_bytes", cluster, n.Name, n.MemoryAllocatable, ts),
+			formatLine("clusterpulse_node_storage_allocatable_bytes", cluster, n.Name, n.StorageAllocatable, ts),
+			formatLine("clusterpulse_node_pods_allocatable", cluster, n.Name, n.PodsAllocatable, ts),
+			formatLine("clusterpulse_node_cpu_requested", cluster, n.Name, n.CPURequested, ts),
+			formatLine("clusterpulse_node_memory_requested_bytes", cluster, n.Name, n.MemoryRequested, ts),
+			formatLine("clusterpulse_node_pods_pending", cluster, n.Name, n.PodsPending, ts),
+			formatLine("clusterpulse_node_pods_failed", cluster, n.Name, n.PodsFailed, ts),
+			formatLine("clusterpulse_node_pods_succeeded", cluster, n.Name, n.PodsSucceeded, ts),
 		)
 	}
 
@@ -76,6 +87,39 @@ func (w *VMWriter) WriteCustomResourceMetrics(ctx context.Context, cluster, sour
 		lines = append(lines, line)
 	}
 	w.send(ctx, lines)
+}
+
+// WriteOperatorMetrics sends operator presence and cluster operator status metrics to VictoriaMetrics.
+func (w *VMWriter) WriteOperatorMetrics(ctx context.Context, cluster string, ops []types.OperatorInfo, cops []types.ClusterOperatorInfo) {
+	ts := time.Now().UnixMilli()
+	var lines []string
+
+	for _, o := range ops {
+		lines = append(lines, fmt.Sprintf(`clusterpulse_operator_installed{cluster="%s",operator="%s"} 1 %d`, cluster, o.Name, ts))
+	}
+
+	for _, c := range cops {
+		lines = append(lines,
+			fmt.Sprintf(`clusterpulse_cluster_operator_available{cluster="%s",operator="%s"} %d %d`, cluster, c.Name, boolToInt(c.Available), ts),
+			fmt.Sprintf(`clusterpulse_cluster_operator_progressing{cluster="%s",operator="%s"} %d %d`, cluster, c.Name, boolToInt(c.Progressing), ts),
+			fmt.Sprintf(`clusterpulse_cluster_operator_degraded{cluster="%s",operator="%s"} %d %d`, cluster, c.Name, boolToInt(c.Degraded), ts),
+			fmt.Sprintf(`clusterpulse_cluster_operator_upgradeable{cluster="%s",operator="%s"} %d %d`, cluster, c.Name, boolToInt(c.Upgradeable), ts),
+		)
+	}
+
+	lines = append(lines,
+		formatLine("clusterpulse_cluster_operators_total", cluster, "", len(ops), ts),
+		formatLine("clusterpulse_cluster_operators_count", cluster, "", len(cops), ts),
+	)
+
+	w.send(ctx, lines)
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func formatLine[T int | int32 | int64 | float64](metric, cluster, node string, value T, ts int64) string {

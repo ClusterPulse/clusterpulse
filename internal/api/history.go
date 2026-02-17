@@ -88,6 +88,63 @@ func (h *HistoryHandler) GetNodeMetricsHistory(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, data)
 }
 
+// GetCustomResourceMetricsHistory returns time-series data for a custom resource aggregation metric.
+// GET /api/v1/clusters/{name}/custom-resources/{sourceId}/metrics/history?metric=<agg_name>&range=24h&step=5m
+func (h *HistoryHandler) GetCustomResourceMetricsHistory(w http.ResponseWriter, r *http.Request) {
+	clusterName := chi.URLParam(r, "name")
+	sourceID := chi.URLParam(r, "sourceId")
+	metric := r.URL.Query().Get("metric")
+	rangeStr := r.URL.Query().Get("range")
+	step := r.URL.Query().Get("step")
+
+	if metric == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "metric parameter required"})
+		return
+	}
+
+	if !h.checkClusterAccess(w, r, clusterName) {
+		return
+	}
+
+	query := fmt.Sprintf(`clusterpulse_custom_resource_%s{cluster="%s",source="%s"}`, metric, clusterName, sourceID)
+	data, err := h.queryRange(r.Context(), query, rangeStr, step)
+	if err != nil {
+		logrus.WithError(err).Debug("VictoriaMetrics query failed")
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "metrics backend unavailable"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, data)
+}
+
+// GetOperatorMetricsHistory returns time-series data for a cluster operator metric.
+// GET /api/v1/clusters/{name}/operators/metrics/history?metric=<metric>&range=24h&step=5m
+func (h *HistoryHandler) GetOperatorMetricsHistory(w http.ResponseWriter, r *http.Request) {
+	clusterName := chi.URLParam(r, "name")
+	metric := r.URL.Query().Get("metric")
+	rangeStr := r.URL.Query().Get("range")
+	step := r.URL.Query().Get("step")
+
+	if metric == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "metric parameter required"})
+		return
+	}
+
+	if !h.checkClusterAccess(w, r, clusterName) {
+		return
+	}
+
+	query := fmt.Sprintf(`clusterpulse_cluster_operator_%s{cluster="%s"}`, metric, clusterName)
+	data, err := h.queryRange(r.Context(), query, rangeStr, step)
+	if err != nil {
+		logrus.WithError(err).Debug("VictoriaMetrics query failed")
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "metrics backend unavailable"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, data)
+}
+
 // checkClusterAccess verifies the caller has RBAC access to the given cluster.
 // Returns false (and writes an error response) if access is denied.
 func (h *HistoryHandler) checkClusterAccess(w http.ResponseWriter, r *http.Request, clusterName string) bool {

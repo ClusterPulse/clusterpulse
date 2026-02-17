@@ -286,7 +286,51 @@ server.Start(port)                       // Start listening
 server.Stop()                            // Graceful shutdown
 server.IsConnected(clusterName) bool     // Check if collector is connected
 server.GetConnectionInfo(name) ConnInfo  // Get collector version, heartbeat
+
+// VMWriter writes time-series metrics to VictoriaMetrics
+vmWriter.WriteClusterMetrics(ctx, cluster, metrics)                // 8 cluster-level gauges
+vmWriter.WriteNodeMetrics(ctx, cluster, nodes)                     // 17 per-node gauges
+vmWriter.WriteOperatorMetrics(ctx, cluster, ops, cops)             // Operator presence + status gauges
+vmWriter.WriteCustomResourceMetrics(ctx, cluster, sourceID, aggs) // Custom resource aggregation values
 ```
+
+**VictoriaMetrics metrics written:**
+
+| Metric | Labels | Source |
+|--------|--------|--------|
+| `clusterpulse_cluster_nodes_total` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_nodes_ready` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_pods_total` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_pods_running` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_cpu_capacity` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_memory_capacity_bytes` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_namespaces_total` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_deployments_total` | cluster | ClusterMetrics |
+| `clusterpulse_node_cpu_usage_percent` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_usage_percent` | cluster, node | NodeMetrics |
+| `clusterpulse_node_cpu_capacity` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_capacity_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_storage_capacity_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_capacity` | cluster, node | NodeMetrics |
+| `clusterpulse_node_cpu_allocatable` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_allocatable_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_storage_allocatable_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_allocatable` | cluster, node | NodeMetrics |
+| `clusterpulse_node_cpu_requested` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_requested_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_total` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_running` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_pending` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_failed` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_succeeded` | cluster, node | NodeMetrics |
+| `clusterpulse_operator_installed` | cluster, operator | OperatorInfo |
+| `clusterpulse_cluster_operator_available` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operator_progressing` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operator_degraded` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operator_upgradeable` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operators_total` | cluster | len(ops) |
+| `clusterpulse_cluster_operators_count` | cluster | len(cops) |
+| `clusterpulse_custom_resource_{name}` | cluster, source | Aggregation values |
 
 **Processing pipeline:**
 ```
