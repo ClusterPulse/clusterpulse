@@ -10,11 +10,24 @@ import (
 )
 
 // HealthHandler returns a simple health check.
+// @Summary Health check
+// @Description Returns API health status
+// @Tags health
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /healthz [get]
 func HealthHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ReadyHandler returns readiness status by pinging Redis.
+// @Summary Readiness check
+// @Description Returns readiness status by pinging Redis
+// @Tags health
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /readyz [get]
 func ReadyHandler(s *store.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)

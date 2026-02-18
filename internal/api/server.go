@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/sirupsen/logrus"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 )
 
 // Server wraps the HTTP server with graceful shutdown.
@@ -50,12 +51,13 @@ func NewServer(cfg *APIConfig, s *store.Client, engine *rbac.Engine) *Server {
 	regH := NewRegistryHandler(s)
 	customH := NewCustomTypeHandler(s, engine)
 
-	var historyH *HistoryHandler
-	if cfg.VMEnabled {
-		historyH = NewHistoryHandler(cfg.VMEndpoint, engine)
-	}
-
 	r.Route("/api/v1", func(r chi.Router) {
+		// Swagger UI (no auth, opt-in via SWAGGER_ENABLED)
+		if cfg.SwaggerEnabled {
+			r.Get("/swagger/*", httpSwagger.WrapHandler)
+			logrus.Info("Swagger UI enabled at /api/v1/swagger/index.html")
+		}
+
 		// Auth routes (mixed auth requirements)
 		r.Route("/auth", func(r chi.Router) {
 			r.With(OptionalAuthMiddleware(cfg)).Get("/status", authH.AuthStatus)
@@ -87,14 +89,6 @@ func NewServer(cfg *APIConfig, s *store.Client, engine *rbac.Engine) *Server {
 					r.Get("/alerts", clusterH.GetClusterAlerts)
 					r.Get("/events", clusterH.GetClusterEvents)
 					r.Get("/custom/{type}", clusterH.GetCustomResources)
-
-					// History endpoints (require VictoriaMetrics)
-					if historyH != nil {
-						r.Get("/metrics/history", historyH.GetClusterMetricsHistory)
-						r.Get("/nodes/{node}/metrics/history", historyH.GetNodeMetricsHistory)
-						r.Get("/custom-resources/{sourceId}/metrics/history", historyH.GetCustomResourceMetricsHistory)
-						r.Get("/operators/metrics/history", historyH.GetOperatorMetricsHistory)
-					}
 				})
 			})
 

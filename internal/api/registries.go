@@ -18,6 +18,14 @@ func NewRegistryHandler(s *store.Client) *RegistryHandler {
 }
 
 // ListRegistriesStatus returns availability status for all registries.
+// @Summary List registry statuses
+// @Description Returns availability status for all container registries
+// @Tags registries
+// @Produce json
+// @Success 200 {array} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /registries/status [get]
 func (h *RegistryHandler) ListRegistriesStatus(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {

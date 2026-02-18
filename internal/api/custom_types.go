@@ -22,6 +22,16 @@ func NewCustomTypeHandler(s *store.Client, engine *rbac.Engine) *CustomTypeHandl
 }
 
 // ListCustomTypes returns all custom resource types the user can access.
+// @Summary List custom resource types
+// @Description Returns all custom resource types accessible to the authenticated user
+// @Tags custom-types
+// @Produce json
+// @Param include_source_details query bool false "Include source definition details"
+// @Param include_cluster_availability query bool false "Include clusters with data"
+// @Success 200 {array} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /custom-types [get]
 func (h *CustomTypeHandler) ListCustomTypes(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {
@@ -101,6 +111,19 @@ func (h *CustomTypeHandler) ListCustomTypes(w http.ResponseWriter, r *http.Reque
 }
 
 // GetCustomResourceCounts returns filtered resource counts per type per cluster.
+// @Summary Get custom resource counts
+// @Description Returns RBAC-filtered resource counts per type per cluster
+// @Tags custom-types
+// @Produce json
+// @Param type query []string true "Custom resource type names"
+// @Param clusters query []string false "Filter by cluster names"
+// @Param include_aggregations query bool false "Include aggregation values"
+// @Success 200 {array} map[string]any
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Security OAuthProxy
+// @Router /custom-types/clusters [get]
 func (h *CustomTypeHandler) GetCustomResourceCounts(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {
