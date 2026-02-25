@@ -199,14 +199,14 @@ func (r *RegistryReconciler) reconcileRegistry(ctx context.Context, regConn *v1a
 	}
 
 	// Store registry spec for backend compatibility
-	specData := map[string]interface{}{
+	specData := map[string]any{
 		"display_name": regConn.Spec.DisplayName,
 		"endpoint":     regConn.Spec.Endpoint,
 		"type":         regConn.Spec.Type, // Optional, informational only
 		"insecure":     regConn.Spec.Insecure,
 		"skip_tls":     regConn.Spec.SkipTLSVerify,
 		"labels":       regConn.Spec.Labels,
-		"monitoring": map[string]interface{}{
+		"monitoring": map[string]any{
 			"interval":            regConn.Spec.Monitoring.Interval,
 			"timeout":             regConn.Spec.Monitoring.Timeout,
 			"check_catalog":       regConn.Spec.Monitoring.CheckCatalog,
@@ -215,7 +215,7 @@ func (r *RegistryReconciler) reconcileRegistry(ctx context.Context, regConn *v1a
 	}
 
 	if regConn.Spec.CredentialsRef != nil {
-		specData["credentials_ref"] = map[string]interface{}{
+		specData["credentials_ref"] = map[string]any{
 			"name":      regConn.Spec.CredentialsRef.Name,
 			"namespace": regConn.Spec.CredentialsRef.Namespace,
 		}
@@ -269,7 +269,7 @@ func (r *RegistryReconciler) reconcileRegistry(ctx context.Context, regConn *v1a
 	}
 
 	// Publish event
-	r.RedisClient.PublishEvent("registry.reconciled", regConn.Name, map[string]interface{}{
+	r.RedisClient.PublishEvent("registry.reconciled", regConn.Name, map[string]any{
 		"health":        health,
 		"available":     healthResult.Available,
 		"response_time": healthResult.ResponseTime,
@@ -423,14 +423,14 @@ func (r *RegistryReconciler) generateHealthMessage(result *registry.HealthCheckR
 	return "Registry health degraded"
 }
 
-func (r *RegistryReconciler) storeRegistryData(ctx context.Context, name string, spec map[string]interface{}, healthResult *registry.HealthCheckResult) error {
+func (r *RegistryReconciler) storeRegistryData(ctx context.Context, name string, spec map[string]any, healthResult *registry.HealthCheckResult) error {
 	// Store spec
 	if err := r.RedisClient.StoreRegistrySpec(ctx, name, spec); err != nil {
 		return fmt.Errorf("failed to store registry spec: %w", err)
 	}
 
 	// Store health status
-	status := map[string]interface{}{
+	status := map[string]any{
 		"available":        healthResult.Available,
 		"response_time":    healthResult.ResponseTime,
 		"version":          healthResult.Version,
@@ -449,7 +449,7 @@ func (r *RegistryReconciler) storeRegistryData(ctx context.Context, name string,
 	}
 
 	// Store metrics for time series
-	metrics := map[string]interface{}{
+	metrics := map[string]any{
 		"timestamp":     time.Now().Unix(),
 		"response_time": healthResult.ResponseTime,
 		"available":     healthResult.Available,

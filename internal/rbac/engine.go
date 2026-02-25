@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -18,8 +18,8 @@ type Engine struct {
 	store        *store.Client
 	cache        *Cache
 	cacheEnabled bool
-	hits         int64
-	misses       int64
+	hits         atomic.Int64
+	misses       atomic.Int64
 }
 
 // NewEngine creates a new RBAC engine.
@@ -40,14 +40,14 @@ func (e *Engine) Authorize(ctx context.Context, request *Request) *RBACDecision 
 	if e.cacheEnabled {
 		cacheKey := fmt.Sprintf("rbac:decision:%s", request.CacheKey())
 		if cached := e.cache.GetDecision(ctx, cacheKey); cached != nil {
-			atomic.AddInt64(&e.hits, 1)
+			e.hits.Add(1)
 			cached.Cached = true
 			cached.Request = request
 			return cached
 		}
 	}
 
-	atomic.AddInt64(&e.misses, 1)
+	e.misses.Add(1)
 
 	policies, _ := e.getApplicablePolicies(ctx, request.Principal)
 	decision := e.evaluatePolicies(request, policies)
@@ -116,7 +116,7 @@ func (e *Engine) GetAccessibleClusters(ctx context.Context, principal *Principal
 		}
 	}
 
-	sort.Strings(accessible)
+	slices.Sort(accessible)
 	return accessible
 }
 
@@ -141,13 +141,13 @@ func (e *Engine) AuthorizeCustomResource(ctx context.Context, principal *Princip
 	if e.cacheEnabled {
 		cacheKey := CustomResourceCacheKey(principal, typeName, cluster, action)
 		if cached := e.cache.GetCustomDecision(ctx, cacheKey); cached != nil {
-			atomic.AddInt64(&e.hits, 1)
+			e.hits.Add(1)
 			cached.Cached = true
 			return cached
 		}
 	}
 
-	atomic.AddInt64(&e.misses, 1)
+	e.misses.Add(1)
 
 	// If cluster specified, verify cluster access first
 	if cluster != "" {
@@ -241,7 +241,7 @@ func (e *Engine) GetAccessibleCustomResourceTypes(ctx context.Context, principal
 	for t := range accessible {
 		result = append(result, t)
 	}
-	sort.Strings(result)
+	slices.Sort(result)
 	return result
 }
 

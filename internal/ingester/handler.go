@@ -104,7 +104,7 @@ func (h *Handler) ProcessBatch(ctx context.Context, batch *pb.MetricsBatch) erro
 	}
 
 	// Update cluster status in Redis to mark it as connected/healthy
-	status := map[string]interface{}{
+	status := map[string]any{
 		"health":     "healthy",
 		"message":    "Collector push active",
 		"last_check": time.Now().Format(time.RFC3339),
@@ -114,7 +114,7 @@ func (h *Handler) ProcessBatch(ctx context.Context, batch *pb.MetricsBatch) erro
 	}
 
 	// Publish reconciled event
-	h.redisClient.PublishEvent("cluster.reconciled", cluster, map[string]interface{}{
+	h.redisClient.PublishEvent("cluster.reconciled", cluster, map[string]any{
 		"health": "healthy",
 		"source": "collector-push",
 	})
@@ -245,7 +245,7 @@ func protoToClusterOperators(cops []*pb.ClusterOperatorInfo) []types.ClusterOper
 func protoToCustomResources(crBatch *pb.CustomResourceBatch, clusterName string) (*types.CustomResourceCollection, *types.AggregationResults) {
 	resources := make([]types.CustomCollectedResource, len(crBatch.Resources))
 	for i, r := range crBatch.Resources {
-		values := make(map[string]interface{})
+		values := make(map[string]any)
 		if len(r.ValuesJson) > 0 {
 			_ = json.Unmarshal(r.ValuesJson, &values)
 		}
@@ -270,7 +270,7 @@ func protoToCustomResources(crBatch *pb.CustomResourceBatch, clusterName string)
 
 	var aggregations *types.AggregationResults
 	if len(crBatch.AggregationValues) > 0 {
-		values := make(map[string]interface{}, len(crBatch.AggregationValues))
+		values := make(map[string]any, len(crBatch.AggregationValues))
 		for k, v := range crBatch.AggregationValues {
 			values[k] = v
 		}

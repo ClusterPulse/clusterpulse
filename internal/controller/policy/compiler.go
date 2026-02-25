@@ -107,7 +107,7 @@ func (c *Compiler) compileClusterRules(clusters *v1alpha1.PolicyClusters) ([]typ
 
 	for _, rule := range clusters.Rules {
 		// Build selector map
-		selector := map[string]interface{}{}
+		selector := map[string]any{}
 		if rule.Selector.MatchLabels != nil {
 			selector["matchLabels"] = rule.Selector.MatchLabels
 		}
@@ -201,7 +201,7 @@ func (c *Compiler) compileNodeFilter(cfg *v1alpha1.NodeResourceConfig) *types.Co
 		AllowedLiterals:   []string{},
 		DeniedLiterals:    []string{},
 		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]interface{}{},
+		AdditionalFilters: map[string]any{},
 	}
 
 	if cfg.Filters == nil {
@@ -217,7 +217,7 @@ func (c *Compiler) compileNodeFilter(cfg *v1alpha1.NodeResourceConfig) *types.Co
 	}
 
 	if cfg.Filters.HideByLabels != nil {
-		var val interface{}
+		var val any
 		_ = json.Unmarshal(cfg.Filters.HideByLabels.Raw, &val)
 		filter.AdditionalFilters["hide_by_labels"] = val
 	}
@@ -233,7 +233,7 @@ func (c *Compiler) compileOperatorFilter(cfg *v1alpha1.OperatorResourceConfig) *
 		AllowedLiterals:   []string{},
 		DeniedLiterals:    []string{},
 		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]interface{}{},
+		AdditionalFilters: map[string]any{},
 	}
 
 	if cfg.Filters == nil {
@@ -256,7 +256,7 @@ func (c *Compiler) compileNamespaceFilter(cfg *v1alpha1.NamespaceResourceConfig)
 		AllowedLiterals:   []string{},
 		DeniedLiterals:    []string{},
 		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]interface{}{},
+		AdditionalFilters: map[string]any{},
 	}
 
 	if cfg.Filters == nil {
@@ -277,7 +277,7 @@ func (c *Compiler) compilePodFilter(cfg *v1alpha1.PodResourceConfig) *types.Comp
 		AllowedLiterals:   []string{},
 		DeniedLiterals:    []string{},
 		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]interface{}{},
+		AdditionalFilters: map[string]any{},
 	}
 
 	if cfg.Filters == nil {
@@ -341,7 +341,7 @@ func (c *Compiler) compilePatternFilter(pf *v1alpha1.PatternFilter) *types.Compi
 		AllowedLiterals:   []string{},
 		DeniedLiterals:    []string{},
 		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]interface{}{},
+		AdditionalFilters: map[string]any{},
 	}
 
 	for _, pattern := range pf.Allowed {
@@ -372,7 +372,7 @@ func (c *Compiler) compileFieldFilter(fieldName string, cfg *v1alpha1.FieldFilte
 		DeniedPatterns:  [][2]string{},
 		AllowedLiterals: []string{},
 		DeniedLiterals:  []string{},
-		Conditions:      [][2]interface{}{},
+		Conditions:      [][2]any{},
 	}
 
 	for _, s := range cfg.Allowed {
@@ -394,9 +394,9 @@ func (c *Compiler) compileFieldFilter(fieldName string, cfg *v1alpha1.FieldFilte
 	}
 
 	for _, cond := range cfg.Conditions {
-		var val interface{}
+		var val any
 		_ = json.Unmarshal(cond.Value.Raw, &val)
-		filter.Conditions = append(filter.Conditions, [2]interface{}{cond.Operator, val})
+		filter.Conditions = append(filter.Conditions, [2]any{cond.Operator, val})
 	}
 
 	return filter

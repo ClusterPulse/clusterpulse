@@ -3,7 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 
 	"github.com/clusterpulse/cluster-controller/internal/rbac"
 	store "github.com/clusterpulse/cluster-controller/internal/store"
@@ -219,7 +219,7 @@ func (h *CustomTypeHandler) countsForType(
 		aggsByCluster, _ = h.store.BatchGetCustomAggregations(ctx, sourceID, clusters)
 	}
 
-	sort.Strings(clusters)
+	slices.Sort(clusters)
 	var result []map[string]any
 
 	for _, cluster := range clusters {

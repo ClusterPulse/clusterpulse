@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"sort"
+	"cmp"
+	"slices"
 	"strconv"
 
 	"github.com/clusterpulse/cluster-controller/internal/rbac"
@@ -283,7 +284,7 @@ func (h *ClusterHandler) GetClusterOperators(w http.ResponseWriter, r *http.Requ
 		var filtered []map[string]any
 		for _, op := range operators {
 			availNS := getStringSliceFromMap(op, "available_in_namespaces")
-			if (len(availNS) == 1 && availNS[0] == "*") || contains(availNS, ns) {
+			if (len(availNS) == 1 && availNS[0] == "*") || slices.Contains(availNS, ns) {
 				filtered = append(filtered, op)
 			}
 		}
@@ -349,7 +350,7 @@ func (h *ClusterHandler) GetClusterNamespaces(w http.ResponseWriter, r *http.Req
 			count := 0
 			for _, op := range filteredOps {
 				availNS := getStringSliceFromMap(op, "available_in_namespaces")
-				if (len(availNS) == 1 && availNS[0] == "*") || contains(availNS, ns) {
+				if (len(availNS) == 1 && availNS[0] == "*") || slices.Contains(availNS, ns) {
 					count++
 				}
 			}
@@ -378,10 +379,10 @@ func (h *ClusterHandler) GetClusterNamespaces(w http.ResponseWriter, r *http.Req
 	}
 
 	if withResCounts {
-		sort.Slice(details, func(i, j int) bool {
-			ti, _ := details[i]["total_resources"].(int)
-			tj, _ := details[j]["total_resources"].(int)
-			return ti > tj
+		slices.SortFunc(details, func(a, b map[string]any) int {
+			ta, _ := a["total_resources"].(int)
+			tb, _ := b["total_resources"].(int)
+			return cmp.Compare(tb, ta)
 		})
 	}
 
@@ -562,13 +563,13 @@ func (h *ClusterHandler) GetCustomResources(w http.ResponseWriter, r *http.Reque
 	// Sort
 	if sortBy := r.URL.Query().Get("sort_by"); sortBy != "" {
 		reverse := r.URL.Query().Get("sort_order") == "desc"
-		sort.Slice(filteredResources, func(i, j int) bool {
-			vi := fmt.Sprintf("%v", filteredResources[i][sortBy])
-			vj := fmt.Sprintf("%v", filteredResources[j][sortBy])
+		slices.SortFunc(filteredResources, func(a, b map[string]any) int {
+			va := fmt.Sprintf("%v", a[sortBy])
+			vb := fmt.Sprintf("%v", b[sortBy])
 			if reverse {
-				return vi > vj
+				return cmp.Compare(vb, va)
 			}
-			return vi < vj
+			return cmp.Compare(va, vb)
 		})
 	}
 
@@ -664,15 +665,6 @@ func queryInt(r *http.Request, key string, def int) int {
 	return def
 }
 
-func contains(s []string, v string) bool {
-	for _, item := range s {
-		if item == v {
-			return true
-		}
-	}
-	return false
-}
-
 func getStringSliceFromMap(m map[string]any, key string) []string {
 	if v, ok := m[key].([]any); ok {
 		result := make([]string, 0, len(v))
@@ -708,7 +700,7 @@ func (h *ClusterHandler) getAllowedNamespaces(ctx context.Context, clusterName s
 			result = append(result, name)
 		}
 	}
-	sort.Strings(result)
+	slices.Sort(result)
 	return result
 }
 

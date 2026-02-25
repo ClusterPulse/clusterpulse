@@ -31,7 +31,7 @@ type CompiledPolicy struct {
 
 // CompiledClusterRule is a compiled cluster access rule
 type CompiledClusterRule struct {
-	ClusterSelector map[string]interface{}                `json:"cluster_selector"`
+	ClusterSelector map[string]any                `json:"cluster_selector"`
 	Permissions     map[string]bool                       `json:"permissions"`
 	NodeFilter      *CompiledResourceFilter               `json:"node_filter"`
 	OperatorFilter  *CompiledResourceFilter               `json:"operator_filter"`
@@ -49,7 +49,7 @@ type CompiledResourceFilter struct {
 	AllowedLiterals   []string               `json:"allowed_literals"`
 	DeniedLiterals    []string               `json:"denied_literals"`
 	LabelSelectors    map[string]string      `json:"label_selectors"`
-	AdditionalFilters map[string]interface{} `json:"additional_filters"`
+	AdditionalFilters map[string]any `json:"additional_filters"`
 }
 
 // CompiledFieldFilter is a compiled filter for a single custom resource field
@@ -59,7 +59,7 @@ type CompiledFieldFilter struct {
 	DeniedPatterns  [][2]string `json:"denied_patterns"`
 	AllowedLiterals []string    `json:"allowed_literals"`
 	DeniedLiterals  []string    `json:"denied_literals"`
-	Conditions      [][2]interface{} `json:"conditions"`
+	Conditions      [][2]any `json:"conditions"`
 }
 
 // CompiledCustomResourceFilter is a compiled filter for a custom resource type

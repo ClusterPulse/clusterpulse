@@ -20,24 +20,24 @@ func ParseCPU(cpu string) float64 {
 	}
 
 	// Handle millicores (e.g., "100m")
-	if strings.HasSuffix(cpu, "m") {
-		val, err := strconv.ParseFloat(strings.TrimSuffix(cpu, "m"), 64)
+	if rest, ok := strings.CutSuffix(cpu, "m"); ok {
+		val, err := strconv.ParseFloat(rest, 64)
 		if err == nil {
 			return val / 1000
 		}
 	}
 
 	// Handle microcores
-	if strings.HasSuffix(cpu, "u") {
-		val, err := strconv.ParseFloat(strings.TrimSuffix(cpu, "u"), 64)
+	if rest, ok := strings.CutSuffix(cpu, "u"); ok {
+		val, err := strconv.ParseFloat(rest, 64)
 		if err == nil {
 			return val / 1000000
 		}
 	}
 
 	// Handle nanocores
-	if strings.HasSuffix(cpu, "n") {
-		val, err := strconv.ParseFloat(strings.TrimSuffix(cpu, "n"), 64)
+	if rest, ok := strings.CutSuffix(cpu, "n"); ok {
+		val, err := strconv.ParseFloat(rest, 64)
 		if err == nil {
 			return val / 1000000000
 		}
@@ -76,9 +76,8 @@ func ParseMemory(mem string) int64 {
 	}
 
 	for suffix, multiplier := range units {
-		if strings.HasSuffix(mem, suffix) {
-			valueStr := strings.TrimSuffix(mem, suffix)
-			if val, err := strconv.ParseFloat(valueStr, 64); err == nil {
+		if rest, ok := strings.CutSuffix(mem, suffix); ok {
+			if val, err := strconv.ParseFloat(rest, 64); err == nil {
 				return int64(val * float64(multiplier))
 			}
 		}

@@ -71,7 +71,7 @@ func NewDockerV2Client(endpoint string, username, password string, insecure bool
 
 	// Set up authentication if provided
 	if username != "" && password != "" {
-		auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", username, password)))
+		auth := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "%s:%s", username, password))
 		client.authHeader = fmt.Sprintf("Basic %s", auth)
 	}
 

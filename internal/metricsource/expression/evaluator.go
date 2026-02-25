@@ -21,11 +21,11 @@ func NewEvaluator() *Evaluator {
 
 // Context holds variable bindings for evaluation
 type Context struct {
-	Values map[string]interface{}
+	Values map[string]any
 }
 
 // Evaluate executes a compiled expression and returns the result
-func (e *Evaluator) Evaluate(expr *CompiledExpression, ctx *Context) (interface{}, error) {
+func (e *Evaluator) Evaluate(expr *CompiledExpression, ctx *Context) (any, error) {
 	if expr == nil || expr.AST == nil {
 		return nil, nil
 	}
@@ -39,7 +39,7 @@ func (e *Evaluator) Evaluate(expr *CompiledExpression, ctx *Context) (interface{
 	return e.coerceResult(result, expr.ResultType), nil
 }
 
-func (e *Evaluator) eval(node Node, ctx *Context) (interface{}, error) {
+func (e *Evaluator) eval(node Node, ctx *Context) (any, error) {
 	switch n := node.(type) {
 	case *LiteralNode:
 		return n.Value, nil
@@ -64,7 +64,7 @@ func (e *Evaluator) eval(node Node, ctx *Context) (interface{}, error) {
 	}
 }
 
-func (e *Evaluator) evalUnary(node *UnaryOpNode, ctx *Context) (interface{}, error) {
+func (e *Evaluator) evalUnary(node *UnaryOpNode, ctx *Context) (any, error) {
 	operand, err := e.eval(node.Operand, ctx)
 	if err != nil {
 		return nil, err
@@ -80,7 +80,7 @@ func (e *Evaluator) evalUnary(node *UnaryOpNode, ctx *Context) (interface{}, err
 	}
 }
 
-func (e *Evaluator) evalBinary(node *BinaryOpNode, ctx *Context) (interface{}, error) {
+func (e *Evaluator) evalBinary(node *BinaryOpNode, ctx *Context) (any, error) {
 	// Short-circuit evaluation for logical operators
 	if node.Operator == "&&" {
 		left, err := e.eval(node.Left, ctx)
@@ -167,7 +167,7 @@ func (e *Evaluator) evalBinary(node *BinaryOpNode, ctx *Context) (interface{}, e
 	}
 }
 
-func (e *Evaluator) evalFunction(node *FunctionCallNode, ctx *Context) (interface{}, error) {
+func (e *Evaluator) evalFunction(node *FunctionCallNode, ctx *Context) (any, error) {
 	fn, ok := BuiltinFunctions[node.Name]
 	if !ok {
 		return nil, fmt.Errorf("unknown function: %s", node.Name)
@@ -180,7 +180,7 @@ func (e *Evaluator) evalFunction(node *FunctionCallNode, ctx *Context) (interfac
 		return nil, fmt.Errorf("function %s accepts at most %d arguments", node.Name, fn.MaxArgs)
 	}
 
-	args := make([]interface{}, len(node.Args))
+	args := make([]any, len(node.Args))
 	for i, arg := range node.Args {
 		val, err := e.eval(arg, ctx)
 		if err != nil {
@@ -192,7 +192,7 @@ func (e *Evaluator) evalFunction(node *FunctionCallNode, ctx *Context) (interfac
 	return fn.Fn(args)
 }
 
-func (e *Evaluator) equals(a, b interface{}) bool {
+func (e *Evaluator) equals(a, b any) bool {
 	if a == nil && b == nil {
 		return true
 	}
@@ -212,7 +212,7 @@ func (e *Evaluator) equals(a, b interface{}) bool {
 	}
 }
 
-func (e *Evaluator) coerceResult(val interface{}, targetType string) interface{} {
+func (e *Evaluator) coerceResult(val any, targetType string) any {
 	if val == nil {
 		return nil
 	}
@@ -231,7 +231,7 @@ func (e *Evaluator) coerceResult(val interface{}, targetType string) interface{}
 	}
 }
 
-func toBool(v interface{}) bool {
+func toBool(v any) bool {
 	if v == nil {
 		return false
 	}
@@ -249,7 +249,7 @@ func toBool(v interface{}) bool {
 	}
 }
 
-func isString(v interface{}) bool {
+func isString(v any) bool {
 	_, ok := v.(string)
 	return ok
 }

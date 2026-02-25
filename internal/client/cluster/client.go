@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -95,10 +96,10 @@ func (c *ClusterClient) TestConnection(ctx context.Context) error {
 }
 
 // GetClusterInfo retrieves cluster version and console URL
-func (c *ClusterClient) GetClusterInfo(ctx context.Context) (map[string]interface{}, error) {
+func (c *ClusterClient) GetClusterInfo(ctx context.Context) (map[string]any, error) {
 	c.updateLastUsed()
 
-	info := make(map[string]interface{})
+	info := make(map[string]any)
 	info["api_url"] = c.Endpoint
 
 	// Try to get OpenShift ClusterVersion first
@@ -132,7 +133,7 @@ func (c *ClusterClient) GetClusterInfo(ctx context.Context) (map[string]interfac
 }
 
 // getOpenShiftClusterVersion fetches ClusterVersion from OpenShift
-func (c *ClusterClient) getOpenShiftClusterVersion(ctx context.Context) (map[string]interface{}, error) {
+func (c *ClusterClient) getOpenShiftClusterVersion(ctx context.Context) (map[string]any, error) {
 	// Define the ClusterVersion GVR
 	clusterVersionGVR := schema.GroupVersionResource{
 		Group:    "config.openshift.io",
@@ -146,7 +147,7 @@ func (c *ClusterClient) getOpenShiftClusterVersion(ctx context.Context) (map[str
 		return nil, fmt.Errorf("failed to get ClusterVersion: %w", err)
 	}
 
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 
 	// Extract spec information
 	if spec, found, err := unstructured.NestedMap(clusterVersion.Object, "spec"); found && err == nil {
@@ -161,7 +162,7 @@ func (c *ClusterClient) getOpenShiftClusterVersion(ctx context.Context) (map[str
 	// Extract status information
 	if status, found, err := unstructured.NestedMap(clusterVersion.Object, "status"); found && err == nil {
 		// Get desired version
-		if desired, ok := status["desired"].(map[string]interface{}); ok {
+		if desired, ok := status["desired"].(map[string]any); ok {
 			if version, ok := desired["version"].(string); ok {
 				result["version"] = version
 			}
@@ -171,11 +172,11 @@ func (c *ClusterClient) getOpenShiftClusterVersion(ctx context.Context) (map[str
 		}
 
 		// Check for available updates
-		if availableUpdates, ok := status["availableUpdates"].([]interface{}); ok && len(availableUpdates) > 0 {
+		if availableUpdates, ok := status["availableUpdates"].([]any); ok && len(availableUpdates) > 0 {
 			result["update_available"] = true
 
 			// Get details of first available update
-			if firstUpdate, ok := availableUpdates[0].(map[string]interface{}); ok {
+			if firstUpdate, ok := availableUpdates[0].(map[string]any); ok {
 				if updateVersion, ok := firstUpdate["version"].(string); ok {
 					result["available_update_version"] = updateVersion
 				}
@@ -185,9 +186,9 @@ func (c *ClusterClient) getOpenShiftClusterVersion(ctx context.Context) (map[str
 		}
 
 		// Get history for current version info
-		if history, ok := status["history"].([]interface{}); ok && len(history) > 0 {
+		if history, ok := status["history"].([]any); ok && len(history) > 0 {
 			// First item in history is the current version
-			if currentVersion, ok := history[0].(map[string]interface{}); ok {
+			if currentVersion, ok := history[0].(map[string]any); ok {
 				if state, ok := currentVersion["state"].(string); ok {
 					result["version_state"] = state
 				}
@@ -201,11 +202,11 @@ func (c *ClusterClient) getOpenShiftClusterVersion(ctx context.Context) (map[str
 		}
 
 		// Get conditions
-		if conditions, ok := status["conditions"].([]interface{}); ok {
-			var conditionsList []map[string]interface{}
+		if conditions, ok := status["conditions"].([]any); ok {
+			var conditionsList []map[string]any
 			for _, cond := range conditions {
-				if condition, ok := cond.(map[string]interface{}); ok {
-					condMap := map[string]interface{}{
+				if condition, ok := cond.(map[string]any); ok {
+					condMap := map[string]any{
 						"type":    condition["type"],
 						"status":  condition["status"],
 						"message": condition["message"],
@@ -280,13 +281,12 @@ func (c *ClusterClient) deriveConsoleURL() string {
 	apiURL = strings.TrimPrefix(apiURL, "http://")
 
 	// Remove port
-	if idx := strings.Index(apiURL, ":"); idx != -1 {
-		apiURL = apiURL[:idx]
+	if host, _, ok := strings.Cut(apiURL, ":"); ok {
+		apiURL = host
 	}
 
 	// Convert api.* to console-openshift-console.apps.*
-	if strings.HasPrefix(apiURL, "api.") {
-		baseDomain := strings.TrimPrefix(apiURL, "api.")
+	if baseDomain, ok := strings.CutPrefix(apiURL, "api."); ok {
 		return fmt.Sprintf("https://console-openshift-console.apps.%s", baseDomain)
 	}
 
@@ -646,7 +646,7 @@ func (c *ClusterClient) extractOperatorInfo(csv, sub *unstructured.Unstructured)
 	if modes, found, _ := unstructured.NestedSlice(spec, "installModes"); found {
 		installModes := make([]string, 0, len(modes))
 		for _, mode := range modes {
-			if modeMap, ok := mode.(map[string]interface{}); ok {
+			if modeMap, ok := mode.(map[string]any); ok {
 				if modeName, ok := modeMap["type"].(string); ok {
 					if supported, ok := modeMap["supported"].(bool); ok && supported {
 						installModes = append(installModes, modeName)
@@ -677,7 +677,7 @@ func (c *ClusterClient) extractOperatorInfo(csv, sub *unstructured.Unstructured)
 		if config, found, _ := unstructured.NestedMap(subSpec, "config"); found {
 			if env, found, _ := unstructured.NestedSlice(config, "env"); found {
 				for _, e := range env {
-					if envMap, ok := e.(map[string]interface{}); ok {
+					if envMap, ok := e.(map[string]any); ok {
 						if name, _ := envMap["name"].(string); name == "WATCH_NAMESPACE" {
 							if value, _ := envMap["value"].(string); value != "" {
 								// Specific namespaces being watched
@@ -766,8 +766,8 @@ func (c *ClusterClient) GetClusterOperators(ctx context.Context) ([]types.Cluste
 	}
 
 	// Sort by name for consistent ordering
-	sort.Slice(clusterOperators, func(i, j int) bool {
-		return clusterOperators[i].Name < clusterOperators[j].Name
+	slices.SortFunc(clusterOperators, func(a, b types.ClusterOperatorInfo) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 
 	elapsed := time.Since(startTime)
@@ -792,7 +792,7 @@ func (c *ClusterClient) extractClusterOperatorInfo(co *unstructured.Unstructured
 	// Process conditions
 	if conditions, found, _ := unstructured.NestedSlice(status, "conditions"); found {
 		for _, cond := range conditions {
-			if condMap, ok := cond.(map[string]interface{}); ok {
+			if condMap, ok := cond.(map[string]any); ok {
 				condition := types.ClusterOperatorCondition{
 					Type:    getStringValue(condMap, "type"),
 					Status:  getStringValue(condMap, "status"),
@@ -844,7 +844,7 @@ func (c *ClusterClient) extractClusterOperatorInfo(co *unstructured.Unstructured
 	// Process versions
 	if versions, found, _ := unstructured.NestedSlice(status, "versions"); found {
 		for _, ver := range versions {
-			if verMap, ok := ver.(map[string]interface{}); ok {
+			if verMap, ok := ver.(map[string]any); ok {
 				version := types.ClusterOperatorVersion{
 					Name:    getStringValue(verMap, "name"),
 					Version: getStringValue(verMap, "version"),
@@ -867,7 +867,7 @@ func (c *ClusterClient) extractClusterOperatorInfo(co *unstructured.Unstructured
 	// Process related objects
 	if relatedObjects, found, _ := unstructured.NestedSlice(status, "relatedObjects"); found {
 		for _, obj := range relatedObjects {
-			if objMap, ok := obj.(map[string]interface{}); ok {
+			if objMap, ok := obj.(map[string]any); ok {
 				relatedObj := types.RelatedObject{
 					Group:     getStringValue(objMap, "group"),
 					Resource:  getStringValue(objMap, "resource"),
@@ -883,7 +883,7 @@ func (c *ClusterClient) extractClusterOperatorInfo(co *unstructured.Unstructured
 }
 
 // Helper function to safely get string values from map
-func getStringValue(m map[string]interface{}, key string) string {
+func getStringValue(m map[string]any, key string) string {
 	if val, ok := m[key]; ok {
 		if strVal, ok := val.(string); ok {
 			return strVal

@@ -3,7 +3,7 @@ package rbac
 import (
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -88,7 +88,7 @@ type Principal struct {
 func (p *Principal) CacheKey() string {
 	sorted := make([]string, len(p.Groups))
 	copy(sorted, p.Groups)
-	sort.Strings(sorted)
+	slices.Sort(sorted)
 	return fmt.Sprintf("%s:%s", p.Username, strings.Join(sorted, ","))
 }
 

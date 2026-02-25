@@ -222,15 +222,15 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	}
 
 	// Store cluster spec for backend compatibility
-	specData := map[string]interface{}{
+	specData := map[string]any{
 		"displayName": clusterConn.Spec.DisplayName,
 		"endpoint":    clusterConn.Spec.Endpoint,
-		"credentialsRef": map[string]interface{}{
+		"credentialsRef": map[string]any{
 			"name":      clusterConn.Spec.CredentialsRef.Name,
 			"namespace": clusterConn.Spec.CredentialsRef.Namespace,
 		},
 		"labels": clusterConn.Spec.Labels,
-		"monitoring": map[string]interface{}{
+		"monitoring": map[string]any{
 			"interval": clusterConn.Spec.Monitoring.Interval,
 			"timeout":  clusterConn.Spec.Monitoring.Timeout,
 		},
@@ -244,7 +244,7 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	g, gctx := errgroup.WithContext(ctx)
 
 	var nodeMetrics []types.NodeMetrics
-	var clusterInfo map[string]interface{}
+	var clusterInfo map[string]any
 	var operators []types.OperatorInfo
 	var clusterOperators []types.ClusterOperatorInfo
 
@@ -378,7 +378,7 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 	r.updateClusterStatus(ctx, clusterConn.Name, health, message)
 
 	// Publish event
-	r.RedisClient.PublishEvent("cluster.reconciled", clusterConn.Name, map[string]interface{}{
+	r.RedisClient.PublishEvent("cluster.reconciled", clusterConn.Name, map[string]any{
 		"health":       health,
 		"display_name": clusterConn.Spec.DisplayName,
 	})
@@ -463,7 +463,7 @@ func countDegraded(operators []types.ClusterOperatorInfo) int {
 }
 
 func (r *ClusterReconciler) updateClusterStatus(ctx context.Context, name string, health types.ClusterHealth, message string) {
-	status := map[string]interface{}{
+	status := map[string]any{
 		"health":     health,
 		"message":    message,
 		"last_check": time.Now().Format(time.RFC3339),

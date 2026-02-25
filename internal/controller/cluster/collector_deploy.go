@@ -120,17 +120,17 @@ func ensureClusterRole(ctx context.Context, client dynamic.Interface) error {
 	gvr := schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles"}
 
 	cr := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "rbac.authorization.k8s.io/v1",
 			"kind":       "ClusterRole",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": collectorClusterRole,
 			},
-			"rules": []interface{}{
-				map[string]interface{}{
-					"apiGroups": []interface{}{"*"},
-					"resources": []interface{}{"*"},
-					"verbs":     []interface{}{"get", "list", "watch"},
+			"rules": []any{
+				map[string]any{
+					"apiGroups": []any{"*"},
+					"resources": []any{"*"},
+					"verbs":     []any{"get", "list", "watch"},
 				},
 			},
 		},
@@ -154,20 +154,20 @@ func ensureClusterRoleBinding(ctx context.Context, client dynamic.Interface, nam
 	gvr := schema.GroupVersionResource{Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings"}
 
 	crb := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "rbac.authorization.k8s.io/v1",
 			"kind":       "ClusterRoleBinding",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name": collectorClusterRole,
 			},
-			"subjects": []interface{}{
-				map[string]interface{}{
+			"subjects": []any{
+				map[string]any{
 					"kind":      "ServiceAccount",
 					"name":      collectorServiceAccount,
 					"namespace": namespace,
 				},
 			},
-			"roleRef": map[string]interface{}{
+			"roleRef": map[string]any{
 				"apiGroup": "rbac.authorization.k8s.io",
 				"kind":     "ClusterRole",
 				"name":     collectorClusterRole,
@@ -187,15 +187,15 @@ func ensureCollectorSecret(ctx context.Context, client dynamic.Interface, namesp
 	name := "clusterpulse-collector-token"
 
 	secret := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Secret",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
 			},
 			"type": "Opaque",
-			"stringData": map[string]interface{}{
+			"stringData": map[string]any{
 				"token": token,
 			},
 		},
@@ -227,64 +227,64 @@ func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, na
 	}
 
 	deploy := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      collectorDeploymentName,
 				"namespace": namespace,
-				"labels": map[string]interface{}{
+				"labels": map[string]any{
 					"app.kubernetes.io/name":      "clusterpulse-collector",
 					"app.kubernetes.io/component": "collector",
 					"app.kubernetes.io/part-of":   "clusterpulse",
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"replicas": int64(1),
-				"selector": map[string]interface{}{
-					"matchLabels": map[string]interface{}{
+				"selector": map[string]any{
+					"matchLabels": map[string]any{
 						"app.kubernetes.io/name": "clusterpulse-collector",
 					},
 				},
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"labels": map[string]interface{}{
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
 							"app.kubernetes.io/name":      "clusterpulse-collector",
 							"app.kubernetes.io/component": "collector",
 							"app.kubernetes.io/part-of":   "clusterpulse",
 						},
 					},
-					"spec": map[string]interface{}{
+					"spec": map[string]any{
 						"serviceAccountName": collectorServiceAccount,
-						"containers": []interface{}{
-							map[string]interface{}{
+						"containers": []any{
+							map[string]any{
 								"name":  "collector",
 								"image": fmt.Sprintf("%s:%s", collectorImage, imageTag),
-								"env": []interface{}{
-									map[string]interface{}{
+								"env": []any{
+									map[string]any{
 										"name":  "CLUSTER_NAME",
 										"value": clusterName,
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name":  "INGESTER_ADDRESS",
 										"value": ingesterAddr,
 									},
-									map[string]interface{}{
+									map[string]any{
 										"name": "COLLECTOR_TOKEN",
-										"valueFrom": map[string]interface{}{
-											"secretKeyRef": map[string]interface{}{
+										"valueFrom": map[string]any{
+											"secretKeyRef": map[string]any{
 												"name": "clusterpulse-collector-token",
 												"key":  "token",
 											},
 										},
 									},
 								},
-								"resources": map[string]interface{}{
-									"requests": map[string]interface{}{
+								"resources": map[string]any{
+									"requests": map[string]any{
 										"cpu":    "50m",
 										"memory": "32Mi",
 									},
-									"limits": map[string]interface{}{
+									"limits": map[string]any{
 										"cpu":    "200m",
 										"memory": "64Mi",
 									},

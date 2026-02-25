@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 
 	goredis "github.com/go-redis/redis/v8"
@@ -337,7 +338,7 @@ func (c *Client) GetClustersWithData(ctx context.Context, typeName string) ([]st
 		}
 	}
 
-	sort.Strings(clusters)
+	slices.Sort(clusters)
 	return clusters, iter.Err()
 }
 
@@ -451,8 +452,8 @@ func (c *Client) GetPoliciesForPrincipal(ctx context.Context, username string, g
 	for k, p := range seen {
 		sorted = append(sorted, keyPriority{k, p})
 	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].priority > sorted[j].priority
+	slices.SortFunc(sorted, func(a, b keyPriority) int {
+		return cmp.Compare(b.priority, a.priority)
 	})
 
 	// Fetch policy data

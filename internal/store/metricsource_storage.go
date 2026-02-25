@@ -282,8 +282,8 @@ func (c *Client) DeleteMetricSourceClusterData(ctx context.Context, clusterName,
 }
 
 // PublishMetricSourceEvent publishes an event related to MetricSource operations
-func (c *Client) PublishMetricSourceEvent(eventType, sourceID string, data map[string]interface{}) {
-	event := map[string]interface{}{
+func (c *Client) PublishMetricSourceEvent(eventType, sourceID string, data map[string]any) {
+	event := map[string]any{
 		"type":      eventType,
 		"sourceId":  sourceID,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),

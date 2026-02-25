@@ -39,7 +39,7 @@ func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) 
 
 	pipe := c.client.Pipeline()
 
-	pipe.HSet(ctx, policyKey, map[string]interface{}{
+	pipe.HSet(ctx, policyKey, map[string]any{
 		"data":        string(policyData),
 		"priority":    policy.Priority,
 		"effect":      policy.Effect,
@@ -195,7 +195,7 @@ func (c *Client) ListPolicies(ctx context.Context, enabledOnly bool) ([]string, 
 }
 
 // UpdatePolicyStatus updates the status field in a policy's Redis hash
-func (c *Client) UpdatePolicyStatus(ctx context.Context, namespace, name string, status map[string]interface{}) error {
+func (c *Client) UpdatePolicyStatus(ctx context.Context, namespace, name string, status map[string]any) error {
 	policyKey := fmt.Sprintf(keyPolicy, namespace, name)
 	statusData, err := json.Marshal(status)
 	if err != nil {

@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/internal/rbac"
@@ -104,7 +105,7 @@ func (h *AuthHandler) GetPermissions(w http.ResponseWriter, r *http.Request) {
 		for action := range perms {
 			permList = append(permList, string(action))
 		}
-		sort.Strings(permList)
+		slices.Sort(permList)
 
 		level := "limited"
 		if len(perms) > 5 {
@@ -221,8 +222,8 @@ func (h *AuthHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sort by priority descending
-	sort.Slice(policies, func(i, j int) bool {
-		return policies[i].Priority > policies[j].Priority
+	slices.SortFunc(policies, func(a, b policyEntry) int {
+		return cmp.Compare(b.Priority, a.Priority)
 	})
 
 	evalOrder := make([]string, len(policies))

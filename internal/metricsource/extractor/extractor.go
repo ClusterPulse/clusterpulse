@@ -29,9 +29,9 @@ func NewExtractor() *Extractor {
 func (e *Extractor) ExtractFields(
 	resource *unstructured.Unstructured,
 	fields []types.CompiledField,
-) (map[string]interface{}, error) {
+) (map[string]any, error) {
 
-	result := make(map[string]interface{}, len(fields))
+	result := make(map[string]any, len(fields))
 
 	for _, field := range fields {
 		value, err := e.extractField(resource.Object, &field)
@@ -49,7 +49,7 @@ func (e *Extractor) ExtractFields(
 }
 
 // extractField extracts a single field value using the pre-parsed path segments
-func (e *Extractor) extractField(obj map[string]interface{}, field *types.CompiledField) (interface{}, error) {
+func (e *Extractor) extractField(obj map[string]any, field *types.CompiledField) (any, error) {
 	rawValue, found, err := e.navigatePath(obj, field.PathSegments)
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func (e *Extractor) extractField(obj map[string]interface{}, field *types.Compil
 }
 
 // navigatePath traverses the object using pre-parsed path segments
-func (e *Extractor) navigatePath(obj interface{}, segments []string) (interface{}, bool, error) {
+func (e *Extractor) navigatePath(obj any, segments []string) (any, bool, error) {
 	current := obj
 
 	for _, segment := range segments {
@@ -82,7 +82,7 @@ func (e *Extractor) navigatePath(obj interface{}, segments []string) (interface{
 				return nil, false, fmt.Errorf("invalid array index: %s", indexStr)
 			}
 
-			arr, ok := current.([]interface{})
+			arr, ok := current.([]any)
 			if !ok {
 				return nil, false, nil
 			}
@@ -94,7 +94,7 @@ func (e *Extractor) navigatePath(obj interface{}, segments []string) (interface{
 		}
 
 		// Handle map navigation
-		m, ok := current.(map[string]interface{})
+		m, ok := current.(map[string]any)
 		if !ok {
 			return nil, false, nil
 		}
@@ -110,7 +110,7 @@ func (e *Extractor) navigatePath(obj interface{}, segments []string) (interface{
 }
 
 // convertValue converts a raw value to the specified type
-func (e *Extractor) convertValue(value interface{}, fieldType string) (interface{}, error) {
+func (e *Extractor) convertValue(value any, fieldType string) (any, error) {
 	if value == nil {
 		return nil, nil
 	}
@@ -136,7 +136,7 @@ func (e *Extractor) convertValue(value interface{}, fieldType string) (interface
 }
 
 // convertType converts a string default value to the appropriate type
-func (e *Extractor) convertType(value string, fieldType string) interface{} {
+func (e *Extractor) convertType(value string, fieldType string) any {
 	switch fieldType {
 	case types.FieldTypeInteger:
 		if v, err := strconv.ParseInt(value, 10, 64); err == nil {
@@ -158,7 +158,7 @@ func (e *Extractor) convertType(value string, fieldType string) interface{} {
 }
 
 // toString converts any value to string
-func (e *Extractor) toString(value interface{}) string {
+func (e *Extractor) toString(value any) string {
 	if value == nil {
 		return ""
 	}
@@ -181,7 +181,7 @@ func (e *Extractor) toString(value interface{}) string {
 }
 
 // toInteger converts a value to int64
-func (e *Extractor) toInteger(value interface{}) (int64, error) {
+func (e *Extractor) toInteger(value any) (int64, error) {
 	switch v := value.(type) {
 	case int64:
 		return v, nil
@@ -199,7 +199,7 @@ func (e *Extractor) toInteger(value interface{}) (int64, error) {
 }
 
 // toFloat converts a value to float64
-func (e *Extractor) toFloat(value interface{}) (float64, error) {
+func (e *Extractor) toFloat(value any) (float64, error) {
 	switch v := value.(type) {
 	case float64:
 		return v, nil
@@ -217,7 +217,7 @@ func (e *Extractor) toFloat(value interface{}) (float64, error) {
 }
 
 // toBoolean converts a value to bool
-func (e *Extractor) toBoolean(value interface{}) (bool, error) {
+func (e *Extractor) toBoolean(value any) (bool, error) {
 	switch v := value.(type) {
 	case bool:
 		return v, nil
@@ -233,7 +233,7 @@ func (e *Extractor) toBoolean(value interface{}) (bool, error) {
 }
 
 // toQuantityBytes parses Kubernetes quantity strings to bytes
-func (e *Extractor) toQuantityBytes(value interface{}) (int64, error) {
+func (e *Extractor) toQuantityBytes(value any) (int64, error) {
 	str := e.toString(value)
 	if str == "" {
 		return 0, nil
@@ -250,7 +250,7 @@ func (e *Extractor) toQuantityBytes(value interface{}) (int64, error) {
 }
 
 // toTimestamp parses RFC3339 timestamps
-func (e *Extractor) toTimestamp(value interface{}) (string, error) {
+func (e *Extractor) toTimestamp(value any) (string, error) {
 	str := e.toString(value)
 	if str == "" {
 		return "", nil
@@ -272,7 +272,7 @@ func (e *Extractor) toTimestamp(value interface{}) (string, error) {
 }
 
 // toArrayLength returns the length of an array
-func (e *Extractor) toArrayLength(value interface{}) (int64, error) {
+func (e *Extractor) toArrayLength(value any) (int64, error) {
 	if value == nil {
 		return 0, nil
 	}

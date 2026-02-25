@@ -48,7 +48,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 // StoreOperators stores operator information in Redis (Python-compatible format)
 func (c *Client) StoreOperators(ctx context.Context, clusterName string, operators []types.OperatorInfo) error {
 	// Convert to Python-compatible format
-	operatorsList := make([]map[string]interface{}, 0, len(operators))
+	operatorsList := make([]map[string]any, 0, len(operators))
 
 	for _, op := range operators {
 		// Ensure arrays are never nil for Python compatibility
@@ -62,7 +62,7 @@ func (c *Client) StoreOperators(ctx context.Context, clusterName string, operato
 			availableNamespaces = []string{}
 		}
 
-		operatorData := map[string]interface{}{
+		operatorData := map[string]any{
 			"name":                    op.Name,
 			"display_name":            op.DisplayName,
 			"version":                 op.Version,
@@ -125,8 +125,8 @@ func (c *Client) StoreOperators(ctx context.Context, clusterName string, operato
 }
 
 // createOperatorSummary creates a summary of operators
-func (c *Client) createOperatorSummary(operators []types.OperatorInfo) map[string]interface{} {
-	summary := map[string]interface{}{
+func (c *Client) createOperatorSummary(operators []types.OperatorInfo) map[string]any {
+	summary := map[string]any{
 		"total":        len(operators),
 		"by_status":    make(map[string]int),
 		"by_namespace": make(map[string]int),
@@ -192,7 +192,7 @@ func (c *Client) StoreNodeMetrics(ctx context.Context, clusterName string, metri
 
 		// Store time-series metrics
 		metricsKey := fmt.Sprintf("%s:metrics", nodeKey)
-		metricsData := map[string]interface{}{
+		metricsData := map[string]any{
 			"timestamp":        node.Timestamp.Format(time.RFC3339),
 			"cpu_usage":        node.CPUUsagePercent,
 			"memory_usage":     node.MemoryUsagePercent,
@@ -234,11 +234,11 @@ func (c *Client) StoreNodeMetrics(ctx context.Context, clusterName string, metri
 }
 
 // nodeMetricsToDict converts NodeMetrics to Python-compatible dictionary format
-func (c *Client) nodeMetricsToDict(node types.NodeMetrics) map[string]interface{} {
+func (c *Client) nodeMetricsToDict(node types.NodeMetrics) map[string]any {
 	// Convert conditions to list of dicts
-	conditions := make([]map[string]interface{}, len(node.Conditions))
+	conditions := make([]map[string]any, len(node.Conditions))
 	for i, cond := range node.Conditions {
-		conditions[i] = map[string]interface{}{
+		conditions[i] = map[string]any{
 			"type":                 cond.Type,
 			"status":               cond.Status,
 			"reason":               cond.Reason,
@@ -271,7 +271,7 @@ func (c *Client) nodeMetricsToDict(node types.NodeMetrics) map[string]interface{
 		taints = []map[string]string{}
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"name":       node.Name,
 		"timestamp":  node.Timestamp.Format(time.RFC3339),
 		"status":     node.Status,
@@ -327,7 +327,7 @@ func (c *Client) nodeMetricsToDict(node types.NodeMetrics) map[string]interface{
 }
 
 func (c *Client) storeNodeSummary(ctx context.Context, pipe redis.Pipeliner, clusterName string, metrics []types.NodeMetrics, timestamp time.Time) {
-	summary := map[string]interface{}{
+	summary := map[string]any{
 		"total":                 len(metrics),
 		"ready":                 0,
 		"not_ready":             0,
@@ -380,7 +380,7 @@ func (c *Client) storeNodeSummary(ctx context.Context, pipe redis.Pipeliner, clu
 // StoreClusterMetrics stores cluster metrics (Python-compatible)
 func (c *Client) StoreClusterMetrics(ctx context.Context, name string, metrics *types.ClusterMetrics) error {
 	// Convert to Python-compatible format (WITHOUT namespace_list)
-	metricsDict := map[string]interface{}{
+	metricsDict := map[string]any{
 		"timestamp":       metrics.Timestamp.Format(time.RFC3339),
 		"nodes":           metrics.Nodes,
 		"nodes_ready":     metrics.NodesReady,
@@ -428,7 +428,7 @@ func (c *Client) storeNamespaceList(ctx context.Context, pipe redis.Pipeliner, c
 	}
 
 	// Create namespace data structure (Python-compatible)
-	namespaceData := map[string]interface{}{
+	namespaceData := map[string]any{
 		"namespaces": namespaces,
 		"count":      len(namespaces),
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
@@ -447,7 +447,7 @@ func (c *Client) storeNamespaceList(ctx context.Context, pipe redis.Pipeliner, c
 	namespaceSetKey := fmt.Sprintf("cluster:%s:namespaces:set", clusterName)
 	pipe.Del(ctx, namespaceSetKey) // Clear existing set
 	if len(namespaces) > 0 {
-		members := make([]interface{}, len(namespaces))
+		members := make([]any, len(namespaces))
 		for i, ns := range namespaces {
 			members[i] = ns
 		}
@@ -465,7 +465,7 @@ func (c *Client) StoreNamespaces(ctx context.Context, clusterName string, namesp
 	}
 
 	// Create namespace data structure (Python-compatible)
-	namespaceData := map[string]interface{}{
+	namespaceData := map[string]any{
 		"namespaces": namespaces,
 		"count":      len(namespaces),
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
@@ -486,7 +486,7 @@ func (c *Client) StoreNamespaces(ctx context.Context, clusterName string, namesp
 	namespaceSetKey := fmt.Sprintf("cluster:%s:namespaces:set", clusterName)
 	pipe.Del(ctx, namespaceSetKey) // Clear existing set
 	if len(namespaces) > 0 {
-		members := make([]interface{}, len(namespaces))
+		members := make([]any, len(namespaces))
 		for i, ns := range namespaces {
 			members[i] = ns
 		}
@@ -505,7 +505,7 @@ func (c *Client) StoreNamespaces(ctx context.Context, clusterName string, namesp
 }
 
 // StoreClusterInfo stores cluster info
-func (c *Client) StoreClusterInfo(ctx context.Context, name string, info map[string]interface{}) error {
+func (c *Client) StoreClusterInfo(ctx context.Context, name string, info map[string]any) error {
 	data, err := json.Marshal(info)
 	if err != nil {
 		return fmt.Errorf("failed to marshal cluster info: %w", err)
@@ -516,7 +516,7 @@ func (c *Client) StoreClusterInfo(ctx context.Context, name string, info map[str
 }
 
 // StoreClusterStatus stores cluster status
-func (c *Client) StoreClusterStatus(ctx context.Context, name string, status map[string]interface{}) error {
+func (c *Client) StoreClusterStatus(ctx context.Context, name string, status map[string]any) error {
 	data, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("failed to marshal cluster status: %w", err)
@@ -534,7 +534,7 @@ func (c *Client) StoreClusterStatus(ctx context.Context, name string, status map
 }
 
 // StoreClusterSpec stores the cluster spec (for backend compatibility)
-func (c *Client) StoreClusterSpec(ctx context.Context, name string, spec map[string]interface{}) error {
+func (c *Client) StoreClusterSpec(ctx context.Context, name string, spec map[string]any) error {
 	data, err := json.Marshal(spec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal cluster spec: %w", err)
@@ -563,7 +563,7 @@ func (c *Client) StoreClusterOperators(ctx context.Context, clusterName string, 
 	}
 
 	// Convert to Python-compatible format
-	operatorsList := make([]map[string]interface{}, 0, len(operators))
+	operatorsList := make([]map[string]any, 0, len(operators))
 
 	// Track overall health metrics
 	totalCount := len(operators)
@@ -588,9 +588,9 @@ func (c *Client) StoreClusterOperators(ctx context.Context, clusterName string, 
 		}
 
 		// Convert conditions to list of dicts
-		conditions := make([]map[string]interface{}, len(op.Conditions))
+		conditions := make([]map[string]any, len(op.Conditions))
 		for i, cond := range op.Conditions {
-			conditions[i] = map[string]interface{}{
+			conditions[i] = map[string]any{
 				"type":                 cond.Type,
 				"status":               cond.Status,
 				"last_transition_time": cond.LastTransitionTime.Format(time.RFC3339),
@@ -600,18 +600,18 @@ func (c *Client) StoreClusterOperators(ctx context.Context, clusterName string, 
 		}
 
 		// Convert versions
-		versions := make([]map[string]interface{}, len(op.Versions))
+		versions := make([]map[string]any, len(op.Versions))
 		for i, ver := range op.Versions {
-			versions[i] = map[string]interface{}{
+			versions[i] = map[string]any{
 				"name":    ver.Name,
 				"version": ver.Version,
 			}
 		}
 
 		// Convert related objects
-		relatedObjects := make([]map[string]interface{}, len(op.RelatedObjects))
+		relatedObjects := make([]map[string]any, len(op.RelatedObjects))
 		for i, obj := range op.RelatedObjects {
-			relatedObjects[i] = map[string]interface{}{
+			relatedObjects[i] = map[string]any{
 				"group":     obj.Group,
 				"resource":  obj.Resource,
 				"namespace": obj.Namespace,
@@ -619,7 +619,7 @@ func (c *Client) StoreClusterOperators(ctx context.Context, clusterName string, 
 			}
 		}
 
-		operatorData := map[string]interface{}{
+		operatorData := map[string]any{
 			"name":                 op.Name,
 			"version":              op.Version,
 			"available":            op.Available,
@@ -646,7 +646,7 @@ func (c *Client) StoreClusterOperators(ctx context.Context, clusterName string, 
 	key := fmt.Sprintf("cluster:%s:cluster_operators", clusterName)
 
 	// Create summary for quick access
-	summary := map[string]interface{}{
+	summary := map[string]any{
 		"total":       totalCount,
 		"available":   availableCount,
 		"degraded":    degradedCount,
@@ -684,7 +684,7 @@ func (c *Client) StoreClusterOperators(ctx context.Context, clusterName string, 
 	// Store individual operator status for quick lookups
 	for _, op := range operators {
 		opKey := fmt.Sprintf("cluster:%s:cluster_operator:%s", clusterName, op.Name)
-		opData := map[string]interface{}{
+		opData := map[string]any{
 			"available":   op.Available,
 			"degraded":    op.Degraded,
 			"progressing": op.Progressing,
@@ -713,14 +713,14 @@ func (c *Client) StoreClusterOperators(ctx context.Context, clusterName string, 
 }
 
 // GetClusterOperatorsSummary retrieves the cluster operators summary
-func (c *Client) GetClusterOperatorsSummary(ctx context.Context, clusterName string) (map[string]interface{}, error) {
+func (c *Client) GetClusterOperatorsSummary(ctx context.Context, clusterName string) (map[string]any, error) {
 	key := fmt.Sprintf("cluster:%s:cluster_operators_summary", clusterName)
 	data, err := c.client.Get(ctx, key).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	var summary map[string]interface{}
+	var summary map[string]any
 	if err := json.Unmarshal([]byte(data), &summary); err != nil {
 		return nil, err
 	}
@@ -729,14 +729,14 @@ func (c *Client) GetClusterOperatorsSummary(ctx context.Context, clusterName str
 }
 
 // GetClusterOperators retrieves all cluster operators for a cluster
-func (c *Client) GetClusterOperators(ctx context.Context, clusterName string) ([]map[string]interface{}, error) {
+func (c *Client) GetClusterOperators(ctx context.Context, clusterName string) ([]map[string]any, error) {
 	key := fmt.Sprintf("cluster:%s:cluster_operators", clusterName)
 	data, err := c.client.Get(ctx, key).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	var operators []map[string]interface{}
+	var operators []map[string]any
 	if err := json.Unmarshal([]byte(data), &operators); err != nil {
 		return nil, err
 	}
@@ -745,14 +745,14 @@ func (c *Client) GetClusterOperators(ctx context.Context, clusterName string) ([
 }
 
 // GetClusterOperatorStatus retrieves status for a specific cluster operator
-func (c *Client) GetClusterOperatorStatus(ctx context.Context, clusterName, operatorName string) (map[string]interface{}, error) {
+func (c *Client) GetClusterOperatorStatus(ctx context.Context, clusterName, operatorName string) (map[string]any, error) {
 	key := fmt.Sprintf("cluster:%s:cluster_operator:%s", clusterName, operatorName)
 	data, err := c.client.Get(ctx, key).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	var status map[string]interface{}
+	var status map[string]any
 	if err := json.Unmarshal([]byte(data), &status); err != nil {
 		return nil, err
 	}
@@ -761,8 +761,8 @@ func (c *Client) GetClusterOperatorStatus(ctx context.Context, clusterName, oper
 }
 
 // PublishEvent publishes an event
-func (c *Client) PublishEvent(eventType, clusterName string, data map[string]interface{}) {
-	event := map[string]interface{}{
+func (c *Client) PublishEvent(eventType, clusterName string, data map[string]any) {
+	event := map[string]any{
 		"type":      eventType,
 		"cluster":   clusterName,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),

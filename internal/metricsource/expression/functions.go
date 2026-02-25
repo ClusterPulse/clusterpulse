@@ -11,7 +11,7 @@ import (
 type FunctionDef struct {
 	MinArgs int
 	MaxArgs int
-	Fn      func(args []interface{}) (interface{}, error)
+	Fn      func(args []any) (any, error)
 }
 
 // BuiltinFunctions contains all available functions
@@ -38,7 +38,7 @@ var BuiltinFunctions = map[string]FunctionDef{
 	"toNumber":    {MinArgs: 1, MaxArgs: 1, Fn: fnToNumber},
 }
 
-func fnConcat(args []interface{}) (interface{}, error) {
+func fnConcat(args []any) (any, error) {
 	var sb strings.Builder
 	for _, arg := range args {
 		sb.WriteString(toString(arg))
@@ -46,19 +46,19 @@ func fnConcat(args []interface{}) (interface{}, error) {
 	return sb.String(), nil
 }
 
-func fnLower(args []interface{}) (interface{}, error) {
+func fnLower(args []any) (any, error) {
 	return strings.ToLower(toString(args[0])), nil
 }
 
-func fnUpper(args []interface{}) (interface{}, error) {
+func fnUpper(args []any) (any, error) {
 	return strings.ToUpper(toString(args[0])), nil
 }
 
-func fnLen(args []interface{}) (interface{}, error) {
+func fnLen(args []any) (any, error) {
 	return float64(len(toString(args[0]))), nil
 }
 
-func fnSubstr(args []interface{}) (interface{}, error) {
+func fnSubstr(args []any) (any, error) {
 	s := toString(args[0])
 	start := int(toFloat(args[1]))
 	if start < 0 || start >= len(s) {
@@ -75,7 +75,7 @@ func fnSubstr(args []interface{}) (interface{}, error) {
 	return s[start:], nil
 }
 
-func fnRound(args []interface{}) (interface{}, error) {
+func fnRound(args []any) (any, error) {
 	val := toFloat(args[0])
 	decimals := 0
 	if len(args) == 2 {
@@ -85,29 +85,29 @@ func fnRound(args []interface{}) (interface{}, error) {
 	return math.Round(val*mult) / mult, nil
 }
 
-func fnFloor(args []interface{}) (interface{}, error) {
+func fnFloor(args []any) (any, error) {
 	return math.Floor(toFloat(args[0])), nil
 }
 
-func fnCeil(args []interface{}) (interface{}, error) {
+func fnCeil(args []any) (any, error) {
 	return math.Ceil(toFloat(args[0])), nil
 }
 
-func fnAbs(args []interface{}) (interface{}, error) {
+func fnAbs(args []any) (any, error) {
 	return math.Abs(toFloat(args[0])), nil
 }
 
-func fnMin(args []interface{}) (interface{}, error) {
+func fnMin(args []any) (any, error) {
 	a, b := toFloat(args[0]), toFloat(args[1])
 	return math.Min(a, b), nil
 }
 
-func fnMax(args []interface{}) (interface{}, error) {
+func fnMax(args []any) (any, error) {
 	a, b := toFloat(args[0]), toFloat(args[1])
 	return math.Max(a, b), nil
 }
 
-func fnCoalesce(args []interface{}) (interface{}, error) {
+func fnCoalesce(args []any) (any, error) {
 	for _, arg := range args {
 		if arg != nil {
 			return arg, nil
@@ -116,11 +116,11 @@ func fnCoalesce(args []interface{}) (interface{}, error) {
 	return nil, nil
 }
 
-func fnNow(args []interface{}) (interface{}, error) {
+func fnNow(args []any) (any, error) {
 	return time.Now().UTC().Format(time.RFC3339), nil
 }
 
-func fnAge(args []interface{}) (interface{}, error) {
+func fnAge(args []any) (any, error) {
 	ts := toString(args[0])
 	if ts == "" {
 		return nil, nil
@@ -132,7 +132,7 @@ func fnAge(args []interface{}) (interface{}, error) {
 	return time.Since(t).Seconds(), nil
 }
 
-func fnFormatBytes(args []interface{}) (interface{}, error) {
+func fnFormatBytes(args []any) (any, error) {
 	bytes := toFloat(args[0])
 	units := []string{"B", "Ki", "Mi", "Gi", "Ti", "Pi"}
 	idx := 0
@@ -143,27 +143,27 @@ func fnFormatBytes(args []interface{}) (interface{}, error) {
 	return fmt.Sprintf("%.2f%s", bytes, units[idx]), nil
 }
 
-func fnContains(args []interface{}) (interface{}, error) {
+func fnContains(args []any) (any, error) {
 	return strings.Contains(toString(args[0]), toString(args[1])), nil
 }
 
-func fnStartsWith(args []interface{}) (interface{}, error) {
+func fnStartsWith(args []any) (any, error) {
 	return strings.HasPrefix(toString(args[0]), toString(args[1])), nil
 }
 
-func fnEndsWith(args []interface{}) (interface{}, error) {
+func fnEndsWith(args []any) (any, error) {
 	return strings.HasSuffix(toString(args[0]), toString(args[1])), nil
 }
 
-func fnToString(args []interface{}) (interface{}, error) {
+func fnToString(args []any) (any, error) {
 	return toString(args[0]), nil
 }
 
-func fnToNumber(args []interface{}) (interface{}, error) {
+func fnToNumber(args []any) (any, error) {
 	return toFloat(args[0]), nil
 }
 
-func toString(v interface{}) string {
+func toString(v any) string {
 	if v == nil {
 		return ""
 	}
@@ -184,7 +184,7 @@ func toString(v interface{}) string {
 	}
 }
 
-func toFloat(v interface{}) float64 {
+func toFloat(v any) float64 {
 	if v == nil {
 		return 0
 	}
