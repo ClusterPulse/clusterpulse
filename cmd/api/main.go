@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 
+	swagger "github.com/clusterpulse/cluster-controller/docs/swagger"
 	"github.com/clusterpulse/cluster-controller/internal/api"
 	"github.com/clusterpulse/cluster-controller/internal/rbac"
 	store "github.com/clusterpulse/cluster-controller/internal/store"
@@ -14,6 +15,14 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// @title ClusterPulse API
+// @version 1.0
+// @description RBAC-enabled multi-cluster operator API
+// @host
+// @BasePath /api/v1
+// @securityDefinitions.apikey OAuthProxy
+// @in header
+// @name X-Forwarded-User
 func main() {
 	// Configure logging
 	logLevel := strings.ToLower(os.Getenv("LOG_LEVEL"))
@@ -42,6 +51,9 @@ func main() {
 
 	// Load configuration
 	cfg := api.LoadAPIConfig()
+
+	// Override Swagger host (empty = use browser URL, ideal for reverse proxies)
+	swagger.SwaggerInfo.Host = cfg.SwaggerHost
 
 	// Connect to Redis
 	redisClient, err := store.NewClient(cfg.Config)

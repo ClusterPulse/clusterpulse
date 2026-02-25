@@ -21,6 +21,23 @@ type ClusterConnectionSpec struct {
 
 	// Monitoring configuration
 	Monitoring MonitoringConfig `json:"monitoring,omitempty"`
+
+	// CollectionMode determines how metrics are collected from this cluster.
+	// "pull" (default): hub pulls metrics via remote API calls.
+	// "push": a collector agent is deployed on the managed cluster that pushes metrics.
+	// +kubebuilder:validation:Enum=pull;push
+	// +kubebuilder:default=pull
+	CollectionMode string `json:"collectionMode,omitempty"`
+
+	// IngesterAddress is the externally-reachable address of the hub ingester gRPC endpoint.
+	// Required when collectionMode is "push". Example: "hub.example.com:9443"
+	// +optional
+	IngesterAddress string `json:"ingesterAddress,omitempty"`
+
+	// CollectorVersion overrides the collector agent image tag for this cluster.
+	// If empty, defaults to the controller's own version.
+	// +optional
+	CollectorVersion string `json:"collectorVersion,omitempty"`
 }
 
 // CredentialsReference references a secret containing credentials
@@ -60,6 +77,22 @@ type ClusterConnectionStatus struct {
 
 	// Namespaces is the number of namespaces in the cluster
 	Namespaces int `json:"namespaces,omitempty"`
+
+	// CollectorStatus reports the state of the push-mode collector agent.
+	// Only populated when collectionMode is "push".
+	CollectorStatus *CollectorAgentStatus `json:"collectorStatus,omitempty"`
+}
+
+// CollectorAgentStatus tracks the state of a collector agent on a managed cluster.
+type CollectorAgentStatus struct {
+	// Connected indicates whether the collector is currently connected to the ingester.
+	Connected bool `json:"connected"`
+
+	// LastHeartbeat is the timestamp of the last health report from the collector.
+	LastHeartbeat *metav1.Time `json:"lastHeartbeat,omitempty"`
+
+	// Version is the collector agent version string.
+	Version string `json:"version,omitempty"`
 }
 
 // +kubebuilder:object:root=true

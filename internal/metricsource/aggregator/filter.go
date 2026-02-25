@@ -34,7 +34,7 @@ func (f *FilterEvaluator) Matches(resource *types.CustomCollectedResource, filte
 	return f.evaluate(fieldValue, FilterOperator(filter.Operator), filter.Value)
 }
 
-func (f *FilterEvaluator) evaluate(fieldValue interface{}, op FilterOperator, filterValue string) bool {
+func (f *FilterEvaluator) evaluate(fieldValue any, op FilterOperator, filterValue string) bool {
 	if fieldValue == nil {
 		return false
 	}
@@ -63,7 +63,7 @@ func (f *FilterEvaluator) evaluate(fieldValue interface{}, op FilterOperator, fi
 	}
 }
 
-func (f *FilterEvaluator) equals(fieldValue interface{}, filterValue string) bool {
+func (f *FilterEvaluator) equals(fieldValue any, filterValue string) bool {
 	switch v := fieldValue.(type) {
 	case string:
 		return v == filterValue
@@ -80,7 +80,7 @@ func (f *FilterEvaluator) equals(fieldValue interface{}, filterValue string) boo
 	}
 }
 
-func (f *FilterEvaluator) toString(v interface{}) string {
+func (f *FilterEvaluator) toString(v any) string {
 	if v == nil {
 		return ""
 	}
@@ -101,7 +101,7 @@ func (f *FilterEvaluator) toString(v interface{}) string {
 	}
 }
 
-func (f *FilterEvaluator) toFloat(v interface{}) float64 {
+func (f *FilterEvaluator) toFloat(v any) float64 {
 	switch val := v.(type) {
 	case float64:
 		return val
@@ -120,7 +120,7 @@ func (f *FilterEvaluator) parseFloat(s string) float64 {
 	return v
 }
 
-func (f *FilterEvaluator) inList(fieldValue interface{}, filterValue string) bool {
+func (f *FilterEvaluator) inList(fieldValue any, filterValue string) bool {
 	strVal := f.toString(fieldValue)
 	values := strings.Split(strings.Trim(filterValue, "[]"), ",")
 	for _, v := range values {
@@ -131,7 +131,7 @@ func (f *FilterEvaluator) inList(fieldValue interface{}, filterValue string) boo
 	return false
 }
 
-func (f *FilterEvaluator) matchesRegex(fieldValue interface{}, pattern string) bool {
+func (f *FilterEvaluator) matchesRegex(fieldValue any, pattern string) bool {
 	regex, ok := f.compiledPatterns[pattern]
 	if !ok {
 		var err error

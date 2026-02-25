@@ -17,6 +17,36 @@ ENVIRONMENT=development OAUTH_PROXY_ENABLED=false REDIS_HOST=localhost ./bin/api
 
 API health check at `http://localhost:8080/healthz`
 
+### Swagger UI
+
+Interactive API documentation is served at `/api/v1/swagger/index.html`. It is **disabled by default** and must be explicitly enabled via the `SWAGGER_ENABLED` env var:
+
+```bash
+SWAGGER_ENABLED=true ENVIRONMENT=development OAUTH_PROXY_ENABLED=false REDIS_HOST=localhost ./bin/api
+```
+
+No authentication is required to access the Swagger UI.
+
+By default, the Swagger UI "Try it out" feature uses the browser's current URL as the API base (works automatically behind reverse proxies). To override, set `SWAGGER_HOST`:
+
+```bash
+SWAGGER_HOST=my-cluster.example.com SWAGGER_ENABLED=true ./bin/api
+```
+
+#### Regenerating Swagger Docs
+
+After modifying handler annotations (the `// @` comment blocks above handler functions), regenerate the docs:
+
+```bash
+# Install swag CLI (one-time)
+go install github.com/swaggo/swag/cmd/swag@latest
+
+# Regenerate docs/swagger/
+swag init -g cmd/api/main.go -o docs/swagger --parseDependency --parseInternal
+```
+
+The generated files in `docs/swagger/` (docs.go, swagger.json, swagger.yaml) are committed to the repo. Always regenerate and commit after changing annotations.
+
 ### Project Structure
 
 ```
@@ -54,6 +84,8 @@ internal/store/
 | `OAUTH_HEADER_EMAIL` | X-Forwarded-Email | Email header |
 | `ENVIRONMENT` | production | development/production |
 | `RBAC_CACHE_TTL` | 0 | Cache TTL seconds (0=disabled) |
+| `SWAGGER_ENABLED` | false | Enable Swagger UI at `/api/v1/swagger/` |
+| `SWAGGER_HOST` | _(empty)_ | Override Swagger API host (empty = use browser URL) |
 
 ### API Routes
 
@@ -61,6 +93,7 @@ internal/store/
 |--------|------|------|-------------|
 | GET | `/healthz` | None | Health check |
 | GET | `/readyz` | None | Readiness (pings Redis) |
+| GET | `/api/v1/swagger/*` | None | Swagger UI (requires `SWAGGER_ENABLED=true`) |
 | GET | `/api/v1/auth/status` | Optional | Authentication status |
 | GET | `/api/v1/auth/me` | Required | Current user info with groups |
 | GET | `/api/v1/auth/permissions` | Required | Per-cluster permission summary |

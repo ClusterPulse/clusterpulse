@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"sort"
+	"cmp"
+	"slices"
 	"strconv"
 
 	"github.com/clusterpulse/cluster-controller/internal/rbac"
@@ -41,6 +42,14 @@ func (h *ClusterHandler) checkClusterAccess(w http.ResponseWriter, r *http.Reque
 }
 
 // ListClusters returns all accessible clusters.
+// @Summary List clusters
+// @Description Returns all clusters accessible to the authenticated user
+// @Tags clusters
+// @Produce json
+// @Success 200 {array} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters [get]
 func (h *ClusterHandler) ListClusters(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {
@@ -80,6 +89,15 @@ func (h *ClusterHandler) ListClusters(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetCluster returns detailed cluster information.
+// @Summary Get cluster details
+// @Description Returns detailed information for a specific cluster
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Success 200 {object} map[string]any
+// @Failure 403 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name} [get]
 func (h *ClusterHandler) GetCluster(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -119,6 +137,17 @@ func (h *ClusterHandler) GetCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetClusterNodes returns RBAC-filtered nodes for a cluster.
+// @Summary List cluster nodes
+// @Description Returns RBAC-filtered nodes for a cluster
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Param role query string false "Filter by node role"
+// @Param status query string false "Filter by node status"
+// @Success 200 {array} map[string]any
+// @Failure 403 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name}/nodes [get]
 func (h *ClusterHandler) GetClusterNodes(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -170,6 +199,18 @@ func (h *ClusterHandler) GetClusterNodes(w http.ResponseWriter, r *http.Request)
 }
 
 // GetClusterNode returns detailed information about a specific node.
+// @Summary Get node details
+// @Description Returns detailed information about a specific node in a cluster
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Param node path string true "Node name"
+// @Param include_metrics query bool false "Include metrics history"
+// @Success 200 {object} map[string]any
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name}/nodes/{node} [get]
 func (h *ClusterHandler) GetClusterNode(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -213,6 +254,17 @@ func (h *ClusterHandler) GetClusterNode(w http.ResponseWriter, r *http.Request) 
 }
 
 // GetClusterOperators returns RBAC-filtered operators.
+// @Summary List cluster operators
+// @Description Returns RBAC-filtered operators for a cluster
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Param namespace query string false "Filter by namespace"
+// @Param status query string false "Filter by operator status"
+// @Success 200 {array} map[string]any
+// @Failure 403 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name}/operators [get]
 func (h *ClusterHandler) GetClusterOperators(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -232,7 +284,7 @@ func (h *ClusterHandler) GetClusterOperators(w http.ResponseWriter, r *http.Requ
 		var filtered []map[string]any
 		for _, op := range operators {
 			availNS := getStringSliceFromMap(op, "available_in_namespaces")
-			if (len(availNS) == 1 && availNS[0] == "*") || contains(availNS, ns) {
+			if (len(availNS) == 1 && availNS[0] == "*") || slices.Contains(availNS, ns) {
 				filtered = append(filtered, op)
 			}
 		}
@@ -258,6 +310,17 @@ func (h *ClusterHandler) GetClusterOperators(w http.ResponseWriter, r *http.Requ
 }
 
 // GetClusterNamespaces returns RBAC-filtered namespaces.
+// @Summary List cluster namespaces
+// @Description Returns RBAC-filtered namespaces for a cluster
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Param with_operator_count query bool false "Include operator counts per namespace"
+// @Param with_resource_counts query bool false "Include resource counts per namespace"
+// @Success 200 {array} map[string]any
+// @Failure 403 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name}/namespaces [get]
 func (h *ClusterHandler) GetClusterNamespaces(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -287,7 +350,7 @@ func (h *ClusterHandler) GetClusterNamespaces(w http.ResponseWriter, r *http.Req
 			count := 0
 			for _, op := range filteredOps {
 				availNS := getStringSliceFromMap(op, "available_in_namespaces")
-				if (len(availNS) == 1 && availNS[0] == "*") || contains(availNS, ns) {
+				if (len(availNS) == 1 && availNS[0] == "*") || slices.Contains(availNS, ns) {
 					count++
 				}
 			}
@@ -316,10 +379,10 @@ func (h *ClusterHandler) GetClusterNamespaces(w http.ResponseWriter, r *http.Req
 	}
 
 	if withResCounts {
-		sort.Slice(details, func(i, j int) bool {
-			ti, _ := details[i]["total_resources"].(int)
-			tj, _ := details[j]["total_resources"].(int)
-			return ti > tj
+		slices.SortFunc(details, func(a, b map[string]any) int {
+			ta, _ := a["total_resources"].(int)
+			tb, _ := b["total_resources"].(int)
+			return cmp.Compare(tb, ta)
 		})
 	}
 
@@ -327,6 +390,16 @@ func (h *ClusterHandler) GetClusterNamespaces(w http.ResponseWriter, r *http.Req
 }
 
 // GetClusterAlerts returns RBAC-filtered alerts.
+// @Summary List cluster alerts
+// @Description Returns RBAC-filtered alerts for a cluster
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Param severity query string false "Filter by alert severity"
+// @Success 200 {array} map[string]any
+// @Failure 403 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name}/alerts [get]
 func (h *ClusterHandler) GetClusterAlerts(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -357,6 +430,16 @@ func (h *ClusterHandler) GetClusterAlerts(w http.ResponseWriter, r *http.Request
 }
 
 // GetClusterEvents returns RBAC-filtered events.
+// @Summary List cluster events
+// @Description Returns RBAC-filtered events for a cluster
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Param limit query int false "Max events to return" default(100)
+// @Success 200 {array} map[string]any
+// @Failure 403 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name}/events [get]
 func (h *ClusterHandler) GetClusterEvents(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -384,6 +467,23 @@ func (h *ClusterHandler) GetClusterEvents(w http.ResponseWriter, r *http.Request
 }
 
 // GetCustomResources returns RBAC-filtered custom resources with pagination.
+// @Summary List custom resources
+// @Description Returns RBAC-filtered custom resources for a cluster with pagination
+// @Tags clusters
+// @Produce json
+// @Param name path string true "Cluster name"
+// @Param type path string true "Custom resource type name"
+// @Param namespace query string false "Filter by namespace"
+// @Param sort_by query string false "Field to sort by"
+// @Param sort_order query string false "Sort order (asc/desc)"
+// @Param page query int false "Page number" default(1)
+// @Param page_size query int false "Page size" default(100)
+// @Param include_aggregations query bool false "Include aggregations" default(true)
+// @Success 200 {object} map[string]any
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security OAuthProxy
+// @Router /clusters/{name}/custom/{type} [get]
 func (h *ClusterHandler) GetCustomResources(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	clusterName := chi.URLParam(r, "name")
@@ -463,13 +563,13 @@ func (h *ClusterHandler) GetCustomResources(w http.ResponseWriter, r *http.Reque
 	// Sort
 	if sortBy := r.URL.Query().Get("sort_by"); sortBy != "" {
 		reverse := r.URL.Query().Get("sort_order") == "desc"
-		sort.Slice(filteredResources, func(i, j int) bool {
-			vi := fmt.Sprintf("%v", filteredResources[i][sortBy])
-			vj := fmt.Sprintf("%v", filteredResources[j][sortBy])
+		slices.SortFunc(filteredResources, func(a, b map[string]any) int {
+			va := fmt.Sprintf("%v", a[sortBy])
+			vb := fmt.Sprintf("%v", b[sortBy])
 			if reverse {
-				return vi > vj
+				return cmp.Compare(vb, va)
 			}
-			return vi < vj
+			return cmp.Compare(va, vb)
 		})
 	}
 
@@ -565,15 +665,6 @@ func queryInt(r *http.Request, key string, def int) int {
 	return def
 }
 
-func contains(s []string, v string) bool {
-	for _, item := range s {
-		if item == v {
-			return true
-		}
-	}
-	return false
-}
-
 func getStringSliceFromMap(m map[string]any, key string) []string {
 	if v, ok := m[key].([]any); ok {
 		result := make([]string, 0, len(v))
@@ -609,7 +700,7 @@ func (h *ClusterHandler) getAllowedNamespaces(ctx context.Context, clusterName s
 			result = append(result, name)
 		}
 	}
-	sort.Strings(result)
+	slices.Sort(result)
 	return result
 }
 

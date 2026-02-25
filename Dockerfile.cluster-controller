@@ -20,6 +20,7 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY api/ ./api/
 COPY pkg/ ./pkg/
+COPY proto/ ./proto/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
     -ldflags="-s -w \

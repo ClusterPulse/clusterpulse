@@ -61,7 +61,7 @@ type CompiledComputation struct {
 	Name       string      `json:"name"`
 	Expression string      `json:"expression"`
 	Type       string      `json:"type"`
-	Compiled   interface{} `json:"-"` // *expression.CompiledExpression at runtime
+	Compiled   any `json:"-"` // *expression.CompiledExpression at runtime
 }
 
 // CompiledAggregation represents an aggregation with parsed filter
@@ -105,7 +105,7 @@ type CustomCollectedResource struct {
 	Namespace string                 `json:"_namespace,omitempty"`
 	Name      string                 `json:"_name"`
 	Labels    map[string]string      `json:"_labels,omitempty"`
-	Values    map[string]interface{} `json:"values"`
+	Values    map[string]any `json:"values"`
 }
 
 // CustomResourceCollection holds all collected resources for a cluster/source combination
@@ -124,7 +124,7 @@ type AggregationResults struct {
 	ComputedAt time.Time              `json:"computedAt"`
 	SourceID   string                 `json:"sourceId"`
 	DurationMs int64                  `json:"durationMs"`
-	Values     map[string]interface{} `json:"values"`
+	Values     map[string]any `json:"values"`
 }
 
 // CollectionMetadata holds metadata about the last collection run

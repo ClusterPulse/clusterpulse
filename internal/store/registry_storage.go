@@ -11,7 +11,7 @@ import (
 )
 
 // StoreRegistrySpec stores registry specification
-func (c *Client) StoreRegistrySpec(ctx context.Context, name string, spec map[string]interface{}) error {
+func (c *Client) StoreRegistrySpec(ctx context.Context, name string, spec map[string]any) error {
 	data, err := json.Marshal(spec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal registry spec: %w", err)
@@ -22,7 +22,7 @@ func (c *Client) StoreRegistrySpec(ctx context.Context, name string, spec map[st
 }
 
 // StoreRegistryStatus stores registry status
-func (c *Client) StoreRegistryStatus(ctx context.Context, name string, status map[string]interface{}) error {
+func (c *Client) StoreRegistryStatus(ctx context.Context, name string, status map[string]any) error {
 	data, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("failed to marshal registry status: %w", err)
@@ -48,7 +48,7 @@ func (c *Client) StoreRegistryStatus(ctx context.Context, name string, status ma
 }
 
 // StoreRegistryMetrics stores registry metrics time series
-func (c *Client) StoreRegistryMetrics(ctx context.Context, name string, metrics map[string]interface{}) error {
+func (c *Client) StoreRegistryMetrics(ctx context.Context, name string, metrics map[string]any) error {
 	metricsJSON, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to marshal registry metrics: %w", err)
@@ -84,14 +84,14 @@ func (c *Client) StoreRegistryMetrics(ctx context.Context, name string, metrics 
 }
 
 // GetRegistryStatus retrieves registry status
-func (c *Client) GetRegistryStatus(ctx context.Context, name string) (map[string]interface{}, error) {
+func (c *Client) GetRegistryStatus(ctx context.Context, name string) (map[string]any, error) {
 	key := fmt.Sprintf("registry:%s:status", name)
 	data, err := c.client.Get(ctx, key).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	var status map[string]interface{}
+	var status map[string]any
 	if err := json.Unmarshal([]byte(data), &status); err != nil {
 		return nil, err
 	}

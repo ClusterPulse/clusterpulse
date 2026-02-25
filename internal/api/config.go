@@ -21,6 +21,8 @@ type APIConfig struct {
 	OAuthHeaderEmail  string
 	Environment       string
 	RBACCacheTTL      int
+	SwaggerEnabled    bool
+	SwaggerHost       string
 }
 
 // LoadAPIConfig loads API configuration from environment variables.
@@ -35,6 +37,8 @@ func LoadAPIConfig() *APIConfig {
 		OAuthHeaderEmail:  envStr("OAUTH_HEADER_EMAIL", "X-Forwarded-Email"),
 		Environment:       envStr("ENVIRONMENT", "production"),
 		RBACCacheTTL:      envInt("RBAC_CACHE_TTL", 0),
+		SwaggerEnabled:    envBool("SWAGGER_ENABLED", false),
+		SwaggerHost:       envStr("SWAGGER_HOST", ""),
 	}
 
 	logrus.WithFields(logrus.Fields{
@@ -42,6 +46,7 @@ func LoadAPIConfig() *APIConfig {
 		"environment": cfg.Environment,
 		"oauthProxy":  cfg.OAuthProxyEnabled,
 		"cacheTTL":    cfg.RBACCacheTTL,
+		"swagger":     cfg.SwaggerEnabled,
 	}).Info("API configuration loaded")
 
 	return cfg

@@ -10,6 +10,7 @@ import (
 	metricsourcectrl "github.com/clusterpulse/cluster-controller/internal/controller/metricsource"
 	policyctrl "github.com/clusterpulse/cluster-controller/internal/controller/policy"
 	registryctrl "github.com/clusterpulse/cluster-controller/internal/controller/registry"
+	"github.com/clusterpulse/cluster-controller/internal/ingester"
 	redis "github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/clusterpulse/cluster-controller/internal/version"
 	"github.com/sirupsen/logrus"
@@ -115,6 +116,18 @@ func main() {
 
 	logrus.Info("Connected to Redis successfully")
 
+	// Start ingester gRPC server if enabled
+	var ingesterServer *ingester.Server
+	if cfg.IngesterEnabled {
+		ingesterServer = ingester.NewServer(cfg, redisClient)
+		if err := ingesterServer.Start(cfg.IngesterPort); err != nil {
+			setupLog.Error(err, "unable to start ingester server")
+			os.Exit(1)
+		}
+		defer ingesterServer.Stop()
+		logrus.WithField("port", cfg.IngesterPort).Info("Ingester gRPC server started")
+	}
+
 	// Create manager with namespace scope
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
@@ -143,6 +156,7 @@ func main() {
 		RedisClient:    redisClient,
 		Config:         cfg,
 		WatchNamespace: watchNamespace,
+		Ingester:       ingesterServer,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterConnection")
 		os.Exit(1)

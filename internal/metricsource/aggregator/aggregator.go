@@ -2,7 +2,7 @@ package aggregator
 
 import (
 	"math"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/pkg/types"
@@ -28,7 +28,7 @@ func (a *Aggregator) Compute(input *AggregationInput) *types.AggregationResults 
 	startTime := time.Now()
 	results := &types.AggregationResults{
 		ComputedAt: startTime,
-		Values:     make(map[string]interface{}),
+		Values:     make(map[string]any),
 	}
 
 	a.log.Debugf("Computing %d aggregations over %d resources", len(input.Aggregations), len(input.Resources))
@@ -49,7 +49,7 @@ func (a *Aggregator) Compute(input *AggregationInput) *types.AggregationResults 
 	return results
 }
 
-func (a *Aggregator) computeAggregation(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) interface{} {
+func (a *Aggregator) computeAggregation(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) any {
 	filtered := a.applyFilter(resources, agg.Filter)
 
 	if agg.GroupBy != "" {
@@ -73,7 +73,7 @@ func (a *Aggregator) applyFilter(resources []types.CustomCollectedResource, filt
 	return filtered
 }
 
-func (a *Aggregator) computeSingle(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) interface{} {
+func (a *Aggregator) computeSingle(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) any {
 	switch agg.Function {
 	case types.AggFunctionCount:
 		return float64(len(resources))
@@ -102,7 +102,7 @@ func (a *Aggregator) computeSingle(agg *types.CompiledAggregation, resources []t
 	}
 }
 
-func (a *Aggregator) computeGrouped(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) map[string]interface{} {
+func (a *Aggregator) computeGrouped(agg *types.CompiledAggregation, resources []types.CustomCollectedResource) map[string]any {
 	groups := make(map[string][]types.CustomCollectedResource)
 
 	for i := range resources {
@@ -110,7 +110,7 @@ func (a *Aggregator) computeGrouped(agg *types.CompiledAggregation, resources []
 		groups[groupKey] = append(groups[groupKey], resources[i])
 	}
 
-	results := make(map[string]interface{})
+	results := make(map[string]any)
 	for key, groupResources := range groups {
 		groupedAgg := &types.CompiledAggregation{
 			Name:     agg.Name,
@@ -153,7 +153,7 @@ func (a *Aggregator) computeSum(resources []types.CustomCollectedResource, field
 	return sum
 }
 
-func (a *Aggregator) computeAvg(resources []types.CustomCollectedResource, field string) interface{} {
+func (a *Aggregator) computeAvg(resources []types.CustomCollectedResource, field string) any {
 	var sum float64
 	var count int
 	for i := range resources {
@@ -169,7 +169,7 @@ func (a *Aggregator) computeAvg(resources []types.CustomCollectedResource, field
 	return sum / float64(count)
 }
 
-func (a *Aggregator) computeMin(resources []types.CustomCollectedResource, field string) interface{} {
+func (a *Aggregator) computeMin(resources []types.CustomCollectedResource, field string) any {
 	var min *float64
 	for i := range resources {
 		val := a.getNumericValue(&resources[i], field)
@@ -185,7 +185,7 @@ func (a *Aggregator) computeMin(resources []types.CustomCollectedResource, field
 	return *min
 }
 
-func (a *Aggregator) computeMax(resources []types.CustomCollectedResource, field string) interface{} {
+func (a *Aggregator) computeMax(resources []types.CustomCollectedResource, field string) any {
 	var max *float64
 	for i := range resources {
 		val := a.getNumericValue(&resources[i], field)
@@ -201,7 +201,7 @@ func (a *Aggregator) computeMax(resources []types.CustomCollectedResource, field
 	return *max
 }
 
-func (a *Aggregator) computePercentile(resources []types.CustomCollectedResource, field string, percentile int) interface{} {
+func (a *Aggregator) computePercentile(resources []types.CustomCollectedResource, field string, percentile int) any {
 	var values []float64
 	for i := range resources {
 		val := a.getNumericValue(&resources[i], field)
@@ -214,7 +214,7 @@ func (a *Aggregator) computePercentile(resources []types.CustomCollectedResource
 		return nil
 	}
 
-	sort.Float64s(values)
+	slices.Sort(values)
 
 	// Calculate percentile index
 	idx := float64(percentile) / 100.0 * float64(len(values)-1)
@@ -229,7 +229,7 @@ func (a *Aggregator) computePercentile(resources []types.CustomCollectedResource
 }
 
 func (a *Aggregator) computeDistinct(resources []types.CustomCollectedResource, field string) float64 {
-	unique := make(map[interface{}]bool)
+	unique := make(map[any]bool)
 	for i := range resources {
 		val, ok := resources[i].Values[field]
 		if ok && val != nil {

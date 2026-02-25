@@ -157,7 +157,7 @@ func (r *MetricSourceReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	}
 
 	// Publish event
-	r.RedisClient.PublishMetricSourceEvent("reconciled", req.Namespace+"/"+req.Name, map[string]interface{}{
+	r.RedisClient.PublishMetricSourceEvent("reconciled", req.Namespace+"/"+req.Name, map[string]any{
 		"resources": collectionResult.TotalResources,
 		"clusters":  collectionResult.ClustersCollected,
 		"errors":    collectionResult.TotalErrors,

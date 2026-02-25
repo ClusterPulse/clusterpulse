@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/internal/rbac"
@@ -25,6 +26,12 @@ func NewAuthHandler(s *store.Client, engine *rbac.Engine, cfg *APIConfig) *AuthH
 }
 
 // AuthStatus returns the current authentication status (works with optional auth).
+// @Summary Authentication status
+// @Description Returns whether the current user is authenticated
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Router /auth/status [get]
 func (h *AuthHandler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal != nil {
@@ -47,6 +54,14 @@ func (h *AuthHandler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetMe returns the current authenticated user information.
+// @Summary Get current user
+// @Description Returns the authenticated user's username, email, and groups
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /auth/me [get]
 func (h *AuthHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {
@@ -63,6 +78,14 @@ func (h *AuthHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetPermissions returns per-cluster permission summary for the current user.
+// @Summary Get user permissions
+// @Description Returns per-cluster permission summary for the authenticated user
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /auth/permissions [get]
 func (h *AuthHandler) GetPermissions(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {
@@ -82,7 +105,7 @@ func (h *AuthHandler) GetPermissions(w http.ResponseWriter, r *http.Request) {
 		for action := range perms {
 			permList = append(permList, string(action))
 		}
-		sort.Strings(permList)
+		slices.Sort(permList)
 
 		level := "limited"
 		if len(perms) > 5 {
@@ -114,6 +137,14 @@ func (h *AuthHandler) GetPermissions(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetPolicies returns all policies that apply to the current user.
+// @Summary Get user policies
+// @Description Returns all RBAC policies that apply to the authenticated user sorted by priority
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /auth/policies [get]
 func (h *AuthHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {
@@ -191,8 +222,8 @@ func (h *AuthHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sort by priority descending
-	sort.Slice(policies, func(i, j int) bool {
-		return policies[i].Priority > policies[j].Priority
+	slices.SortFunc(policies, func(a, b policyEntry) int {
+		return cmp.Compare(b.Priority, a.Priority)
 	})
 
 	evalOrder := make([]string, len(policies))
@@ -214,6 +245,14 @@ func (h *AuthHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
 }
 
 // Logout clears RBAC and group caches for the current user.
+// @Summary Logout
+// @Description Clears RBAC and group caches for the current user
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /auth/logout [post]
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {
@@ -239,6 +278,14 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // ClearCache clears RBAC cache for the current user.
+// @Summary Clear RBAC cache
+// @Description Clears RBAC cache entries for the current user
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Security OAuthProxy
+// @Router /auth/cache/clear [post]
 func (h *AuthHandler) ClearCache(w http.ResponseWriter, r *http.Request) {
 	principal := GetPrincipal(r)
 	if principal == nil {

@@ -71,7 +71,7 @@ func (c *Client) StoreResourceCollection(ctx context.Context, clusterName string
 	}
 
 	// Store collection metadata
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"timestamp":          collection.Timestamp.Format(time.RFC3339),
 		"collection_time_ms": collection.CollectionTimeMs,
 		"truncated":          collection.Truncated,

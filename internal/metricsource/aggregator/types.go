@@ -25,5 +25,5 @@ type AggregationInput struct {
 
 // AggregationOutput holds computed aggregation results
 type AggregationOutput struct {
-	Values map[string]interface{}
+	Values map[string]any
 }

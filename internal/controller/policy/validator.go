@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/internal/config"
@@ -82,7 +83,7 @@ func (v *PeriodicValidator) validateAll(ctx context.Context) {
 
 		state, message := ValidateCompiledPolicy(policy)
 
-		status := map[string]interface{}{
+		status := map[string]any{
 			"state":        state,
 			"message":      message,
 			"validated_at": time.Now().UTC().Format(time.RFC3339),
@@ -102,23 +103,13 @@ func (v *PeriodicValidator) validateAll(ctx context.Context) {
 
 // parsePolicyKey extracts namespace and name from "policy:{ns}:{name}"
 func parsePolicyKey(key string) (string, string) {
-	// key format: "policy:{namespace}:{name}"
-	if len(key) < 8 || key[:7] != "policy:" {
+	rest, ok := strings.CutPrefix(key, "policy:")
+	if !ok {
 		return "", ""
 	}
-	rest := key[7:]
-	idx := indexByte(rest, ':')
-	if idx < 0 {
+	ns, name, ok := strings.Cut(rest, ":")
+	if !ok {
 		return "", ""
 	}
-	return rest[:idx], rest[idx+1:]
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
+	return ns, name
 }

@@ -3,7 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -194,7 +194,7 @@ func computeSingle(resources []map[string]any, function, field string, spec map[
 		if pv, ok := spec["percentile"].(float64); ok {
 			p = pv
 		}
-		sort.Float64s(values)
+		slices.Sort(values)
 		idx := int(float64(len(values)) * p / 100)
 		if idx >= len(values) {
 			idx = len(values) - 1

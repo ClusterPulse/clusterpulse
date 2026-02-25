@@ -1,0 +1,184 @@
+syntax = "proto3";
+
+package clusterpulse.collector.v1;
+
+option go_package = "github.com/clusterpulse/cluster-controller/proto/collectorpb";
+
+import "google/protobuf/timestamp.proto";
+
+// CollectorService handles bidirectional communication between
+// managed cluster collectors and the hub ingester.
+service CollectorService {
+  // Connect establishes a bidirectional stream between collector and ingester.
+  // Collector sends metrics/health; ingester sends config/acks.
+  rpc Connect(stream CollectorMessage) returns (stream IngesterMessage);
+}
+
+// CollectorMessage is sent from collector agent to hub ingester.
+message CollectorMessage {
+  oneof payload {
+    MetricsBatch metrics = 1;
+    HealthReport health = 2;
+    RegisterRequest register = 3;
+  }
+}
+
+// IngesterMessage is sent from hub ingester to collector agent.
+message IngesterMessage {
+  oneof payload {
+    ConfigUpdate config = 1;
+    Ack ack = 2;
+  }
+}
+
+// RegisterRequest is the first message a collector sends to identify itself.
+message RegisterRequest {
+  string cluster_name = 1;
+  string token = 2;
+  string version = 3;
+}
+
+// MetricsBatch contains collected metrics from one collection cycle.
+message MetricsBatch {
+  string cluster_name = 1;
+  string batch_id = 2;
+  google.protobuf.Timestamp collected_at = 3;
+
+  // Core cluster metrics
+  ClusterMetrics cluster_metrics = 4;
+  repeated NodeMetrics node_metrics = 5;
+
+  // Custom resource collections from MetricSources
+  repeated CustomResourceBatch custom_resources = 6;
+
+  // Operator data
+  repeated OperatorInfo operators = 7;
+  repeated ClusterOperatorInfo cluster_operators = 8;
+}
+
+// ClusterMetrics mirrors pkg/types.ClusterMetrics in protobuf form.
+message ClusterMetrics {
+  int32 nodes = 1;
+  int32 nodes_ready = 2;
+  int32 namespaces = 4;
+  repeated string namespace_list = 5;
+  int32 pods = 6;
+  int32 pods_running = 7;
+
+  double cpu_capacity = 10;
+  int64 memory_capacity = 14;
+  int32 deployments = 22;
+
+  reserved 3, 8, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 23, 24;
+  reserved "nodes_not_ready", "pods_pending", "pods_failed",
+           "cpu_allocatable", "cpu_requested", "cpu_usage_percent",
+           "memory_allocatable", "memory_requested", "memory_usage_percent",
+           "storage_capacity", "storage_used", "pvcs", "services",
+           "statefulsets", "daemonsets";
+}
+
+// NodeMetrics mirrors pkg/types.NodeMetrics in protobuf form.
+message NodeMetrics {
+  string name = 1;
+  string status = 2;
+  repeated string roles = 3;
+
+  double cpu_capacity = 10;
+  int64 memory_capacity = 11;
+  int64 storage_capacity = 12;
+  int32 pods_capacity = 13;
+
+  double cpu_allocatable = 14;
+  int64 memory_allocatable = 15;
+  int64 storage_allocatable = 16;
+  int32 pods_allocatable = 17;
+
+  double cpu_requested = 18;
+  int64 memory_requested = 19;
+  double cpu_usage_percent = 20;
+  double memory_usage_percent = 21;
+
+  int32 pods_running = 22;
+  int32 pods_pending = 23;
+  int32 pods_failed = 24;
+  int32 pods_succeeded = 25;
+  int32 pods_total = 26;
+
+  string kernel_version = 30;
+  string os_image = 31;
+  string container_runtime = 32;
+  string kubelet_version = 33;
+  string architecture = 34;
+
+  map<string, string> labels = 35;
+  string internal_ip = 36;
+  string hostname = 37;
+}
+
+// CustomResourceBatch holds collected resources for one MetricSource.
+message CustomResourceBatch {
+  string source_id = 1;
+  int32 resource_count = 2;
+  bool truncated = 3;
+  int64 duration_ms = 4;
+  repeated CustomCollectedResource resources = 5;
+  map<string, double> aggregation_values = 6;
+}
+
+// CustomCollectedResource is a single collected resource instance.
+message CustomCollectedResource {
+  string id = 1;
+  string namespace = 2;
+  string name = 3;
+  map<string, string> labels = 4;
+  // Values encoded as JSON since they can be any type.
+  bytes values_json = 5;
+}
+
+// OperatorInfo mirrors pkg/types.OperatorInfo.
+message OperatorInfo {
+  string name = 1;
+  string display_name = 2;
+  string version = 3;
+  string status = 4;
+  string installed_namespace = 5;
+  string install_mode = 6;
+  string provider = 7;
+  bool is_cluster_wide = 8;
+}
+
+// ClusterOperatorInfo mirrors pkg/types.ClusterOperatorInfo.
+message ClusterOperatorInfo {
+  string name = 1;
+  string version = 2;
+  bool available = 3;
+  bool progressing = 4;
+  bool degraded = 5;
+  bool upgradeable = 6;
+  string message = 7;
+}
+
+// HealthReport is a periodic heartbeat from the collector.
+message HealthReport {
+  string cluster_name = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int64 uptime_seconds = 3;
+  int32 buffered_batches = 4;
+  int64 last_collection_duration_ms = 5;
+}
+
+// ConfigUpdate pushes MetricSource configs to the collector.
+message ConfigUpdate {
+  // Full list of compiled MetricSource configs as JSON.
+  // The collector replaces its local config with this set.
+  repeated bytes metric_sources_json = 1;
+  // Collection interval override (seconds). 0 = use per-source interval.
+  int32 default_interval_seconds = 2;
+}
+
+// Ack acknowledges receipt of a MetricsBatch.
+message Ack {
+  string batch_id = 1;
+  bool success = 2;
+  string error = 3;
+}

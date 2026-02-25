@@ -63,7 +63,7 @@ type Node interface {
 
 // LiteralNode represents a literal value (number, string, bool, null)
 type LiteralNode struct {
-	Value interface{}
+	Value any
 }
 
 func (n *LiteralNode) Type() NodeType { return NodeLiteral }

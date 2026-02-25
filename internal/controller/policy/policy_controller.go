@@ -124,7 +124,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req reconcile.Request)
 	}
 
 	// Update Redis status
-	r.RedisClient.UpdatePolicyStatus(ctx, req.Namespace, req.Name, map[string]interface{}{
+	r.RedisClient.UpdatePolicyStatus(ctx, req.Namespace, req.Name, map[string]any{
 		"state":                   state,
 		"message":                 message,
 		"compiledAt":              compiled.CompiledAt,
@@ -162,7 +162,7 @@ func (r *PolicyReconciler) updateStatusError(ctx context.Context, policy *v1alph
 		logrus.WithError(statusErr).Debug("Failed to update error status")
 	}
 
-	r.RedisClient.UpdatePolicyStatus(ctx, policy.Namespace, policy.Name, map[string]interface{}{
+	r.RedisClient.UpdatePolicyStatus(ctx, policy.Namespace, policy.Name, map[string]any{
 		"state":    "Error",
 		"message":  policy.Status.Message,
 		"error_at": time.Now().UTC().Format(time.RFC3339),

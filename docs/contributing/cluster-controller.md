@@ -35,6 +35,9 @@ go run cmd/manager/main.go --namespace=clusterpulse
 # Install development tools
 go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+# Install buf CLI (for proto generation)
+# See https://buf.build/docs/installation
 ```
 
 ## Project Structure
@@ -45,16 +48,29 @@ Here's what goes where and why it's organized this way.
 
 ```
 ├── api/v1alpha1/            Custom Resource Definitions (CRDs)
-├── cmd/manager/             Main entry point
+├── cmd/
+│   ├── manager/             Controller manager entry point
+│   └── collector/           Collector agent entry point (push mode)
+├── proto/
+│   ├── collector.proto      gRPC service definition
+│   └── collectorpb/         Generated Go code (don't edit)
 ├── internal/
 │   ├── client/              Cluster and registry clients
 │   │   ├── cluster/         Kubernetes cluster client
 │   │   ├── registry/        Docker registry client
 │   │   └── pool/            Client connection pooling
+│   ├── collector/           Collector agent (push mode)
+│   │   ├── agent.go         Agent lifecycle (connect, collect, push)
+│   │   ├── config.go        Agent configuration from env vars
+│   │   └── buffer.go        Local buffer for network outages
 │   ├── controller/          Reconciliation controllers
-│   │   ├── cluster/         ClusterConnection reconciler
+│   │   ├── cluster/         ClusterConnection reconciler + collector deploy
 │   │   ├── registry/        RegistryConnection reconciler
 │   │   └── metricsource/    MetricSource reconciler
+│   ├── ingester/            gRPC ingester server (embedded in manager)
+│   │   ├── server.go        gRPC server, connection tracking
+│   │   ├── handler.go       Batch processing, proto→internal conversion
+│   │   └── vmwriter.go      VictoriaMetrics remote-write client
 │   ├── metricsource/        MetricSource collection subsystem
 │   │   ├── aggregator/      Aggregation computation engine
 │   │   ├── collector/       Resource collection from clusters
@@ -119,16 +135,20 @@ type ClusterConnectionSpec struct {
 ```
 
 #### `cmd/manager/`
-Application entry point. Sets up the controller manager and starts all reconcilers.
+Application entry point. Sets up the controller manager, starts all reconcilers, and optionally starts the embedded Ingester gRPC server for push-mode collection.
 
 **Files:**
-- `main.go` - Initializes manager, registers controllers, starts server
+- `main.go` - Initializes manager, registers controllers, starts ingester server
 
 **When to edit:**
 - Adding new controllers
 - Changing manager configuration
 - Modifying health check endpoints
 - Adjusting leader election settings
+- Changing ingester startup behavior
+
+**Ingester integration:**
+When `INGESTER_ENABLED=true` (default), the manager starts a gRPC server on `INGESTER_PORT` (default 9443) that accepts push-mode collector connections. The ingester server reference is passed to the `ClusterReconciler` so it can check collector connection status.
 
 **Pattern:**
 ```go
@@ -142,6 +162,28 @@ if err = (&newcontroller.NewReconciler{
     setupLog.Error(err, "unable to create controller")
     os.Exit(1)
 }
+```
+
+#### `cmd/collector/`
+Collector agent entry point. Runs on managed clusters in push mode.
+
+**Files:**
+- `main.go` - Creates in-cluster k8s client, starts collector agent
+
+**When to edit:**
+- Changing agent startup behavior
+- Adding new agent flags or env vars
+
+**How it works:**
+The collector runs as a single-replica Deployment on each managed cluster. It uses an in-cluster ServiceAccount (no remote tokens), connects to the hub ingester via gRPC, and pushes metrics using the same collection packages as the hub controller.
+
+```bash
+# Environment variables (set by hub-deployed Deployment)
+CLUSTER_NAME=prod-east           # Cluster identifier
+INGESTER_ADDRESS=hub:9443        # Hub ingester gRPC endpoint
+COLLECTOR_TOKEN=<bearer-token>   # Auth token (from Secret)
+COLLECT_INTERVAL=30s             # Collection interval (default 30s)
+BUFFER_SIZE=10                   # Local buffer size (default 10 cycles)
 ```
 
 #### `internal/client/cluster/`
@@ -229,32 +271,152 @@ client, err := pool.Get(name, endpoint, token, caCert)
 pool.Remove(name)
 ```
 
+#### `internal/ingester/`
+gRPC ingester server, embedded in the manager process. Accepts metric pushes from collector agents on managed clusters.
+
+**Files:**
+- `server.go` - gRPC server lifecycle, connection tracking, keepalive
+- `handler.go` - Processes `MetricsBatch` messages, converts proto→internal types, writes to Redis
+- `vmwriter.go` - VictoriaMetrics remote-write client (Prometheus text format)
+
+**Key methods:**
+```go
+// Server manages gRPC connections from collector agents
+server.Start(port)                       // Start listening
+server.Stop()                            // Graceful shutdown
+server.IsConnected(clusterName) bool     // Check if collector is connected
+server.GetConnectionInfo(name) ConnInfo  // Get collector version, heartbeat
+
+// VMWriter writes time-series metrics to VictoriaMetrics
+vmWriter.WriteClusterMetrics(ctx, cluster, metrics)                // 8 cluster-level gauges
+vmWriter.WriteNodeMetrics(ctx, cluster, nodes)                     // 17 per-node gauges
+vmWriter.WriteOperatorMetrics(ctx, cluster, ops, cops)             // Operator presence + status gauges
+vmWriter.WriteCustomResourceMetrics(ctx, cluster, sourceID, aggs) // Custom resource aggregation values
+```
+
+**VictoriaMetrics metrics written:**
+
+| Metric | Labels | Source |
+|--------|--------|--------|
+| `clusterpulse_cluster_nodes_total` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_nodes_ready` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_pods_total` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_pods_running` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_cpu_capacity` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_memory_capacity_bytes` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_namespaces_total` | cluster | ClusterMetrics |
+| `clusterpulse_cluster_deployments_total` | cluster | ClusterMetrics |
+| `clusterpulse_node_cpu_usage_percent` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_usage_percent` | cluster, node | NodeMetrics |
+| `clusterpulse_node_cpu_capacity` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_capacity_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_storage_capacity_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_capacity` | cluster, node | NodeMetrics |
+| `clusterpulse_node_cpu_allocatable` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_allocatable_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_storage_allocatable_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_allocatable` | cluster, node | NodeMetrics |
+| `clusterpulse_node_cpu_requested` | cluster, node | NodeMetrics |
+| `clusterpulse_node_memory_requested_bytes` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_total` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_running` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_pending` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_failed` | cluster, node | NodeMetrics |
+| `clusterpulse_node_pods_succeeded` | cluster, node | NodeMetrics |
+| `clusterpulse_operator_installed` | cluster, operator | OperatorInfo |
+| `clusterpulse_cluster_operator_available` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operator_progressing` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operator_degraded` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operator_upgradeable` | cluster, operator | ClusterOperatorInfo |
+| `clusterpulse_cluster_operators_total` | cluster | len(ops) |
+| `clusterpulse_cluster_operators_count` | cluster | len(cops) |
+| `clusterpulse_custom_resource_{name}` | cluster, source | Aggregation values |
+
+**Processing pipeline:**
+```
+gRPC stream → Auth (bearer token) → Register (cluster name)
+  → MetricsBatch → Transform (proto → internal types)
+  → Dual-write: Redis (current state) + VictoriaMetrics (history)
+  → Send Ack back to collector
+```
+
+**When to edit:**
+- Changing authentication logic
+- Adding new message types to the proto
+- Modifying the dual-write pipeline
+- Adding connection monitoring
+
+#### `internal/collector/`
+Collector agent that runs on managed clusters in push mode.
+
+**Files:**
+- `agent.go` - Main lifecycle: connect → register → collect loop → push
+- `config.go` - Configuration from env vars, reconnect backoff
+- `buffer.go` - Bounded FIFO buffer for network outage resilience
+
+**Key behaviors:**
+- Reuses `internal/metricsource/collector` for local collection (same code as hub)
+- Buffers up to 10 collection cycles during network outages
+- Exponential backoff reconnect (1s → 5min cap)
+- Receives MetricSource configs from ingester (no hub k8s API access needed)
+- gRPC keepalive every 30s
+
+**When to edit:**
+- Changing collection logic
+- Modifying reconnection behavior
+- Adding new message types
+- Changing buffer strategy
+
+#### `proto/`
+Protocol Buffer definitions for collector↔ingester communication.
+
+**Files:**
+- `collector.proto` - Service and message definitions
+- `collectorpb/` - Generated Go code (don't edit directly)
+
+**Regenerate after editing proto:**
+```bash
+buf generate proto
+```
+
+**Key messages:**
+- `CollectorMessage` - Sent by collector (Register, MetricsBatch, HealthReport)
+- `IngesterMessage` - Sent by ingester (ConfigUpdate, Ack)
+- `MetricsBatch` - Contains cluster metrics, node metrics, custom resources
+
 #### `internal/controller/cluster/`
 ClusterConnection reconciliation controller. This is where the main cluster monitoring logic lives.
 
 **Files:**
 - `cluster_controller.go` - Reconciler implementation
+- `collector_deploy.go` - Deploys collector agent on managed clusters (push mode)
 
 **When to edit:**
 - Changing reconciliation interval logic
 - Modifying node metrics or operator collection
 - Changing status update logic
+- Modifying collector deployment resources or RBAC
 
 **Reconciliation flow:**
 ```go
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
     // 1. Fetch ClusterConnection resource
     // 2. Handle deletion if needed
-    // 3. Get cluster client from pool
-    // 4. Test connection
-    // 5. Collect data in parallel (errgroup)
+    // 3. Check collectionMode:
+    //    - "push": check if collector is connected via ingester
+    //      - Connected: update CollectorAgentStatus, skip pull collection
+    //      - Not connected: deploy collector, fall back to pull
+    //    - "pull" (default): proceed with pull collection
+    // 4. Get cluster client from pool
+    // 5. Test connection
+    // 6. Collect data in parallel (errgroup)
     //    - Node metrics
     //    - Cluster info
     //    - Operators (OLM)
     //    - ClusterOperators (OpenShift)
-    // 6. Store in Redis (node metrics, cluster info, operators, labels)
-    // 7. Update CRD status (health = healthy if reachable)
-    // 8. Return with RequeueAfter for periodic reconciliation
+    // 7. Store in Redis (node metrics, cluster info, operators, labels)
+    // 8. Update CRD status (health = healthy if reachable)
+    // 9. Return with RequeueAfter for periodic reconciliation
 
     return reconcile.Result{RequeueAfter: time.Duration(interval) * time.Second}, nil
 }
@@ -267,6 +429,8 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request
 - Health is set to "healthy" when the cluster is reachable; connection failures set "unhealthy"
 - Updates status using `Patch` to avoid triggering reconciliation
 - Only logs at Info level for significant events
+- Push mode: when `collectionMode=push` and collector is connected, the hub skips pull-based collection entirely
+- Collector deployment: `collector_deploy.go` creates Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding, Secret, and Deployment on the managed cluster using the dynamic client
 
 #### `internal/controller/registry/`
 RegistryConnection reconciliation controller. Monitors Docker registries.
@@ -770,6 +934,10 @@ func Load() *Config {
 - `ConnectTimeout` - Cluster connection timeout (default 10s)
 - `CacheTTL` - Redis cache TTL (default 600s)
 - `MetricsRetention` - How long to keep time series (default 3600s)
+- `IngesterEnabled` - Enable gRPC ingester for push mode (default true, env `INGESTER_ENABLED`)
+- `IngesterPort` - gRPC ingester listen port (default 9443, env `INGESTER_PORT`)
+- `VMEnabled` - Enable VictoriaMetrics time-series storage (default false, env `VM_ENABLED`)
+- `VMEndpoint` - VictoriaMetrics URL (default `http://victoriametrics:8428`, env `VM_ENDPOINT`)
 
 #### `pkg/types/`
 **Shared type definitions that are used across the project.** This is the key distinction from `internal/` - types in `pkg/` can be imported by external packages.
@@ -841,32 +1009,16 @@ type NodeMetrics struct {
 
 // ClusterMetrics contains cluster-wide aggregated metrics
 type ClusterMetrics struct {
-    Timestamp     time.Time
-    Nodes         int
-    NodesReady    int
-    NodesNotReady int
-    Namespaces    int
-    NamespaceList []string
-    Pods          int
-    PodsRunning   int
-    PodsPending   int
-    PodsFailed    int
-    
-    // Aggregated resources
-    CPUCapacity        float64
-    CPUAllocatable     float64
-    CPURequested       float64
-    CPUUsagePercent    float64
-    MemoryCapacity     int64
-    MemoryAllocatable  int64
-    MemoryRequested    int64
-    MemoryUsagePercent float64
-    
-    // Workload counts
-    Services     int
-    Deployments  int
-    StatefulSets int
-    DaemonSets   int
+    Timestamp      time.Time
+    Nodes          int
+    NodesReady     int
+    Namespaces     int
+    NamespaceList  []string
+    Pods           int
+    PodsRunning    int
+    CPUCapacity    float64
+    MemoryCapacity int64
+    Deployments    int
 }
 
 // OperatorInfo for OLM operators
@@ -2722,6 +2874,9 @@ controller-gen object paths="./..."
 controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
 go run cmd/manager/main.go --namespace=clusterpulse
 
+# Proto generation (requires buf CLI)
+buf generate proto
+
 # Testing
 go test ./...
 go test -v ./internal/controller/cluster/
@@ -2735,9 +2890,12 @@ golangci-lint run
 
 # Building
 go build -o bin/manager cmd/manager/main.go
+go build -o bin/collector cmd/collector/main.go
 
 # Docker
-docker build -t cluster-controller:latest .
+docker build -f Dockerfile.cluster-controller -t cluster-controller:latest .
+docker build -f Dockerfile.collector -t collector:latest .
+docker build -f Dockerfile.api -t api:latest .
 
 # Applying CRDs
 oc apply -f config/crd/bases/
@@ -2772,3 +2930,9 @@ oc apply -f config/crd/bases/
 - **MetricSource subsystem:** Modular design with compiler, collector, expression engine, and aggregator
 - **Expression language:** Supports arithmetic, comparison, logical operators, and built-in functions
 - **Aggregations:** Supports count, sum, avg, min, max, percentile, distinct with filters and grouping
+- **Push mode:** Collector agents on managed clusters push metrics via gRPC to the hub ingester
+- **Pull/push coexistence:** Both modes coexist per-cluster via `collectionMode` field on ClusterConnection
+- **Ingester:** Embedded gRPC server in manager, dual-writes to Redis + VictoriaMetrics
+- **Collector deployment:** Hub auto-deploys collector Deployment + RBAC on managed clusters
+- **VictoriaMetrics:** Optional time-series storage for historical metrics (PromQL API)
+- **History API:** `/metrics/history` endpoints query VictoriaMetrics with RBAC scoping
