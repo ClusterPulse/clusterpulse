@@ -44,6 +44,11 @@ func (c *Config) ReconnectBackoff() time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
+// ResetBackoff resets the reconnect backoff counter after a successful connection.
+func (c *Config) ResetBackoff() {
+	c.reconnectAttempts = 0
+}
+
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

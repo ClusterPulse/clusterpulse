@@ -193,6 +193,7 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 	}
 
 	log.WithField("cluster", a.config.ClusterName).Info("Registered with ingester")
+	a.config.ResetBackoff()
 
 	// Start receiving messages in background
 	recvDone := make(chan error, 1)
