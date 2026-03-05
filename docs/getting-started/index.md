@@ -1,4 +1,4 @@
-# Quickstart
+# Quickstart:
 
 Get ClusterPulse running and monitoring a cluster in 5 minutes.
 
@@ -22,24 +22,7 @@ helm install clusterpulse ./helm-charts/clusterpulse		# Will install ClusterPuls
 
 ## Step 2: Connect a Cluster
 
-Create a ClusterConnection to monitor your cluster:
-```yaml
-apiVersion: clusterpulse.io/v1alpha1
-kind: ClusterConnection
-metadata:
-  name: my-cluster
-  namespace: clusterpulse
-spec:
-  displayName: "My Production Cluster"
-  endpoint: https://api.my-cluster.example.com:6443
-  credentialsRef:
-    name: my-cluster-creds
-  monitoring:
-    interval: 30
-```
-```bash
-oc apply -f cluster-connection.yaml
-```
+Visit this [this guide](../how-to/clusters/add-openshift-cluster.md) for more information.
 
 ## Step 3: Create an Access Policy
 
@@ -72,7 +55,10 @@ spec:
 oc apply -f policy.yaml
 ```
 
-## Step 4: Access the UI
+## Step 4: Create MetricSources
+More of an optional step, but if you want to reconcile additional metrics, you can visit [this guide](../how-to/metricsources/create-metricsource.md) for more information.
+
+## Step 5: Access the UI
 ```bash
 # Get the route ClusterPulse created
 oc get routes -n <clusterpulse_ns>

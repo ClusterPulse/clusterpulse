@@ -14,6 +14,9 @@ type Config struct {
 	Token                  string
 	CollectIntervalSeconds int
 	BufferSize             int
+	TLSEnabled             bool
+	TLSCACert              string
+	TLSServerName          string
 
 	// Internal: tracks consecutive reconnection failures for backoff
 	reconnectAttempts int
@@ -27,6 +30,9 @@ func LoadConfig() *Config {
 		Token:                  getEnv("COLLECTOR_TOKEN", ""),
 		CollectIntervalSeconds: getEnvInt("COLLECT_INTERVAL", 60),
 		BufferSize:             getEnvInt("BUFFER_SIZE", 10),
+		TLSEnabled:             getEnvBool("INGESTER_TLS_ENABLED", false),
+		TLSCACert:              getEnv("INGESTER_TLS_CA", ""),
+		TLSServerName:          getEnv("INGESTER_TLS_SERVER_NAME", ""),
 	}
 }
 
@@ -41,6 +47,13 @@ func (c *Config) ReconnectBackoff() time.Duration {
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func getEnvBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		return v == "true" || v == "1" || v == "yes"
 	}
 	return def
 }

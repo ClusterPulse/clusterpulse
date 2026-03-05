@@ -184,6 +184,8 @@ INGESTER_ADDRESS=hub:9443        # Hub ingester gRPC endpoint
 COLLECTOR_TOKEN=<bearer-token>   # Auth token (from Secret)
 COLLECT_INTERVAL=30s             # Collection interval (default 30s)
 BUFFER_SIZE=10                   # Local buffer size (default 10 cycles)
+INGESTER_TLS_ENABLED=false       # Enable TLS for ingester connection
+INGESTER_TLS_CA=/etc/ingester-ca/service-ca.crt  # CA cert path (when TLS enabled)
 ```
 
 #### `internal/client/cluster/`
@@ -936,6 +938,9 @@ func Load() *Config {
 - `MetricsRetention` - How long to keep time series (default 3600s)
 - `IngesterEnabled` - Enable gRPC ingester for push mode (default true, env `INGESTER_ENABLED`)
 - `IngesterPort` - gRPC ingester listen port (default 9443, env `INGESTER_PORT`)
+- `IngesterTLSEnabled` - Enable TLS on the ingester (default false, env `INGESTER_TLS_ENABLED`)
+- `IngesterTLSCert` - Serving certificate path (default `/etc/ingester-tls/tls.crt`, env `INGESTER_TLS_CERT`)
+- `IngesterTLSKey` - Serving key path (default `/etc/ingester-tls/tls.key`, env `INGESTER_TLS_KEY`)
 - `VMEnabled` - Enable VictoriaMetrics time-series storage (default false, env `VM_ENABLED`)
 - `VMEndpoint` - VictoriaMetrics URL (default `http://victoriametrics:8428`, env `VM_ENDPOINT`)
 

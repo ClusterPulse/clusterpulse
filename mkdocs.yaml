@@ -84,9 +84,12 @@ nav:
     - how-to/index.md
     - Clusters:
       - Add OpenShift Cluster: how-to/clusters/add-openshift-cluster.md
+      - Configure Pull Mode with TLS: how-to/clusters/configure-ingester-tls.md
     - Policies:
       - Create Read-Only Policy: how-to/policies/create-readonly-policy.md
       - Filter by Namespace: how-to/policies/filter-by-namespace.md
+    - MetricSources:
+      - MetricSource Overview: how-to/metricsources/create-metricsource.md
     - Misc:
       - Use an External Redis Instance: how-to/external-redis.md
   - Concepts:

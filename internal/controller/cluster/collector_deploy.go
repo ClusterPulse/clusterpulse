@@ -22,6 +22,7 @@ const (
 	collectorClusterRole    = "clusterpulse-collector"
 	collectorDeploymentName = "clusterpulse-collector"
 	collectorImage          = "quay.io/clusterpulse/collector"
+	ingesterCAConfigMap     = "ingester-ca"
 )
 
 // ensureCollectorDeployed creates the collector agent on the managed cluster if it doesn't exist.
@@ -67,7 +68,22 @@ func (r *ClusterReconciler) ensureCollectorDeployed(ctx context.Context, cluster
 	if err := ensureCollectorSecret(ctx, dynClient, collectorNamespace, token); err != nil {
 		return fmt.Errorf("secret: %w", err)
 	}
-	if err := ensureCollectorDeployment(ctx, dynClient, collectorNamespace, clusterConn.Name, ingesterAddr, clusterConn.Spec.CollectorVersion); err != nil {
+	tlsEnabled := r.Config.IngesterTLSEnabled
+	useSystemCA := r.Config.IngesterTLSUseSystemCA
+	if tlsEnabled && !useSystemCA {
+		if err := r.ensureIngesterCA(ctx, dynClient, collectorNamespace); err != nil {
+			return fmt.Errorf("ingester CA: %w", err)
+		}
+	}
+	// Compute in-cluster service FQDN for TLS server name verification.
+	// Passthrough routes forward TLS by SNI (route hostname), but the service-ca
+	// cert has SANs for the in-cluster name. The collector uses VerifyConnection
+	// to verify against this name while keeping SNI as the route hostname.
+	var tlsServerName string
+	if tlsEnabled {
+		tlsServerName = fmt.Sprintf("%s.%s.svc", r.Config.IngesterServiceName, r.Config.Namespace)
+	}
+	if err := ensureCollectorDeployment(ctx, dynClient, collectorNamespace, clusterConn.Name, ingesterAddr, clusterConn.Spec.CollectorVersion, tlsEnabled, useSystemCA, tlsServerName); err != nil {
 		return fmt.Errorf("deployment: %w", err)
 	}
 
@@ -215,7 +231,63 @@ func ensureCollectorSecret(ctx context.Context, client dynamic.Interface, namesp
 	return err
 }
 
-func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, namespace, clusterName, ingesterAddr, collectorVersion string) error {
+// ensureIngesterCA reads the CA ConfigMap from the hub and creates a matching
+// ConfigMap on the managed cluster so collectors can verify the ingester's TLS certificate.
+// The source ConfigMap is configurable via COLLECTOR_CA_CONFIGMAP, COLLECTOR_CA_NAMESPACE,
+// and COLLECTOR_CA_KEY environment variables.
+func (r *ClusterReconciler) ensureIngesterCA(ctx context.Context, managedClient dynamic.Interface, namespace string) error {
+	// Determine source ConfigMap location
+	srcName := r.Config.CollectorCAConfigMap
+	srcNamespace := r.Config.CollectorCANamespace
+	if srcNamespace == "" {
+		srcNamespace = r.Config.Namespace
+	}
+	srcKey := r.Config.CollectorCAKey
+
+	// Read the CA bundle from the hub cluster
+	hubCM := &corev1.ConfigMap{}
+	if err := r.Get(ctx, k8sclient.ObjectKey{
+		Name:      srcName,
+		Namespace: srcNamespace,
+	}, hubCM); err != nil {
+		return fmt.Errorf("failed to get CA ConfigMap %s/%s: %w", srcNamespace, srcName, err)
+	}
+
+	caBundle, ok := hubCM.Data[srcKey]
+	if !ok {
+		return fmt.Errorf("CA ConfigMap %s/%s missing key %q", srcNamespace, srcName, srcKey)
+	}
+
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+	cm := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      ingesterCAConfigMap,
+				"namespace": namespace,
+			},
+			"data": map[string]any{
+				"service-ca.crt": caBundle,
+			},
+		},
+	}
+
+	existing, err := managedClient.Resource(gvr).Namespace(namespace).Get(ctx, ingesterCAConfigMap, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		_, err = managedClient.Resource(gvr).Namespace(namespace).Create(ctx, cm, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+
+	cm.SetResourceVersion(existing.GetResourceVersion())
+	_, err = managedClient.Resource(gvr).Namespace(namespace).Update(ctx, cm, metav1.UpdateOptions{})
+	return err
+}
+
+func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, namespace, clusterName, ingesterAddr, collectorVersion string, tlsEnabled, useSystemCA bool, tlsServerName string) error {
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
 	imageTag := collectorVersion
@@ -224,6 +296,83 @@ func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, na
 	}
 	if imageTag == "" || imageTag == "dev" {
 		imageTag = "latest"
+	}
+
+	envVars := []any{
+		map[string]any{
+			"name":  "CLUSTER_NAME",
+			"value": clusterName,
+		},
+		map[string]any{
+			"name":  "INGESTER_ADDRESS",
+			"value": ingesterAddr,
+		},
+		map[string]any{
+			"name": "COLLECTOR_TOKEN",
+			"valueFrom": map[string]any{
+				"secretKeyRef": map[string]any{
+					"name": "clusterpulse-collector-token",
+					"key":  "token",
+				},
+			},
+		},
+	}
+
+	var volumeMounts []any
+	var volumes []any
+
+	if tlsEnabled {
+		envVars = append(envVars,
+			map[string]any{"name": "INGESTER_TLS_ENABLED", "value": "true"},
+		)
+		if tlsServerName != "" {
+			envVars = append(envVars,
+				map[string]any{"name": "INGESTER_TLS_SERVER_NAME", "value": tlsServerName},
+			)
+		}
+		if !useSystemCA {
+			envVars = append(envVars,
+				map[string]any{"name": "INGESTER_TLS_CA", "value": "/etc/ingester-ca/service-ca.crt"},
+			)
+			volumeMounts = append(volumeMounts, map[string]any{
+				"name":      "ingester-ca",
+				"mountPath": "/etc/ingester-ca",
+				"readOnly":  true,
+			})
+			volumes = append(volumes, map[string]any{
+				"name": "ingester-ca",
+				"configMap": map[string]any{
+					"name": ingesterCAConfigMap,
+				},
+			})
+		}
+	}
+
+	container := map[string]any{
+		"name":  "collector",
+		"image": fmt.Sprintf("%s:%s", collectorImage, imageTag),
+		"env":   envVars,
+		"resources": map[string]any{
+			"requests": map[string]any{
+				"cpu":    "50m",
+				"memory": "32Mi",
+			},
+			"limits": map[string]any{
+				"cpu":    "200m",
+				"memory": "64Mi",
+			},
+		},
+	}
+	if len(volumeMounts) > 0 {
+		container["volumeMounts"] = volumeMounts
+	}
+
+	podSpec := map[string]any{
+		"serviceAccountName": collectorServiceAccount,
+		"containers":         []any{container},
+	}
+	if len(volumes) > 0 {
+		podSpec["volumes"] = volumes
 	}
 
 	deploy := &unstructured.Unstructured{
@@ -254,44 +403,7 @@ func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, na
 							"app.kubernetes.io/part-of":   "clusterpulse",
 						},
 					},
-					"spec": map[string]any{
-						"serviceAccountName": collectorServiceAccount,
-						"containers": []any{
-							map[string]any{
-								"name":  "collector",
-								"image": fmt.Sprintf("%s:%s", collectorImage, imageTag),
-								"env": []any{
-									map[string]any{
-										"name":  "CLUSTER_NAME",
-										"value": clusterName,
-									},
-									map[string]any{
-										"name":  "INGESTER_ADDRESS",
-										"value": ingesterAddr,
-									},
-									map[string]any{
-										"name": "COLLECTOR_TOKEN",
-										"valueFrom": map[string]any{
-											"secretKeyRef": map[string]any{
-												"name": "clusterpulse-collector-token",
-												"key":  "token",
-											},
-										},
-									},
-								},
-								"resources": map[string]any{
-									"requests": map[string]any{
-										"cpu":    "50m",
-										"memory": "32Mi",
-									},
-									"limits": map[string]any{
-										"cpu":    "200m",
-										"memory": "64Mi",
-									},
-								},
-							},
-						},
-					},
+					"spec": podSpec,
 				},
 			},
 		},

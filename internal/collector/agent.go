@@ -2,9 +2,12 @@ package collector
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
@@ -88,10 +92,68 @@ func (a *Agent) Run(ctx context.Context) error {
 func (a *Agent) connectAndRun(ctx context.Context) error {
 	log := logrus.WithField("component", "collector-agent")
 
+	// Build transport credentials
+	var transportCreds credentials.TransportCredentials
+	if a.config.TLSEnabled {
+		var pool *x509.CertPool
+		if a.config.TLSCACert != "" {
+			caCert, err := os.ReadFile(a.config.TLSCACert)
+			if err != nil {
+				return fmt.Errorf("failed to read CA cert %s: %w", a.config.TLSCACert, err)
+			}
+			pool = x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("failed to parse CA cert from %s", a.config.TLSCACert)
+			}
+			log.WithField("ca", a.config.TLSCACert).Info("Using custom CA certificate")
+		} else {
+			var err error
+			pool, err = x509.SystemCertPool()
+			if err != nil {
+				return fmt.Errorf("failed to load system CA pool: %w", err)
+			}
+			log.Info("Using system CA trust store")
+		}
+		tlsCfg := &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}
+		// When TLSServerName is set, the dial address (route hostname) differs from
+		// the certificate SANs (in-cluster service name). We verify the cert chain
+		// against the in-cluster name via VerifyConnection while keeping the route
+		// hostname as SNI for passthrough routing. This is the same pattern used by
+		// Kubernetes client-go for custom server name verification.
+		if a.config.TLSServerName != "" {
+			log.WithField("serverName", a.config.TLSServerName).Info("Using custom TLS server name for certificate verification")
+			verifyPool := pool
+			tlsCfg.InsecureSkipVerify = true
+			tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+				opts := x509.VerifyOptions{
+					DNSName: a.config.TLSServerName,
+					Roots:   verifyPool,
+				}
+				if len(cs.PeerCertificates) == 0 {
+					return fmt.Errorf("no peer certificates presented")
+				}
+				if len(cs.PeerCertificates) > 1 {
+					opts.Intermediates = x509.NewCertPool()
+					for _, cert := range cs.PeerCertificates[1:] {
+						opts.Intermediates.AddCert(cert)
+					}
+				}
+				_, err := cs.PeerCertificates[0].Verify(opts)
+				return err
+			}
+		}
+		transportCreds = credentials.NewTLS(tlsCfg)
+	} else {
+		transportCreds = insecure.NewCredentials()
+	}
+
 	// Connect to ingester
 	conn, err := grpc.NewClient(
 		a.config.IngesterAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transportCreds),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,
