@@ -219,17 +219,15 @@ flowchart TD
     C -->|Yes| E[Load Policies]
     B -->|No| E
     E --> F{For Each Policy}
-    F --> G{Has custom section?}
+    F --> G{Has resource of this type?}
     G -->|No| F
-    G -->|Yes| H{resourceTypeName matches?}
-    H -->|No| F
-    H -->|Yes| I{Effect?}
-    I -->|Deny| D
-    I -->|Allow| J[Extract Filters]
-    J --> K{visibility = none?}
-    K -->|Yes| F
-    K -->|No| L[Return Decision]
-    F -->|No More| M[DENY - Implicit Deny]
+    G -->|Yes| H{Effect?}
+    H -->|Deny| D
+    H -->|Allow| I[Extract Matcher]
+    I --> J{visibility = none?}
+    J -->|Yes| F
+    J -->|No| K[Return Decision]
+    F -->|No More| L[DENY - Implicit Deny]
 ```
 
 ### Implicit Deny for Custom Resources
@@ -237,13 +235,14 @@ flowchart TD
 Custom resource types not explicitly granted in a policy are denied by default. This implements a secure implicit deny model:
 
 ```python
-# Only types explicitly in policy.custom_resources are accessible
+# Only types listed in rule.resources (non-standard types) are accessible
 accessible_types = set()
 for policy in policies:
     for rule in policy.cluster_rules:
-        for type_name, config in rule.custom_resources.items():
-            if config.visibility != "none":
-                accessible_types.add(type_name)
+        for resource_filter in rule.resources:
+            if resource_filter.type not in STANDARD_TYPES:
+                if resource_filter.visibility != "none":
+                    accessible_types.add(resource_filter.type)
 ```
 
 ### Custom Resource Filter Evaluation
@@ -343,8 +342,9 @@ flowchart TD
 Example policy aggregation rules:
 
 ```yaml
-custom:
-  pvc:
+resources:
+  - type: pvc
+    visibility: all
     aggregations:
       include:
         - totalStorage

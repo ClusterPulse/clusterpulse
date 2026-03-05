@@ -141,7 +141,7 @@ user:permissions:{user}                      # User permission cache
 
 ### Compiled Policy JSON
 
-The `CompiledPolicy` struct uses snake_case JSON tags matching the Python `to_dict()` output:
+The `CompiledPolicy` struct uses snake_case JSON tags:
 
 ```json
 {
@@ -155,39 +155,32 @@ The `CompiledPolicy` struct uses snake_case JSON tags matching the Python `to_di
   "service_accounts": [],
   "default_cluster_access": "none",
   "cluster_rules": [{
-    "cluster_selector": {"matchNames": ["dev-*"]},
-    "permissions": {"view": true},
-    "node_filter": null,
-    "operator_filter": null,
-    "namespace_filter": {
-      "visibility": "filtered",
-      "allowed_patterns": [["team-a-*", "^team-a-.*$"]],
-      "denied_patterns": [],
-      "allowed_literals": [],
-      "denied_literals": [],
-      "label_selectors": {},
-      "additional_filters": {}
+    "cluster_selector": {
+      "matchNames": ["dev-*"],
+      "matchLabels": {"environment": "development"}
     },
-    "pod_filter": null,
-    "custom_resources": {
-      "pvc": {
-        "resource_type_name": "pvc",
+    "permissions": {"view": true},
+    "resources": [
+      {
+        "type": "namespaces",
         "visibility": "filtered",
-        "namespace_filter": null,
-        "name_filter": null,
+        "allowed_ns": [],
+        "denied_ns": [],
+        "ns_patterns": [["team-a-*", "^team-a-.*$"]],
+        "deny_ns_patterns": []
+      },
+      {
+        "type": "pvc",
+        "visibility": "filtered",
         "field_filters": {
           "storageClass": {
-            "field_name": "storageClass",
-            "allowed_patterns": [],
-            "denied_patterns": [],
             "allowed_literals": ["gp3"],
-            "denied_literals": [],
-            "conditions": []
+            "denied_literals": []
           }
         },
         "aggregation_rules": {"include": ["totalStorage"], "exclude": []}
       }
-    }
+    ]
   }],
   "not_before": null,
   "not_after": null,
@@ -198,7 +191,7 @@ The `CompiledPolicy` struct uses snake_case JSON tags matching the Python `to_di
 }
 ```
 
-**Critical:** Patterns are stored as `[[original, regex], ...]` (arrays of 2-element arrays). Null for missing optional filters. `enabled` stored as lowercase string in the hash fields (`"true"`/`"false"`).
+**Critical:** Patterns are stored as `[[original, regex], ...]` (arrays of 2-element arrays). `enabled` stored as lowercase string in the hash fields (`"true"`/`"false"`). All resource types (built-in and custom) use the same `CompiledResourceFilter` structure in the `resources` array.
 
 ## Policy Compilation
 
@@ -210,29 +203,29 @@ The `Compiler` in `internal/controller/policy/compiler.go` mirrors the Python `P
 4. **Pattern compilation** - `*`→`.*`, `?`→`.`, dots escaped; literals separated from regex patterns; results cached in-memory
 5. **Generate hash** - SHA-256 of canonical JSON spec, truncated to 16 hex chars
 
-### Built-in Resource Filters
+### Resource Filters
 
-| Resource | Config Struct | Filter Struct | Pattern Prefix |
-|----------|--------------|---------------|----------------|
-| Nodes | `NodeResourceConfig` | `NodeFilters` (LabelSelector, HideMasters, HideByLabels) | (none) |
-| Operators | `OperatorResourceConfig` | `OperatorFilters` (AllowedNamespaces, DeniedNamespaces, AllowedNames, DeniedNames) | `ns:` / `name:` |
-| Namespaces | `NamespaceResourceConfig` | `NamespaceFilters` (Allowed, Denied) | (none) |
-| Pods | `PodResourceConfig` | `PodFilters` (AllowedNamespaces) | (none) |
+All resource types (built-in and custom) use a single `ResourceFilter` struct:
 
-### Custom Resource Filters
+```go
+type ResourceFilter struct {
+    Type         string                `json:"type"`
+    Visibility   string                `json:"visibility,omitempty"`
+    Filters      *ResourceFilterSpec   `json:"filters,omitempty"`
+    Aggregations *AggregationVisibility `json:"aggregations,omitempty"`
+}
+```
 
-The `custom` field on `PolicyResources` is a `map[string]CustomResourceConfig` where each key must match a MetricSource's `spec.rbac.resourceTypeName`. Custom resources use implicit deny — only types explicitly listed in a policy are visible.
+The `type` field is one of the built-in types (`nodes`, `operators`, `namespaces`, `pods`, `alerts`, `events`) or a custom MetricSource `resourceTypeName`. The compiler produces a single `compileResourceFilter` for each entry. Custom resource types use implicit deny — only types explicitly listed in a policy are visible.
 
 | CRD Struct | Purpose |
 |------------|---------|
-| `CustomResourceConfig` | Top-level per-type config (visibility, filters, aggregations) |
-| `CustomResourceFilters` | Filter container (namespaces, names, fields) |
-| `PatternFilter` | Allowed/denied string patterns (shared with namespace/name filtering) |
-| `FieldFilterConfig` | Per-field allowed/denied patterns + operator conditions |
-| `FieldCondition` | Operator-based condition (Value is `apiextensionsv1.JSON` — polymorphic) |
+| `ResourceFilter` | Per-type config (type, visibility, filters, aggregations) |
+| `ResourceFilterSpec` | Filter container (namespaces, names, labels, fields) |
+| `PatternFilter` | Allowed/denied string patterns (shared across all dimensions) |
 | `AggregationVisibility` | Include/exclude lists for aggregation names |
 
-Field filters can only reference fields listed in the MetricSource's `spec.rbac.filterableFields`. Supported condition operators: `equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `greaterThan`, `lessThan`, `in`, `notIn`, `matches`.
+Field filters (custom types only) can only reference fields listed in the MetricSource's `spec.rbac.filterableFields`.
 
 ## Common Tasks
 
@@ -246,11 +239,7 @@ Field filters can only reference fields listed in the MetricSource's `spec.rbac.
 
 ### Adding a New Resource Filter Type
 
-1. Add to `PolicyResources` struct in the CRD types
-2. Add filter field to `CompiledClusterRule` in `pkg/types/policy.go`
-3. Add `compile*Filter()` method to compiler
-4. Wire it up in `compileClusterRules()`
-5. Regenerate deepcopy and CRD
+No code changes required. Add a new entry to the `resources` list in your `MonitorAccessPolicy` with the desired `type` name. The unified `ResourceFilter` / `CompiledResourceFilter` structure handles all resource types identically.
 
 ### Modifying Redis Storage
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	store "github.com/clusterpulse/cluster-controller/internal/store"
+	"github.com/clusterpulse/cluster-controller/pkg/types"
 	"github.com/sirupsen/logrus"
 )
 
@@ -38,7 +39,6 @@ func NewEngine(s *store.Client, cacheTTLSeconds int) *Engine {
 }
 
 // compilePattern returns a cached compiled regex, or compiles and caches it.
-// Returns nil if the pattern is invalid or exceeds maxPatternLength.
 func (e *Engine) compilePattern(pattern string) *regexp.Regexp {
 	if len(pattern) > maxPatternLength {
 		logrus.Warnf("Regex pattern exceeds max length (%d > %d), rejecting", len(pattern), maxPatternLength)
@@ -57,19 +57,105 @@ func (e *Engine) compilePattern(pattern string) *regexp.Regexp {
 }
 
 // =========================================================================
+// Resource Handlers
+// =========================================================================
+
+// ResourceHandler extracts fields from raw resource data for filtering.
+type ResourceHandler struct {
+	ExtractName       func(map[string]any) string
+	ExtractNamespaces func(map[string]any) []string
+	ExtractLabels     func(map[string]any) map[string]string
+}
+
+var standardHandlers = map[string]*ResourceHandler{
+	"nodes":      {extractStr("name"), noNamespaces, extractLabelsFromMap},
+	"operators":  {operatorName, operatorNamespaces, extractLabelsFromMap},
+	"namespaces": {namespaceName, noNamespaces, extractLabelsFromMap},
+	"pods":       {extractStr("name"), singleNamespace("namespace"), extractLabelsFromMap},
+	"events":     {extractStr("name"), singleNamespace("namespace"), extractLabelsFromMap},
+	"alerts":     {extractStr("name"), noNamespaces, extractLabelsFromMap},
+}
+
+var defaultCustomHandler = &ResourceHandler{
+	ExtractName:       extractStr("_name"),
+	ExtractNamespaces: singleNamespace("_namespace"),
+	ExtractLabels:     func(map[string]any) map[string]string { return nil },
+}
+
+func extractStr(key string) func(map[string]any) string {
+	return func(r map[string]any) string { return getStr(r, key) }
+}
+
+func noNamespaces(_ map[string]any) []string { return nil }
+
+func singleNamespace(key string) func(map[string]any) []string {
+	return func(r map[string]any) []string {
+		ns := getStr(r, key)
+		if ns == "" {
+			return nil
+		}
+		return []string{ns}
+	}
+}
+
+func operatorName(r map[string]any) string {
+	if name := getStr(r, "name"); name != "" {
+		return name
+	}
+	return getStr(r, "display_name")
+}
+
+func operatorNamespaces(r map[string]any) []string {
+	ns := getStringSlice(r, "available_in_namespaces")
+	if len(ns) == 1 && ns[0] == "*" {
+		return nil // cluster-wide, passes any namespace filter
+	}
+	return ns
+}
+
+func namespaceName(r map[string]any) string {
+	if ns := getStr(r, "namespace"); ns != "" {
+		return ns
+	}
+	return getStr(r, "name")
+}
+
+func extractLabelsFromMap(r map[string]any) map[string]string {
+	if labels, ok := r["labels"].(map[string]string); ok {
+		return labels
+	}
+	if labelsAny, ok := r["labels"].(map[string]any); ok {
+		labels := make(map[string]string, len(labelsAny))
+		for k, v := range labelsAny {
+			if s, ok := v.(string); ok {
+				labels[k] = s
+			}
+		}
+		return labels
+	}
+	return nil
+}
+
+func (e *Engine) getHandler(filterKey string) *ResourceHandler {
+	if h, ok := standardHandlers[filterKey]; ok {
+		return h
+	}
+	return defaultCustomHandler
+}
+
+// =========================================================================
 // Standard Resource Authorization
 // =========================================================================
 
 // Authorize authorizes a request for standard resources.
 func (e *Engine) Authorize(ctx context.Context, request *Request) *RBACDecision {
-	// Guard against nil principal to prevent panic in CacheKey().
 	if request.Principal == nil {
 		return &RBACDecision{
 			Decision:    DecisionDeny,
 			Request:     request,
 			Reason:      "No principal provided",
 			Permissions: make(map[Action]struct{}),
-			Filters:     make(map[ResourceType]*Filter),
+			Matchers:    make(map[string]*ResourceMatcher),
 			Metadata:    make(map[string]any),
 		}
 	}
@@ -86,7 +172,6 @@ func (e *Engine) Authorize(ctx context.Context, request *Request) *RBACDecision 
 
 	e.misses.Add(1)
 
-	// Log policy fetch errors so silent Redis failures are diagnosable.
 	policies, err := e.getApplicablePolicies(ctx, request.Principal)
 	if err != nil {
 		logrus.WithError(err).Warn("Failed to fetch applicable policies, defaulting to deny")
@@ -95,7 +180,7 @@ func (e *Engine) Authorize(ctx context.Context, request *Request) *RBACDecision 
 			Request:     request,
 			Reason:      "Policy fetch failed: " + err.Error(),
 			Permissions: make(map[Action]struct{}),
-			Filters:     make(map[ResourceType]*Filter),
+			Matchers:    make(map[string]*ResourceMatcher),
 			Metadata:    make(map[string]any),
 		}
 	}
@@ -127,23 +212,23 @@ func (e *Engine) FilterResources(ctx context.Context, principal *Principal, reso
 		return nil
 	}
 
-	primaryFilter := decision.GetFilter(resourceType)
-	if primaryFilter != nil && primaryFilter.Visibility == VisibilityNone {
+	filterKey := ResourceTypeToFilterKey[resourceType]
+	matcher := decision.Matchers[filterKey]
+
+	if matcher != nil && matcher.Visibility == VisibilityNone {
 		return nil
 	}
-
-	if decision.Decision == DecisionAllow && (primaryFilter == nil || (primaryFilter.Visibility == VisibilityAll && primaryFilter.IsEmpty())) {
+	if decision.Decision == DecisionAllow && (matcher == nil || matcher.IsUnrestricted()) {
 		return resources
 	}
 
-	nsFilter := decision.GetFilter(ResourceNamespace)
+	handler := e.getHandler(filterKey)
 
 	var filtered []map[string]any
 	for _, resource := range resources {
-		if !e.shouldShowResource(resource, resourceType, primaryFilter, nsFilter) {
-			continue
+		if e.matchesResource(resource, matcher, handler) {
+			filtered = append(filtered, e.applyDataFilters(resource, resourceType, decision.Permissions))
 		}
-		filtered = append(filtered, e.applyDataFilters(resource, resourceType, decision.Permissions))
 	}
 
 	return filtered
@@ -198,7 +283,6 @@ func (e *Engine) AuthorizeCustomResource(ctx context.Context, principal *Princip
 
 	e.misses.Add(1)
 
-	// If cluster specified, verify cluster access first
 	if cluster != "" {
 		clusterResource := &Resource{Type: ResourceCluster, Name: cluster, Cluster: cluster}
 		clusterRequest := &Request{Principal: principal, Action: action, Resource: clusterResource}
@@ -208,7 +292,7 @@ func (e *Engine) AuthorizeCustomResource(ctx context.Context, principal *Princip
 				ResourceTypeName:   typeName,
 				Cluster:            cluster,
 				Reason:             fmt.Sprintf("Access denied to cluster '%s'", cluster),
-				Filters:            NewCustomResourceFilter(),
+				Matcher:            &ResourceMatcher{Visibility: VisibilityNone},
 				DeniedAggregations: make(map[string]struct{}),
 				Permissions:        make(map[Action]struct{}),
 			}
@@ -216,7 +300,7 @@ func (e *Engine) AuthorizeCustomResource(ctx context.Context, principal *Princip
 	}
 
 	policies, _ := e.getApplicablePolicies(ctx, principal)
-	decision := e.evaluateCustomResourcePolicies(principal, typeName, cluster, action, policies)
+	decision := e.evaluateCustomResourcePolicies(typeName, cluster, action, policies)
 
 	if e.cacheEnabled {
 		cacheKey := CustomResourceCacheKey(principal, typeName, cluster, action)
@@ -237,13 +321,15 @@ func (e *Engine) FilterCustomResources(ctx context.Context, principal *Principal
 		return nil
 	}
 
-	if decision.Decision == DecisionAllow && decision.Filters.IsUnrestricted() {
+	if decision.Decision == DecisionAllow && decision.Matcher.IsUnrestricted() {
 		return resources
 	}
 
+	handler := e.getHandler(typeName)
+
 	var filtered []map[string]any
 	for _, resource := range resources {
-		if e.customResourceMatchesFilters(resource, decision.Filters) {
+		if e.matchesResource(resource, decision.Matcher, handler) {
 			filtered = append(filtered, resource)
 		}
 	}
@@ -251,36 +337,25 @@ func (e *Engine) FilterCustomResources(ctx context.Context, principal *Principal
 	return filtered
 }
 
-// GetAccessibleCustomResourceTypes returns types the principal can access (implicit deny).
+// GetAccessibleCustomResourceTypes returns types the principal can access.
 func (e *Engine) GetAccessibleCustomResourceTypes(ctx context.Context, principal *Principal) []string {
 	policies, _ := e.getApplicablePolicies(ctx, principal)
 	accessible := make(map[string]struct{})
 
-	for _, policy := range policies {
+	for i := range policies {
+		policy := &policies[i]
 		if !e.isPolicyValid(policy) {
 			continue
 		}
-		if getStr(policy, "effect") != "Allow" {
+		if policy.Effect != "Allow" {
 			continue
 		}
 
-		rules, _ := policy["cluster_rules"].([]any)
-		for _, r := range rules {
-			rule, _ := r.(map[string]any)
-			if rule == nil {
-				continue
-			}
-			customResources, _ := rule["custom_resources"].(map[string]any)
-			for typeName, cfg := range customResources {
-				cfgMap, _ := cfg.(map[string]any)
-				vis := "all"
-				if cfgMap != nil {
-					if v, ok := cfgMap["visibility"].(string); ok {
-						vis = v
-					}
-				}
-				if vis != "none" {
-					accessible[typeName] = struct{}{}
+		for j := range policy.ClusterRules {
+			for k := range policy.ClusterRules[j].Resources {
+				rf := &policy.ClusterRules[j].Resources[k]
+				if !isStandardResourceType(rf.Type) && rf.Visibility != "none" {
+					accessible[rf.Type] = struct{}{}
 				}
 			}
 		}
@@ -315,7 +390,6 @@ func (e *Engine) FilterAggregations(ctx context.Context, principal *Principal, a
 }
 
 // ClearCache clears authorization cache for a principal (or all).
-// Clears both rbac:decision:* and rbac:custom:* caches.
 func (e *Engine) ClearCache(ctx context.Context, principal *Principal) int {
 	if !e.cacheEnabled {
 		return 0
@@ -332,8 +406,6 @@ func (e *Engine) ClearCache(ctx context.Context, principal *Principal) int {
 	return count
 }
 
-// escapeRedisGlob escapes Redis glob metacharacters in a string.
-// Prevents cache key pattern injection via usernames containing *, ?, [, ].
 func escapeRedisGlob(s string) string {
 	replacer := strings.NewReplacer(
 		`*`, `\*`,
@@ -348,21 +420,22 @@ func escapeRedisGlob(s string) string {
 // Internal Methods
 // =========================================================================
 
-func (e *Engine) getApplicablePolicies(ctx context.Context, principal *Principal) ([]map[string]any, error) {
+func (e *Engine) getApplicablePolicies(ctx context.Context, principal *Principal) ([]types.CompiledPolicy, error) {
 	return e.store.GetPoliciesForPrincipal(ctx, principal.Username, principal.Groups, principal.IsServiceAccount)
 }
 
-func (e *Engine) evaluatePolicies(request *Request, policies []map[string]any) *RBACDecision {
+func (e *Engine) evaluatePolicies(request *Request, policies []types.CompiledPolicy) *RBACDecision {
 	decision := &RBACDecision{
 		Decision:    DecisionDeny,
 		Request:     request,
 		Reason:      "No matching policies found",
 		Permissions: make(map[Action]struct{}),
-		Filters:     make(map[ResourceType]*Filter),
+		Matchers:    make(map[string]*ResourceMatcher),
 		Metadata:    make(map[string]any),
 	}
 
-	for _, policy := range policies {
+	for i := range policies {
+		policy := &policies[i]
 		if !e.isPolicyValid(policy) {
 			continue
 		}
@@ -372,34 +445,33 @@ func (e *Engine) evaluatePolicies(request *Request, policies []map[string]any) *
 			continue
 		}
 
-		policyKey := getStr(policy, "_key")
+		policyKey := policy.RedisKey
 		if policyKey == "" {
-			policyKey = getStr(policy, "policy_name")
+			policyKey = policy.PolicyName
 		}
 		decision.AppliedPolicies = append(decision.AppliedPolicies, policyKey)
 
-		if getStr(policy, "effect") == "Deny" {
+		if policy.Effect == "Deny" {
 			decision.Decision = DecisionDeny
-			decision.Reason = fmt.Sprintf("Denied by policy %s", getStr(policy, "policy_name"))
+			decision.Reason = fmt.Sprintf("Denied by policy %s", policy.PolicyName)
 			break
 		}
 
-		if getStr(policy, "effect") == "Allow" {
-			permissions, filters := e.extractPermissionsAndFilters(match, policy, request.Resource)
-			if len(filters) > 0 {
+		if policy.Effect == "Allow" {
+			permissions, matchers := e.extractPermissionsAndMatchers(match)
+			if len(matchers) > 0 {
 				decision.Decision = DecisionPartial
 			} else {
 				decision.Decision = DecisionAllow
 			}
 			decision.Permissions = permissions
-			decision.Filters = filters
-			decision.Reason = fmt.Sprintf("Allowed by policy %s", getStr(policy, "policy_name"))
+			decision.Matchers = matchers
+			decision.Reason = fmt.Sprintf("Allowed by policy %s", policy.PolicyName)
 
-			auditConfig, _ := policy["audit_config"].(map[string]any)
-			if logAccess, _ := auditConfig["log_access"].(bool); logAccess {
+			if policy.AuditConfig["log_access"] {
 				decision.Metadata["audit_required"] = true
 			}
-			// First-match-wins — highest-priority Allow takes precedence.
+			// First-match-wins
 			break
 		}
 	}
@@ -407,18 +479,17 @@ func (e *Engine) evaluatePolicies(request *Request, policies []map[string]any) *
 	return decision
 }
 
-func (e *Engine) isPolicyValid(policy map[string]any) bool {
-	if enabled, ok := policy["enabled"].(bool); ok && !enabled {
+func (e *Engine) isPolicyValid(policy *types.CompiledPolicy) bool {
+	if !policy.Enabled {
 		return false
 	}
 
 	now := time.Now().UTC()
 
-	if nb, ok := policy["not_before"].(string); ok && nb != "" {
-		t, err := time.Parse(time.RFC3339, nb)
+	if policy.NotBefore != nil && *policy.NotBefore != "" {
+		t, err := time.Parse(time.RFC3339, *policy.NotBefore)
 		if err != nil {
-			// Treat unparseable time constraint as invalid policy.
-			logrus.Warnf("Policy %s has invalid not_before %q, treating as invalid", getStr(policy, "policy_name"), nb)
+			logrus.Warnf("Policy %s has invalid not_before %q, treating as invalid", policy.PolicyName, *policy.NotBefore)
 			return false
 		}
 		if now.Before(t) {
@@ -426,11 +497,10 @@ func (e *Engine) isPolicyValid(policy map[string]any) bool {
 		}
 	}
 
-	if na, ok := policy["not_after"].(string); ok && na != "" {
-		t, err := time.Parse(time.RFC3339, na)
+	if policy.NotAfter != nil && *policy.NotAfter != "" {
+		t, err := time.Parse(time.RFC3339, *policy.NotAfter)
 		if err != nil {
-			// Treat unparseable time constraint as invalid policy.
-			logrus.Warnf("Policy %s has invalid not_after %q, treating as invalid", getStr(policy, "policy_name"), na)
+			logrus.Warnf("Policy %s has invalid not_after %q, treating as invalid", policy.PolicyName, *policy.NotAfter)
 			return false
 		}
 		if now.After(t) {
@@ -441,7 +511,7 @@ func (e *Engine) isPolicyValid(policy map[string]any) bool {
 	return true
 }
 
-func (e *Engine) matchResource(resource *Resource, policy map[string]any) map[string]any {
+func (e *Engine) matchResource(resource *Resource, policy *types.CompiledPolicy) *types.CompiledClusterRule {
 	if resource.Type == ResourceCluster {
 		return e.matchCluster(resource, policy)
 	}
@@ -452,48 +522,34 @@ func (e *Engine) matchResource(resource *Resource, policy map[string]any) map[st
 		}
 	}
 
-	if getStr(policy, "default_cluster_access") == "allow" {
-		return map[string]any{"permissions": map[string]any{"view": true}, "filters": map[string]any{}}
+	if policy.DefaultClusterAccess == "allow" {
+		return &types.CompiledClusterRule{
+			Permissions: map[string]bool{"view": true},
+		}
 	}
 
 	return nil
 }
 
-func (e *Engine) matchCluster(resource *Resource, policy map[string]any) map[string]any {
-	rules, _ := policy["cluster_rules"].([]any)
-	for _, r := range rules {
-		rule, _ := r.(map[string]any)
-		if rule == nil {
-			continue
+func (e *Engine) matchCluster(resource *Resource, policy *types.CompiledPolicy) *types.CompiledClusterRule {
+	for i := range policy.ClusterRules {
+		rule := &policy.ClusterRules[i]
+		sel := &rule.ClusterSelector
+
+		if slices.Contains(sel.MatchNames, resource.Name) {
+			return rule
 		}
 
-		selector, _ := rule["cluster_selector"].(map[string]any)
-		if selector == nil {
-			continue
-		}
-
-		// matchNames
-		if names, ok := selector["matchNames"].([]any); ok {
-			for _, n := range names {
-				if s, ok := n.(string); ok && s == resource.Name {
-					return rule
-				}
-			}
-		}
-
-		// matchPattern
-		if pat, ok := selector["matchPattern"].(string); ok {
-			if re := e.compilePattern(pat); re != nil && re.MatchString(resource.Name) {
+		if sel.MatchPattern != "" {
+			if re := e.compilePattern(sel.MatchPattern); re != nil && re.MatchString(resource.Name) {
 				return rule
 			}
 		}
 
-		// matchLabels — empty matchLabels matches all resources per K8s semantics
-		if labels, ok := selector["matchLabels"].(map[string]any); ok && (resource.Labels != nil || len(labels) == 0) {
+		if sel.MatchLabels != nil && (resource.Labels != nil || len(sel.MatchLabels) == 0) {
 			allMatch := true
-			for k, v := range labels {
-				vs, _ := v.(string)
-				if resource.Labels[k] != vs {
+			for k, v := range sel.MatchLabels {
+				if resource.Labels[k] != v {
 					allMatch = false
 					break
 				}
@@ -507,30 +563,17 @@ func (e *Engine) matchCluster(resource *Resource, policy map[string]any) map[str
 	return nil
 }
 
-func (e *Engine) matchClusterName(clusterName string, policy map[string]any) map[string]any {
-	rules, _ := policy["cluster_rules"].([]any)
-	for _, r := range rules {
-		rule, _ := r.(map[string]any)
-		if rule == nil {
-			continue
+func (e *Engine) matchClusterName(clusterName string, policy *types.CompiledPolicy) *types.CompiledClusterRule {
+	for i := range policy.ClusterRules {
+		rule := &policy.ClusterRules[i]
+		sel := &rule.ClusterSelector
+
+		if slices.Contains(sel.MatchNames, clusterName) {
+			return rule
 		}
 
-		selector, _ := rule["cluster_selector"].(map[string]any)
-		if selector == nil {
-			continue
-		}
-
-		if names, ok := selector["matchNames"].([]any); ok {
-			for _, n := range names {
-				if s, ok := n.(string); ok && s == clusterName {
-					return rule
-				}
-			}
-		}
-
-		// matchPattern
-		if pat, ok := selector["matchPattern"].(string); ok {
-			if re := e.compilePattern(pat); re != nil && re.MatchString(clusterName) {
+		if sel.MatchPattern != "" {
+			if re := e.compilePattern(sel.MatchPattern); re != nil && re.MatchString(clusterName) {
 				return rule
 			}
 		}
@@ -539,199 +582,94 @@ func (e *Engine) matchClusterName(clusterName string, policy map[string]any) map
 	return nil
 }
 
-func (e *Engine) extractPermissionsAndFilters(rule, policy map[string]any, resource *Resource) (map[Action]struct{}, map[ResourceType]*Filter) {
-	perms, _ := rule["permissions"].(map[string]any)
-	if perms == nil {
-		perms = map[string]any{"view": true}
-	}
-
+func (e *Engine) extractPermissionsAndMatchers(rule *types.CompiledClusterRule) (map[Action]struct{}, map[string]*ResourceMatcher) {
 	permissions := make(map[Action]struct{})
-	for key, action := range PermissionMapping {
-		if v, ok := perms[key].(bool); ok && v {
-			permissions[action] = struct{}{}
-		}
-	}
-
-	filters := make(map[ResourceType]*Filter)
-	if nf, ok := rule["node_filter"].(map[string]any); ok {
-		filters[ResourceNode] = buildFilter(nf)
-	}
-	if of, ok := rule["operator_filter"].(map[string]any); ok {
-		filters[ResourceOperator] = buildFilter(of)
-	}
-	if nsf, ok := rule["namespace_filter"].(map[string]any); ok {
-		filters[ResourceNamespace] = buildFilter(nsf)
-	}
-	if pf, ok := rule["pod_filter"].(map[string]any); ok {
-		filters[ResourcePod] = buildFilter(pf)
-	}
-
-	return permissions, filters
-}
-
-func (e *Engine) shouldShowResource(resource map[string]any, resourceType ResourceType, primaryFilter, nsFilter *Filter) bool {
-	if primaryFilter != nil {
-		if primaryFilter.Visibility == VisibilityNone {
-			return false
-		}
-		if primaryFilter.Visibility == VisibilityAll && primaryFilter.IsEmpty() {
-			if resourceType == ResourcePod || resourceType == ResourceOperator || resourceType == ResourceEvent {
-				if nsFilter != nil {
-					return e.checkNamespaceFilter(resource, resourceType, nsFilter)
-				}
-			}
-			return true
-		}
-	}
-
-	name := e.extractResourceName(resource, resourceType)
-	labels, _ := resource["labels"].(map[string]string)
-	if labels == nil {
-		if labelsAny, ok := resource["labels"].(map[string]any); ok {
-			labels = make(map[string]string, len(labelsAny))
-			for k, v := range labelsAny {
-				if s, ok := v.(string); ok {
-					labels[k] = s
-				}
+	if rule.Permissions == nil {
+		permissions[ActionView] = struct{}{}
+	} else {
+		for key, action := range PermissionMapping {
+			if rule.Permissions[key] {
+				permissions[action] = struct{}{}
 			}
 		}
 	}
 
-	if resourceType == ResourcePod || resourceType == ResourceOperator || resourceType == ResourceEvent {
-		if nsFilter != nil && nsFilter.Visibility == VisibilityNone {
-			return false
-		}
-		if nsFilter != nil && !e.checkNamespaceFilter(resource, resourceType, nsFilter) {
-			return false
-		}
+	matchers := make(map[string]*ResourceMatcher, len(rule.Resources))
+	for i := range rule.Resources {
+		matchers[rule.Resources[i].Type] = buildMatcherFromCompiled(&rule.Resources[i])
 	}
 
-	if primaryFilter != nil {
-		if resourceType == ResourceOperator {
-			return e.shouldShowOperator(resource, primaryFilter, nsFilter)
-		}
-		if !primaryFilter.Matches(name, labels) {
-			return false
-		}
-	}
-
-	return true
+	return permissions, matchers
 }
 
-func (e *Engine) checkNamespaceFilter(resource map[string]any, resourceType ResourceType, nsFilter *Filter) bool {
-	if nsFilter.Visibility == VisibilityNone {
-		return false
-	}
-	if nsFilter.Visibility == VisibilityAll && nsFilter.IsEmpty() {
+// matchesResource checks if a raw resource passes the matcher criteria.
+func (e *Engine) matchesResource(resource map[string]any, matcher *ResourceMatcher, handler *ResourceHandler) bool {
+	if matcher == nil {
 		return true
 	}
-
-	if resourceType == ResourceOperator {
-		availNS := getStringSlice(resource, "available_in_namespaces")
-		if len(availNS) == 1 && availNS[0] == "*" {
-			return nsFilter.Visibility != VisibilityNone
-		}
-		for _, ns := range availNS {
-			if nsFilter.Matches(ns, nil) {
-				return true
-			}
-		}
+	if matcher.Visibility == VisibilityNone {
 		return false
 	}
 
-	ns, _ := resource["namespace"].(string)
-	if ns == "" {
-		return true
-	}
-	return nsFilter.Matches(ns, nil)
-}
+	name := handler.ExtractName(resource)
+	namespaces := handler.ExtractNamespaces(resource)
+	labels := handler.ExtractLabels(resource)
 
-func (e *Engine) shouldShowOperator(operator map[string]any, opFilter, nsFilter *Filter) bool {
-	if opFilter.Visibility == VisibilityNone {
-		return false
-	}
-	if opFilter.Visibility == VisibilityAll && opFilter.IsEmpty() {
-		if nsFilter != nil {
-			return e.checkNamespaceFilter(operator, ResourceOperator, nsFilter)
+	// Name matching
+	if matcher.Names != nil {
+		if name == "" {
+			return false
 		}
-		return true
-	}
-
-	opName, _ := operator["name"].(string)
-	displayName, _ := operator["display_name"].(string)
-
-	nameKey := "name:" + opName
-	displayNameKey := "name:" + displayName
-
-	// Check exclusions
-	for _, key := range []string{opName, nameKey, displayNameKey} {
-		if _, excluded := opFilter.Exclude[key]; excluded {
+		if !matcher.Names.Matches(name) {
 			return false
 		}
 	}
 
-	// Check inclusions
-	if len(opFilter.Include) > 0 {
-		nameMatched := false
-		for _, key := range []string{opName, nameKey, displayNameKey} {
-			if _, ok := opFilter.Include[key]; ok {
-				nameMatched = true
+	// Namespace matching — any extracted namespace must match
+	if matcher.Namespaces != nil && len(namespaces) > 0 {
+		anyMatch := false
+		for _, ns := range namespaces {
+			if matcher.Namespaces.Matches(ns) {
+				anyMatch = true
 				break
 			}
 		}
-
-		if !nameMatched {
-			for _, p := range opFilter.Patterns {
-				if p.Original != "" && len(p.Original) > 5 && p.Original[:5] == "name:" {
-					if p.Regexp.MatchString(opName) || p.Regexp.MatchString(displayName) {
-						nameMatched = true
-						break
-					}
-				}
-			}
-		}
-
-		if !nameMatched {
+		if !anyMatch {
 			return false
 		}
 	}
 
-	if nsFilter != nil && nsFilter.Visibility != VisibilityAll {
-		availNS := getStringSlice(operator, "available_in_namespaces")
-		if len(availNS) == 1 && availNS[0] == "*" {
-			return nsFilter.Visibility != VisibilityNone
+	// Label matching
+	if len(matcher.Labels) > 0 {
+		if labels == nil {
+			return false
 		}
-		for _, ns := range availNS {
-			if nsFilter.Matches(ns, nil) {
-				nsKey := "ns:" + ns
-				if _, excluded := opFilter.Exclude[nsKey]; !excluded {
-					return true
-				}
+		for k, v := range matcher.Labels {
+			if labels[k] != v {
+				return false
 			}
 		}
-		return false
+	}
+
+	// Field matching (custom resources)
+	if len(matcher.FieldFilters) > 0 {
+		values, _ := resource["values"].(map[string]any)
+		for fieldName, ms := range matcher.FieldFilters {
+			var fieldValue any
+			if values != nil {
+				fieldValue = values[fieldName]
+			}
+			valueStr := ""
+			if fieldValue != nil {
+				valueStr = fmt.Sprintf("%v", fieldValue)
+			}
+			if !ms.Matches(valueStr) {
+				return false
+			}
+		}
 	}
 
 	return true
-}
-
-func (e *Engine) extractResourceName(resource map[string]any, resourceType ResourceType) string {
-	switch resourceType {
-	case ResourceNode:
-		return getStr(resource, "name")
-	case ResourceOperator:
-		if name := getStr(resource, "name"); name != "" {
-			return name
-		}
-		return getStr(resource, "display_name")
-	case ResourceNamespace:
-		if ns := getStr(resource, "namespace"); ns != "" {
-			return ns
-		}
-		return getStr(resource, "name")
-	default:
-		return getStr(resource, "name")
-	}
 }
 
 func (e *Engine) applyDataFilters(resource map[string]any, _ ResourceType, permissions map[Action]struct{}) map[string]any {
@@ -740,7 +678,6 @@ func (e *Engine) applyDataFilters(resource map[string]any, _ ResourceType, permi
 		filtered[k] = v
 	}
 
-	// "secrets" is handled exclusively by ActionViewSecrets (replace-with-count semantics).
 	sensitiveFields := map[Action][]string{
 		ActionViewSensitive: {"tokens", "credentials", "certificates", "private_keys",
 			"service_account_tokens", "kubeconfig", "password", "api_key", "auth_token", "bearer_token"},
@@ -756,7 +693,6 @@ func (e *Engine) applyDataFilters(resource map[string]any, _ ResourceType, permi
 			for _, field := range fields {
 				if _, exists := filtered[field]; exists {
 					if action == ActionViewSecrets && (field == "secrets" || field == "configmaps") {
-						// Replace with count instead of removing
 						if arr, ok := filtered[field].([]any); ok {
 							filtered[field] = len(arr)
 						} else {
@@ -777,220 +713,103 @@ func (e *Engine) applyDataFilters(resource map[string]any, _ ResourceType, permi
 // Custom Resource Policy Evaluation
 // =========================================================================
 
-func (e *Engine) evaluateCustomResourcePolicies(_ *Principal, typeName, cluster string, _ Action, policies []map[string]any) *CustomResourceDecision {
+func (e *Engine) evaluateCustomResourcePolicies(typeName, cluster string, _ Action, policies []types.CompiledPolicy) *CustomResourceDecision {
 	decision := &CustomResourceDecision{
 		Decision:           DecisionDeny,
 		ResourceTypeName:   typeName,
 		Cluster:            cluster,
 		Reason:             fmt.Sprintf("No policy grants access to custom resource type: %s", typeName),
-		Filters:            NewCustomResourceFilter(),
+		Matcher:            &ResourceMatcher{Visibility: VisibilityNone},
 		DeniedAggregations: make(map[string]struct{}),
 		Permissions:        make(map[Action]struct{}),
 	}
 
-	for _, policy := range policies {
+	for i := range policies {
+		policy := &policies[i]
 		if !e.isPolicyValid(policy) {
 			continue
 		}
 
-		policyKey := getStr(policy, "_key")
+		policyKey := policy.RedisKey
 		if policyKey == "" {
-			policyKey = getStr(policy, "policy_name")
+			policyKey = policy.PolicyName
 		}
 
-		if getStr(policy, "effect") == "Deny" {
-			rules, _ := policy["cluster_rules"].([]any)
-			for _, r := range rules {
-				rule, _ := r.(map[string]any)
-				if rule == nil {
+		if policy.Effect == "Deny" {
+			for j := range policy.ClusterRules {
+				for k := range policy.ClusterRules[j].Resources {
+					if policy.ClusterRules[j].Resources[k].Type == typeName {
+						decision.Decision = DecisionDeny
+						decision.Reason = fmt.Sprintf("Denied by policy %s", policy.PolicyName)
+						decision.AppliedPolicies = append(decision.AppliedPolicies, policyKey)
+						return decision
+					}
+				}
+			}
+			continue
+		}
+
+		if policy.Effect != "Allow" {
+			continue
+		}
+
+		for j := range policy.ClusterRules {
+			rule := &policy.ClusterRules[j]
+			for k := range rule.Resources {
+				rf := &rule.Resources[k]
+				if rf.Type != typeName {
 					continue
 				}
-				customResources, _ := rule["custom_resources"].(map[string]any)
-				if _, ok := customResources[typeName]; ok {
-					decision.Decision = DecisionDeny
-					decision.Reason = fmt.Sprintf("Denied by policy %s", getStr(policy, "policy_name"))
-					decision.AppliedPolicies = append(decision.AppliedPolicies, policyKey)
-					return decision
+
+				decision.AppliedPolicies = append(decision.AppliedPolicies, policyKey)
+
+				if rf.Visibility == "none" {
+					continue
 				}
-			}
-			continue
-		}
 
-		if getStr(policy, "effect") != "Allow" {
-			continue
-		}
-
-		rules, _ := policy["cluster_rules"].([]any)
-		for _, r := range rules {
-			rule, _ := r.(map[string]any)
-			if rule == nil {
-				continue
-			}
-			customResources, _ := rule["custom_resources"].(map[string]any)
-			cfg, ok := customResources[typeName]
-			if !ok {
-				continue
-			}
-
-			config, _ := cfg.(map[string]any)
-			if config == nil {
-				continue
-			}
-
-			decision.AppliedPolicies = append(decision.AppliedPolicies, policyKey)
-
-			vis, _ := config["visibility"].(string)
-			if vis == "" {
-				vis = "all"
-			}
-			if vis == "none" {
-				continue
-			}
-
-			filters := e.parseCustomResourceFilters(config)
-			if vis == "all" && filters.IsUnrestricted() {
-				decision.Decision = DecisionAllow
-			} else {
-				decision.Decision = DecisionPartial
-				filters.Visibility = VisibilityFiltered
-			}
-
-			decision.Filters = filters
-			decision.Reason = fmt.Sprintf("Allowed by policy %s", getStr(policy, "policy_name"))
-
-			permsConfig, _ := config["permissions"].(map[string]any)
-			if permsConfig == nil {
-				permsConfig = map[string]any{"view": true}
-			}
-			decision.Permissions = extractCustomPermissions(permsConfig)
-
-			aggConfig, _ := config["aggregation_rules"].(map[string]any)
-			if aggConfig != nil {
-				if inc, ok := aggConfig["include"].([]any); ok {
-					allowed := make(map[string]struct{}, len(inc))
-					for _, i := range inc {
-						if s, ok := i.(string); ok {
-							allowed[s] = struct{}{}
-						}
-					}
-					decision.AllowedAggregations = &allowed
+				matcher := buildMatcherFromCompiled(rf)
+				if rf.Visibility == "all" && matcher.IsUnrestricted() {
+					decision.Decision = DecisionAllow
+				} else {
+					decision.Decision = DecisionPartial
+					matcher.Visibility = VisibilityFiltered
 				}
-				if exc, ok := aggConfig["exclude"].([]any); ok {
-					for _, e := range exc {
-						if s, ok := e.(string); ok {
-							decision.DeniedAggregations[s] = struct{}{}
+
+				decision.Matcher = matcher
+				decision.Reason = fmt.Sprintf("Allowed by policy %s", policy.PolicyName)
+
+				// Permissions from the rule
+				decision.Permissions = make(map[Action]struct{})
+				if rule.Permissions == nil {
+					decision.Permissions[ActionView] = struct{}{}
+				} else {
+					for key, action := range PermissionMapping {
+						if rule.Permissions[key] {
+							decision.Permissions[action] = struct{}{}
 						}
 					}
 				}
-			}
 
-			return decision
+				// Aggregation rules
+				if rf.AggregationRules != nil {
+					if len(rf.AggregationRules.Include) > 0 {
+						allowed := make(map[string]struct{}, len(rf.AggregationRules.Include))
+						for _, name := range rf.AggregationRules.Include {
+							allowed[name] = struct{}{}
+						}
+						decision.AllowedAggregations = &allowed
+					}
+					for _, name := range rf.AggregationRules.Exclude {
+						decision.DeniedAggregations[name] = struct{}{}
+					}
+				}
+
+				return decision
+			}
 		}
 	}
 
 	return decision
-}
-
-func (e *Engine) parseCustomResourceFilters(config map[string]any) *CustomResourceFilter {
-	result := NewCustomResourceFilter()
-
-	// Namespace filter
-	if nsConfig, ok := config["namespace_filter"].(map[string]any); ok {
-		result.NamespaceLiterals, result.NamespacePatterns = parseFilterSpecsFromAny(
-			sliceVal(nsConfig, "allowed_literals"),
-			sliceVal(nsConfig, "allowed_patterns"),
-		)
-		result.NamespaceExcludeLiterals, result.NamespaceExcludePatterns = parseFilterSpecsFromAny(
-			sliceVal(nsConfig, "denied_literals"),
-			sliceVal(nsConfig, "denied_patterns"),
-		)
-	}
-
-	// Name filter
-	if nameConfig, ok := config["name_filter"].(map[string]any); ok {
-		result.NameLiterals, result.NamePatterns = parseFilterSpecsFromAny(
-			sliceVal(nameConfig, "allowed_literals"),
-			sliceVal(nameConfig, "allowed_patterns"),
-		)
-		result.NameExcludeLiterals, result.NameExcludePatterns = parseFilterSpecsFromAny(
-			sliceVal(nameConfig, "denied_literals"),
-			sliceVal(nameConfig, "denied_patterns"),
-		)
-	}
-
-	// Field filters
-	if fieldConfigs, ok := config["field_filters"].(map[string]any); ok {
-		for fieldName, spec := range fieldConfigs {
-			fieldSpec, _ := spec.(map[string]any)
-			if fieldSpec == nil {
-				continue
-			}
-			ff := &FieldFilter{
-				AllowedLiterals: make(map[string]struct{}),
-				DeniedLiterals:  make(map[string]struct{}),
-			}
-			ff.AllowedLiterals, ff.AllowedPatterns = parseFilterSpecsFromAny(
-				sliceVal(fieldSpec, "allowed_literals"),
-				sliceVal(fieldSpec, "allowed_patterns"),
-			)
-			ff.DeniedLiterals, ff.DeniedPatterns = parseFilterSpecsFromAny(
-				sliceVal(fieldSpec, "denied_literals"),
-				sliceVal(fieldSpec, "denied_patterns"),
-			)
-			result.FieldFilters[fieldName] = ff
-		}
-	}
-
-	if result.IsUnrestricted() {
-		result.Visibility = VisibilityAll
-	} else {
-		result.Visibility = VisibilityFiltered
-	}
-
-	return result
-}
-
-func extractCustomPermissions(config map[string]any) map[Action]struct{} {
-	permissions := make(map[Action]struct{})
-	for key, action := range PermissionMapping {
-		if v, ok := config[key].(bool); ok && v {
-			permissions[action] = struct{}{}
-		}
-	}
-	return permissions
-}
-
-func (e *Engine) customResourceMatchesFilters(resource map[string]any, filters *CustomResourceFilter) bool {
-	if filters.Visibility == VisibilityNone {
-		return false
-	}
-
-	ns, _ := resource["_namespace"].(string)
-	name, _ := resource["_name"].(string)
-	if name == "" {
-		logrus.Warn("Resource missing _name field, excluding from results")
-		return false
-	}
-
-	if !filters.MatchesNamespace(ns) {
-		return false
-	}
-	if !filters.MatchesName(name) {
-		return false
-	}
-
-	values, _ := resource["values"].(map[string]any)
-	for fieldName := range filters.FieldFilters {
-		var fieldValue any
-		if values != nil {
-			fieldValue = values[fieldName]
-		}
-		if !filters.MatchesField(fieldName, fieldValue) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func (e *Engine) auditLog(ctx context.Context, request *Request, decision *RBACDecision) {
@@ -1005,14 +824,14 @@ func (e *Engine) auditLog(ctx context.Context, request *Request, decision *RBACD
 		"policies":  decision.AppliedPolicies,
 	}
 
-	filterInfo := make(map[string]any, len(decision.Filters))
-	for rt, f := range decision.Filters {
-		filterInfo[string(rt)] = map[string]any{
-			"visibility":  string(f.Visibility),
-			"has_filters": !f.IsEmpty(),
+	matcherInfo := make(map[string]any, len(decision.Matchers))
+	for rt, m := range decision.Matchers {
+		matcherInfo[rt] = map[string]any{
+			"visibility":      string(m.Visibility),
+			"is_unrestricted": m.IsUnrestricted(),
 		}
 	}
-	entry["filters"] = filterInfo
+	entry["filters"] = matcherInfo
 
 	raw, _ := json.Marshal(entry)
 	auditKey := fmt.Sprintf("audit:rbac:%s", time.Now().UTC().Format("20060102"))
@@ -1023,6 +842,14 @@ func (e *Engine) auditLog(ctx context.Context, request *Request, decision *RBACD
 // =========================================================================
 // Helpers
 // =========================================================================
+
+func isStandardResourceType(t string) bool {
+	switch t {
+	case "nodes", "operators", "namespaces", "pods":
+		return true
+	}
+	return false
+}
 
 func getStr(m map[string]any, key string) string {
 	if v, ok := m[key].(string); ok {

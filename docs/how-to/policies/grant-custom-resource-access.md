@@ -6,7 +6,7 @@ This guide covers configuring `MonitorAccessPolicy` resources to control access 
 
 Custom resources use **implicit deny**. A user cannot see any MetricSource-defined resource type unless a policy explicitly grants access. This provides a secure default — new MetricSource types are invisible until an administrator creates a policy for them.
 
-The `custom` section under `resources` maps each resource type (by its `resourceTypeName`) to visibility and filter rules.
+Custom resource types are listed alongside built-in types in the `resources` list. The `type` field must match the MetricSource's `rbac.resourceTypeName`.
 
 ## Prerequisites
 
@@ -44,12 +44,11 @@ spec:
             view: true
             viewMetrics: true
           resources:
-            custom:
-              pvc:
-                visibility: all
+            - type: pvc
+              visibility: all
 ```
 
-The `pvc` key must match the `rbac.resourceTypeName` in your MetricSource definition.
+The `type: pvc` must match the `rbac.resourceTypeName` in your MetricSource definition.
 
 ## Filter by Namespace
 
@@ -57,16 +56,15 @@ Restrict which namespaces a user can see resources from:
 
 ```yaml
 resources:
-  custom:
-    pvc:
-      visibility: filtered
-      filters:
-        namespaces:
-          allowed:
-            - "app-*"
-            - "shared-*"
-          denied:
-            - "shared-admin"
+  - type: pvc
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "app-*"
+          - "shared-*"
+        denied:
+          - "shared-admin"
 ```
 
 `denied` takes precedence over `allowed`. Wildcards (`*`, `?`) are supported.
@@ -77,59 +75,34 @@ Restrict which individual resources are visible:
 
 ```yaml
 resources:
-  custom:
-    certificate:
-      visibility: filtered
-      filters:
-        names:
-          allowed:
-            - "public-*"
-          denied:
-            - "*-internal"
+  - type: certificate
+    visibility: filtered
+    filters:
+      names:
+        allowed:
+          - "public-*"
+        denied:
+          - "*-internal"
 ```
 
 ## Filter by Field Values
 
 Filter resources by the values of extracted fields. Only fields listed in the MetricSource's `rbac.filterableFields` can be used.
 
-### Pattern Matching
-
 ```yaml
 resources:
-  custom:
-    pvc:
-      visibility: filtered
-      filters:
-        fields:
-          storageClass:
-            allowed:
-              - "gp3"
-              - "io2"
-          phase:
-            denied:
-              - "Failed"
+  - type: pvc
+    visibility: filtered
+    filters:
+      fields:
+        storageClass:
+          allowed:
+            - "gp3"
+            - "io2"
+        phase:
+          denied:
+            - "Failed"
 ```
-
-### Operator-Based Conditions
-
-For numeric or complex comparisons, use `conditions`:
-
-```yaml
-resources:
-  custom:
-    pvc:
-      visibility: filtered
-      filters:
-        fields:
-          storageBytes:
-            conditions:
-              - operator: greaterThan
-                value: 1073741824
-              - operator: lessThan
-                value: 10737418240
-```
-
-Supported operators: `equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `greaterThan`, `lessThan`, `in`, `notIn`, `matches`.
 
 ## Control Aggregation Visibility
 
@@ -141,13 +114,12 @@ Only these aggregations are visible:
 
 ```yaml
 resources:
-  custom:
-    pvc:
-      visibility: all
-      aggregations:
-        include:
-          - total_pvcs
-          - by_storage_class
+  - type: pvc
+    visibility: all
+    aggregations:
+      include:
+        - total_pvcs
+        - by_storage_class
 ```
 
 ### Exclude List (Blacklist)
@@ -156,12 +128,11 @@ Hide specific aggregations:
 
 ```yaml
 resources:
-  custom:
-    pvc:
-      visibility: all
-      aggregations:
-        exclude:
-          - cost_estimate
+  - type: pvc
+    visibility: all
+    aggregations:
+      exclude:
+        - cost_estimate
 ```
 
 `include` takes precedence — if both are set, only `include` is applied.
@@ -172,27 +143,26 @@ Filters are evaluated in order: namespace, then name, then fields. A resource mu
 
 ```yaml
 resources:
-  custom:
-    pvc:
-      visibility: filtered
-      filters:
-        namespaces:
+  - type: pvc
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "prod-*"
+      names:
+        denied:
+          - "*-temp"
+      fields:
+        phase:
           allowed:
-            - "prod-*"
-        names:
-          denied:
-            - "*-temp"
-        fields:
-          phase:
-            allowed:
-              - "Bound"
-          storageClass:
-            allowed:
-              - "gp3"
-      aggregations:
-        include:
-          - total_pvcs
-          - total_capacity
+            - "Bound"
+        storageClass:
+          allowed:
+            - "gp3"
+    aggregations:
+      include:
+        - total_pvcs
+        - total_capacity
 ```
 
 This policy shows only PVCs that are:
@@ -209,22 +179,21 @@ Grant access to multiple types with different rules:
 
 ```yaml
 resources:
-  custom:
-    pvc:
-      visibility: all
-    certificate:
-      visibility: filtered
-      filters:
-        namespaces:
-          allowed:
-            - "app-*"
-    cronjob:
-      visibility: filtered
-      filters:
-        fields:
-          schedule:
-            denied:
-              - "* * * * *"
+  - type: pvc
+    visibility: all
+  - type: certificate
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "app-*"
+  - type: cronjob
+    visibility: filtered
+    filters:
+      fields:
+        schedule:
+          denied:
+            - "* * * * *"
 ```
 
 Types not listed remain invisible (implicit deny).
@@ -258,29 +227,29 @@ spec:
             view: true
             viewMetrics: true
           resources:
-            namespaces:
+            - type: namespaces
               visibility: filtered
               filters:
-                allowed:
-                  - "alpha-*"
-            custom:
-              pvc:
-                visibility: filtered
-                filters:
-                  namespaces:
+                names:
+                  allowed:
+                    - "alpha-*"
+            - type: pvc
+              visibility: filtered
+              filters:
+                namespaces:
+                  allowed:
+                    - "alpha-*"
+                fields:
+                  storageClass:
                     allowed:
-                      - "alpha-*"
-                  fields:
-                    storageClass:
-                      allowed:
-                        - "gp3"
-                aggregations:
-                  include:
-                    - total_pvcs
-                    - total_capacity
-                    - by_storage_class
-              certificate:
-                visibility: all
+                      - "gp3"
+              aggregations:
+                include:
+                  - total_pvcs
+                  - total_capacity
+                  - by_storage_class
+            - type: certificate
+              visibility: all
 ```
 
 ## Aggregation Recomputation
@@ -319,7 +288,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ### Custom Type Not Visible
 
 1. Verify the MetricSource exists and has `rbac.resourceTypeName` set
-2. Confirm the policy includes the type in `resources.custom` with `visibility` not set to `none`
+2. Confirm the policy includes a `resources` entry with the matching `type` and `visibility` not set to `none`
 3. Check that the policy applies to the user (correct subjects, priority, enabled)
 
 ### Resources Filtered More Than Expected
