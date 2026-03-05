@@ -26,11 +26,11 @@ spec:
     subjects:
       groups:
         - app-developers
-  
+
   access:
     effect: Allow
     enabled: true
-  
+
   scope:
     clusters:
       default: filtered
@@ -41,11 +41,12 @@ spec:
             view: true
             viewMetrics: true
           resources:
-            namespaces:
+            - type: namespaces
               visibility: filtered
               filters:
-                allowed:
-                  - "app-*"
+                names:
+                  allowed:
+                    - "app-*"
 ```
 
 ## Visibility Options
@@ -66,9 +67,10 @@ Use `*` to match any characters and `?` to match a single character:
 
 ```yaml
 filters:
-  allowed:
-    - "app-*"        # Matches app-frontend, app-backend, etc.
-    - "team-?-prod"  # Matches team-a-prod, team-b-prod, etc.
+  names:
+    allowed:
+      - "app-*"        # Matches app-frontend, app-backend, etc.
+      - "team-?-prod"  # Matches team-a-prod, team-b-prod, etc.
 ```
 
 ### Literal Values
@@ -77,10 +79,11 @@ Exact namespace names without wildcards:
 
 ```yaml
 filters:
-  allowed:
-    - default
-    - monitoring
-    - logging
+  names:
+    allowed:
+      - default
+      - monitoring
+      - logging
 ```
 
 ### Combining Allowed and Denied
@@ -89,14 +92,15 @@ The `denied` list takes precedence over `allowed`:
 
 ```yaml
 resources:
-  namespaces:
+  - type: namespaces
     visibility: filtered
     filters:
-      allowed:
-        - "app-*"
-      denied:
-        - "app-internal"
-        - "app-secrets"
+      names:
+        allowed:
+          - "app-*"
+        denied:
+          - "app-internal"
+          - "app-secrets"
 ```
 
 This configuration allows all `app-*` namespaces except `app-internal` and `app-secrets`.
@@ -115,11 +119,11 @@ spec:
     subjects:
       groups:
         - team-alpha
-  
+
   access:
     effect: Allow
     enabled: true
-  
+
   scope:
     clusters:
       default: filtered
@@ -130,20 +134,22 @@ spec:
             view: true
             viewMetrics: true
           resources:
-            namespaces:
+            - type: namespaces
               visibility: filtered
               filters:
-                allowed:
-                  - "alpha-*"
-                  - "shared-*"
-                denied:
-                  - "shared-admin"
-            pods:
+                names:
+                  allowed:
+                    - "alpha-*"
+                    - "shared-*"
+                  denied:
+                    - "shared-admin"
+            - type: pods
               visibility: filtered
               filters:
-                allowedNamespaces:
-                  - "alpha-*"
-                  - "shared-*"
+                namespaces:
+                  allowed:
+                    - "alpha-*"
+                    - "shared-*"
 ```
 
 ## Filtering Related Resources
@@ -152,23 +158,26 @@ When filtering namespaces, you should also filter namespace-scoped resources to 
 
 ```yaml
 resources:
-  namespaces:
+  - type: namespaces
     visibility: filtered
     filters:
-      allowed:
-        - "app-*"
-  
-  pods:
+      names:
+        allowed:
+          - "app-*"
+
+  - type: pods
     visibility: filtered
     filters:
-      allowedNamespaces:
-        - "app-*"
-  
-  operators:
+      namespaces:
+        allowed:
+          - "app-*"
+
+  - type: operators
     visibility: filtered
     filters:
-      allowedNamespaces:
-        - "app-*"
+      namespaces:
+        allowed:
+          - "app-*"
 ```
 
 ## Filtering Operators by Namespace
@@ -177,14 +186,16 @@ Operators can be filtered by the namespaces where they are available. Remember t
 
 ```yaml
 resources:
-  operators:
+  - type: operators
     visibility: filtered
     filters:
-      allowedNamespaces:
-        - "operator-*"
-        - monitoring
-      deniedNames:
-        - "*-test"
+      namespaces:
+        allowed:
+          - "operator-*"
+          - monitoring
+      names:
+        denied:
+          - "*-test"
 ```
 
 ## How Metrics Are Affected
@@ -239,58 +250,60 @@ The response includes `filter_details` when filtering is applied.
 
 ```yaml
 filters:
-  allowed:
-    - "*"
-  denied:
-    - kube-system
-    - kube-public
-    - kube-node-lease
-    - openshift-*
+  names:
+    allowed:
+      - "*"
+    denied:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - openshift-*
 ```
 
 ### Development Team Access
 
 ```yaml
 filters:
-  allowed:
-    - "dev-*"
-    - "staging-*"
-  denied:
-    - "*-secrets"
-    - "*-internal"
+  names:
+    allowed:
+      - "dev-*"
+      - "staging-*"
+    denied:
+      - "*-secrets"
+      - "*-internal"
 ```
 
 ### Production Read-Only with Limited Namespaces
 
 ```yaml
 filters:
-  allowed:
-    - "prod-frontend"
-    - "prod-backend"
-    - "prod-api"
+  names:
+    allowed:
+      - "prod-frontend"
+      - "prod-backend"
+      - "prod-api"
 ```
 
 ## Filtering Custom Resources by Namespace
 
-Custom resources collected by MetricSource can also be filtered by namespace. Unlike built-in resources, custom resource namespace filters are defined in the `custom` section under `resources`:
+Custom resources collected by MetricSource can also be filtered by namespace. Custom resource types are listed alongside built-in types in the `resources` list:
 
 ```yaml
 resources:
-  custom:
-    pvc:
-      visibility: filtered
-      filters:
-        namespaces:
-          allowed:
-            - "app-*"
-          denied:
-            - "kube-system"
-    certificate:
-      visibility: filtered
-      filters:
-        namespaces:
-          allowed:
-            - "app-*"
+  - type: pvc
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "app-*"
+        denied:
+          - "kube-system"
+  - type: certificate
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "app-*"
 ```
 
 The same pattern rules apply — `denied` takes precedence over `allowed`, and wildcards (`*`, `?`) are supported.
@@ -301,25 +314,26 @@ When restricting namespace visibility, apply matching filters to custom resource
 
 ```yaml
 resources:
-  namespaces:
+  - type: namespaces
     visibility: filtered
     filters:
-      allowed:
-        - "app-*"
+      names:
+        allowed:
+          - "app-*"
 
-  pods:
+  - type: pods
     visibility: filtered
     filters:
-      allowedNamespaces:
-        - "app-*"
+      namespaces:
+        allowed:
+          - "app-*"
 
-  custom:
-    pvc:
-      visibility: filtered
-      filters:
-        namespaces:
-          allowed:
-            - "app-*"
+  - type: pvc
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "app-*"
 ```
 
 ### Aggregation Recomputation

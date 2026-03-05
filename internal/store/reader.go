@@ -1,13 +1,14 @@
 package redis
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"cmp"
 	"slices"
 	"strings"
 
+	"github.com/clusterpulse/cluster-controller/pkg/types"
 	goredis "github.com/go-redis/redis/v8"
 	"github.com/sirupsen/logrus"
 )
@@ -394,8 +395,8 @@ func (c *Client) BatchGetCustomAggregations(ctx context.Context, sourceID string
 
 // --- Policy Reads for RBAC Engine ---
 
-// GetPoliciesForPrincipal reads sorted sets, deduplicates, sorts by priority desc, fetches JSON data.
-func (c *Client) GetPoliciesForPrincipal(ctx context.Context, username string, groups []string, isServiceAccount bool) ([]map[string]any, error) {
+// GetPoliciesForPrincipal reads sorted sets, deduplicates, sorts by priority desc, fetches typed policy data.
+func (c *Client) GetPoliciesForPrincipal(ctx context.Context, username string, groups []string, isServiceAccount bool) ([]types.CompiledPolicy, error) {
 	type keyPriority struct {
 		key      string
 		priority float64
@@ -457,18 +458,18 @@ func (c *Client) GetPoliciesForPrincipal(ctx context.Context, username string, g
 	})
 
 	// Fetch policy data
-	policies := make([]map[string]any, 0, len(sorted))
+	policies := make([]types.CompiledPolicy, 0, len(sorted))
 	for _, kp := range sorted {
 		data, err := c.client.HGet(ctx, kp.key, "data").Result()
 		if err != nil {
 			continue
 		}
-		var policy map[string]any
+		var policy types.CompiledPolicy
 		if err := json.Unmarshal([]byte(data), &policy); err != nil {
 			logrus.WithError(err).Debugf("Failed to unmarshal policy %s", kp.key)
 			continue
 		}
-		policy["_key"] = kp.key
+		policy.RedisKey = kp.key
 		policies = append(policies, policy)
 	}
 

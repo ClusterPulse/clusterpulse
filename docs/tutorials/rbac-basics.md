@@ -240,12 +240,13 @@ spec:
             view: true
             viewMetrics: true
           resources:
-            namespaces:
+            - type: namespaces
               visibility: filtered
               filters:
-                allowed:
-                  - "tutorial-*"
-                  - default
+                names:
+                  allowed:
+                    - "tutorial-*"
+                    - default
 ```
 
 Apply and verify:
@@ -261,7 +262,7 @@ Only namespaces matching `tutorial-*` or `default` should be returned.
 
 ## Step 8: Grant Access to Custom Resources
 
-Custom resources collected by MetricSource use **implicit deny** — they are invisible unless a policy explicitly grants access. Add a `custom` section to the policy to grant access to a MetricSource type.
+Custom resources collected by MetricSource use **implicit deny** — they are invisible unless a policy explicitly grants access. Add a custom type entry to the `resources` list to grant access to a MetricSource type.
 
 Assume you have a MetricSource with `rbac.resourceTypeName: pvc`. Update `tutorial-policy.yaml`:
 
@@ -292,20 +293,20 @@ spec:
             view: true
             viewMetrics: true
           resources:
-            namespaces:
+            - type: namespaces
               visibility: filtered
               filters:
-                allowed:
-                  - "tutorial-*"
-                  - default
-            custom:
-              pvc:
-                visibility: filtered
-                filters:
-                  namespaces:
-                    allowed:
-                      - "tutorial-*"
-                      - default
+                names:
+                  allowed:
+                    - "tutorial-*"
+                    - default
+            - type: pvc
+              visibility: filtered
+              filters:
+                namespaces:
+                  allowed:
+                    - "tutorial-*"
+                    - default
 ```
 
 Apply and verify:
@@ -332,8 +333,8 @@ Only PVCs in `tutorial-*` and `default` namespaces should be returned. Aggregati
 You can also filter by specific field values. For example, to restrict visibility to only `Bound` PVCs, add a field filter (the field must be listed in the MetricSource's `rbac.filterableFields`):
 
 ```yaml
-custom:
-  pvc:
+resources:
+  - type: pvc
     visibility: filtered
     filters:
       namespaces:

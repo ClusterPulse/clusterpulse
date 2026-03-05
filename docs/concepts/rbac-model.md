@@ -186,99 +186,90 @@ Defines which clusters and resources the policy covers.
 
 ### Resource Filters
 
-Each resource type supports filtering:
+Resources are defined as a list under each cluster rule. Both built-in types (`nodes`, `namespaces`, `operators`, `pods`, `alerts`, `events`) and custom types (any MetricSource `resourceTypeName`) use the same structure:
 
 ```yaml
 resources:
-  nodes:
+  - type: nodes
     visibility: all | none | filtered
     filters:
-      hideMasters: true
-      labelSelector: {}
-  
-  namespaces:
+      labels:
+        env: production
+
+  - type: namespaces
     visibility: filtered
     filters:
-      allowed:
-        - "app-*"
-      denied:
-        - "kube-system"
-  
-  operators:
+      names:
+        allowed:
+          - "app-*"
+        denied:
+          - "kube-system"
+
+  - type: operators
     visibility: filtered
     filters:
-      allowedNamespaces:
-        - "operator-*"
-      deniedNames:
-        - "*-test"
-  
-  pods:
+      namespaces:
+        allowed:
+          - "operator-*"
+      names:
+        denied:
+          - "*-test"
+
+  - type: pods
     visibility: filtered
     filters:
-      allowedNamespaces:
-        - "app-*"
+      namespaces:
+        allowed:
+          - "app-*"
 ```
 
 ### Custom Resource Filters
 
-Custom resources defined by MetricSource CRDs can be filtered using the `custom` section:
+Custom resources defined by MetricSource CRDs use the same `resources` list. The `type` field must match the MetricSource's `rbac.resourceTypeName`:
 
 ```yaml
 resources:
-  custom:
-    pvc:  # resourceTypeName from MetricSource
-      visibility: all | none | filtered
-      filters:
-        namespaces:
+  - type: pvc  # resourceTypeName from MetricSource
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed:
+          - "app-*"
+        denied:
+          - "kube-system"
+      names:
+        allowed:
+          - "data-*"
+        denied:
+          - "*-test"
+      fields:
+        storageClass:
           allowed:
-            - "app-*"
+            - "gp3"
+            - "io2"
+        phase:
           denied:
-            - "kube-system"
-        names:
-          allowed:
-            - "data-*"
-          denied:
-            - "*-test"
-        fields:
-          storageClass:
-            allowed:
-              - "gp3"
-              - "io2"
-          phase:
-            denied:
-              - "Failed"
-      aggregations:
-        include:
-          - "totalStorage"
-          - "countByStorageClass"
-        exclude:
-          - "costEstimate"
+            - "Failed"
+    aggregations:
+      include:
+        - "totalStorage"
+        - "countByStorageClass"
+      exclude:
+        - "costEstimate"
 ```
 
-**Custom Resource Filter Properties**:
+**Resource Filter Properties**:
 
 | Property | Description |
 |----------|-------------|
+| `type` | Resource type name (`nodes`, `pods`, or a custom type like `pvc`) |
 | `visibility` | `all`, `none`, or `filtered` |
 | `filters.namespaces` | Filter by resource namespace |
 | `filters.names` | Filter by resource name |
-| `filters.fields` | Filter by extracted field values |
-| `aggregations.include` | Whitelist of visible aggregations |
-| `aggregations.exclude` | Blacklist of hidden aggregations |
-
-**Field Filtering**: Supports both pattern matching and operator-based conditions:
-
-```yaml
-fields:
-  storageBytes:
-    conditions:
-      - operator: greaterThan
-        value: 1073741824
-      - operator: lessThan
-        value: 10737418240
-```
-
-Supported operators: `equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `greaterThan`, `lessThan`, `in`, `notIn`, `matches`.
+| `filters.labels` | Filter by Kubernetes labels |
+| `filters.fields` | Filter by extracted field values (custom types only) |
+| `aggregations.include` | Whitelist of visible aggregations (custom types only) |
+| `aggregations.exclude` | Blacklist of hidden aggregations (custom types only) |
 
 ## Decision Types
 
@@ -334,15 +325,16 @@ flowchart TD
 
 Custom resources follow a specialized authorization flow that integrates with the MetricSource-defined schema.
 
-### CustomResourceFilter
+### ResourceMatcher
 
-Filters for custom resources support three levels:
+Both built-in and custom resources use a unified `ResourceMatcher` for filtering:
 
-| Level | Description |
-|-------|-------------|
-| Namespace | Filter by the namespace identifier field |
-| Name | Filter by the resource name identifier field |
-| Fields | Filter by any field in `rbac.filterableFields` |
+| Dimension | Description |
+|-----------|-------------|
+| Namespaces | Filter by namespace (include/exclude with patterns) |
+| Names | Filter by resource name (include/exclude with patterns) |
+| Labels | Filter by Kubernetes labels |
+| Fields | Filter by extracted field values (custom types only) |
 
 ### CustomResourceDecision
 
@@ -352,7 +344,7 @@ The authorization decision for custom resources includes:
 |-------|------|-------------|
 | `decision` | enum | `ALLOW`, `DENY`, or `PARTIAL` |
 | `resource_type_name` | string | The MetricSource resourceTypeName |
-| `filters` | CustomResourceFilter | Applicable filters |
+| `matcher` | ResourceMatcher | Applicable filters |
 | `allowed_aggregations` | set | Aggregations user can see (null = all) |
 | `denied_aggregations` | set | Aggregations hidden from user |
 | `permissions` | set | Granted actions |

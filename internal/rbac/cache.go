@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	goredis "github.com/go-redis/redis/v8"
@@ -47,7 +48,7 @@ func (c *Cache) GetDecision(ctx context.Context, key string) *RBACDecision {
 		Decision:    Decision(strVal(raw, "decision")),
 		Reason:      strVal(raw, "reason"),
 		Permissions: make(map[Action]struct{}),
-		Filters:     make(map[ResourceType]*Filter),
+		Matchers:    make(map[string]*ResourceMatcher),
 		Metadata:    mapVal(raw, "metadata"),
 	}
 
@@ -67,20 +68,10 @@ func (c *Cache) GetDecision(ctx context.Context, key string) *RBACDecision {
 		}
 	}
 
-	if filters, ok := raw["filters"].(map[string]any); ok {
-		for rtStr, fData := range filters {
-			if fd, ok := fData.(map[string]any); ok {
-				f := NewFilter(Visibility(strVal(fd, "visibility")))
-				f.Include = toStringSet(sliceVal(fd, "include"))
-				f.Exclude = toStringSet(sliceVal(fd, "exclude"))
-				if labels, ok := fd["labels"].(map[string]any); ok {
-					for k, v := range labels {
-						if s, ok := v.(string); ok {
-							f.Labels[k] = s
-						}
-					}
-				}
-				decision.Filters[ResourceType(rtStr)] = f
+	if matchers, ok := raw["matchers"].(map[string]any); ok {
+		for typeKey, mData := range matchers {
+			if md, ok := mData.(map[string]any); ok {
+				decision.Matchers[typeKey] = deserializeResourceMatcher(md)
 			}
 		}
 	}
@@ -99,14 +90,9 @@ func (c *Cache) SetDecision(ctx context.Context, key string, d *RBACDecision) {
 		perms = append(perms, string(a))
 	}
 
-	filters := make(map[string]any, len(d.Filters))
-	for rt, f := range d.Filters {
-		filters[string(rt)] = map[string]any{
-			"visibility": string(f.Visibility),
-			"include":    setToSlice(f.Include),
-			"exclude":    setToSlice(f.Exclude),
-			"labels":     f.Labels,
-		}
+	matchers := make(map[string]any, len(d.Matchers))
+	for typeKey, m := range d.Matchers {
+		matchers[typeKey] = serializeResourceMatcher(m)
 	}
 
 	data := map[string]any{
@@ -115,7 +101,7 @@ func (c *Cache) SetDecision(ctx context.Context, key string, d *RBACDecision) {
 		"permissions":      perms,
 		"metadata":         d.Metadata,
 		"applied_policies": d.AppliedPolicies,
-		"filters":          filters,
+		"matchers":         matchers,
 	}
 
 	if d.Request != nil {
@@ -210,10 +196,10 @@ func (c *Cache) GetCustomDecision(ctx context.Context, key string) *CustomResour
 		}
 	}
 
-	if filtersData, ok := raw["filters"].(map[string]any); ok {
-		d.Filters = deserializeCustomFilter(filtersData)
+	if matcherData, ok := raw["matcher"].(map[string]any); ok {
+		d.Matcher = deserializeResourceMatcher(matcherData)
 	} else {
-		d.Filters = NewCustomResourceFilter()
+		d.Matcher = &ResourceMatcher{Visibility: VisibilityAll}
 	}
 
 	return d
@@ -246,7 +232,7 @@ func (c *Cache) SetCustomDecision(ctx context.Context, key string, d *CustomReso
 		"metadata":             d.Metadata,
 		"allowed_aggregations": allowedAgg,
 		"denied_aggregations":  setToSlice(d.DeniedAggregations),
-		"filters":              serializeCustomFilter(d.Filters),
+		"matcher":              serializeResourceMatcher(d.Matcher),
 	}
 
 	raw, err := json.Marshal(data)
@@ -258,76 +244,112 @@ func (c *Cache) SetCustomDecision(ctx context.Context, key string, d *CustomReso
 	}
 }
 
-// --- Internal helpers ---
+// --- Serialization helpers ---
 
-func serializeCustomFilter(f *CustomResourceFilter) map[string]any {
-	fieldFilters := make(map[string]any, len(f.FieldFilters))
-	for name, ff := range f.FieldFilters {
-		fieldFilters[name] = []any{
-			setToSlice(ff.AllowedLiterals),
-			patternsToSlice(ff.AllowedPatterns),
-			setToSlice(ff.DeniedLiterals),
-			patternsToSlice(ff.DeniedPatterns),
-		}
+func serializeResourceMatcher(m *ResourceMatcher) map[string]any {
+	result := map[string]any{
+		"visibility": string(m.Visibility),
 	}
+	if m.Names != nil {
+		result["names"] = serializeMatchSpec(m.Names)
+	}
+	if m.Namespaces != nil {
+		result["namespaces"] = serializeMatchSpec(m.Namespaces)
+	}
+	if len(m.Labels) > 0 {
+		result["labels"] = m.Labels
+	}
+	if len(m.FieldFilters) > 0 {
+		fields := make(map[string]any, len(m.FieldFilters))
+		for name, ms := range m.FieldFilters {
+			fields[name] = serializeMatchSpec(ms)
+		}
+		result["field_filters"] = fields
+	}
+	return result
+}
 
+func serializeMatchSpec(ms *MatchSpec) map[string]any {
 	return map[string]any{
-		"visibility":                 string(f.Visibility),
-		"namespace_literals":         setToSlice(f.NamespaceLiterals),
-		"namespace_patterns":         patternsToSlice(f.NamespacePatterns),
-		"namespace_exclude_literals": setToSlice(f.NamespaceExcludeLiterals),
-		"namespace_exclude_patterns": patternsToSlice(f.NamespaceExcludePatterns),
-		"name_literals":              setToSlice(f.NameLiterals),
-		"name_patterns":              patternsToSlice(f.NamePatterns),
-		"name_exclude_literals":      setToSlice(f.NameExcludeLiterals),
-		"name_exclude_patterns":      patternsToSlice(f.NameExcludePatterns),
-		"field_filters":              fieldFilters,
+		"include":          setToSlice(ms.Include),
+		"exclude":          setToSlice(ms.Exclude),
+		"include_patterns": patternsToSlice(ms.IncludePatterns),
+		"exclude_patterns": patternsToSlice(ms.ExcludePatterns),
 	}
 }
 
-func deserializeCustomFilter(data map[string]any) *CustomResourceFilter {
-	f := NewCustomResourceFilter()
-
-	if v := strVal(data, "visibility"); v != "" {
-		f.Visibility = Visibility(v)
+func deserializeResourceMatcher(data map[string]any) *ResourceMatcher {
+	m := &ResourceMatcher{
+		Visibility: Visibility(strVal(data, "visibility")),
+	}
+	if m.Visibility == "" {
+		m.Visibility = VisibilityAll
 	}
 
-	f.NamespaceLiterals = toStringSet(sliceVal(data, "namespace_literals"))
-	f.NamespacePatterns = compilePatternList(sliceVal(data, "namespace_patterns"))
-	f.NamespaceExcludeLiterals = toStringSet(sliceVal(data, "namespace_exclude_literals"))
-	f.NamespaceExcludePatterns = compilePatternList(sliceVal(data, "namespace_exclude_patterns"))
-
-	f.NameLiterals = toStringSet(sliceVal(data, "name_literals"))
-	f.NamePatterns = compilePatternList(sliceVal(data, "name_patterns"))
-	f.NameExcludeLiterals = toStringSet(sliceVal(data, "name_exclude_literals"))
-	f.NameExcludePatterns = compilePatternList(sliceVal(data, "name_exclude_patterns"))
-
+	if nd, ok := data["names"].(map[string]any); ok {
+		m.Names = deserializeMatchSpec(nd)
+	}
+	if nd, ok := data["namespaces"].(map[string]any); ok {
+		m.Namespaces = deserializeMatchSpec(nd)
+	}
+	if labels, ok := data["labels"].(map[string]any); ok {
+		m.Labels = make(map[string]string, len(labels))
+		for k, v := range labels {
+			if s, ok := v.(string); ok {
+				m.Labels[k] = s
+			}
+		}
+	}
 	if ffData, ok := data["field_filters"].(map[string]any); ok {
-		for fieldName, v := range ffData {
-			if arr, ok := v.([]any); ok && len(arr) >= 4 {
-				ff := &FieldFilter{
-					AllowedLiterals: make(map[string]struct{}),
-					DeniedLiterals:  make(map[string]struct{}),
-				}
-				if al, ok := arr[0].([]any); ok {
-					ff.AllowedLiterals = toStringSet(al)
-				}
-				if ap, ok := arr[1].([]any); ok {
-					ff.AllowedPatterns = compilePatternList(ap)
-				}
-				if dl, ok := arr[2].([]any); ok {
-					ff.DeniedLiterals = toStringSet(dl)
-				}
-				if dp, ok := arr[3].([]any); ok {
-					ff.DeniedPatterns = compilePatternList(dp)
-				}
-				f.FieldFilters[fieldName] = ff
+		m.FieldFilters = make(map[string]*MatchSpec, len(ffData))
+		for name, v := range ffData {
+			if md, ok := v.(map[string]any); ok {
+				m.FieldFilters[name] = deserializeMatchSpec(md)
 			}
 		}
 	}
 
-	return f
+	return m
 }
+
+func deserializeMatchSpec(data map[string]any) *MatchSpec {
+	ms := &MatchSpec{
+		Include: anySliceToStringSet(sliceVal(data, "include")),
+		Exclude: anySliceToStringSet(sliceVal(data, "exclude")),
+	}
+	ms.IncludePatterns = deserializePatterns(sliceVal(data, "include_patterns"))
+	ms.ExcludePatterns = deserializePatterns(sliceVal(data, "exclude_patterns"))
+	return ms
+}
+
+func anySliceToStringSet(items []any) map[string]struct{} {
+	s := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if str, ok := item.(string); ok {
+			s[str] = struct{}{}
+		}
+	}
+	return s
+}
+
+func deserializePatterns(items []any) []CompiledPattern {
+	var compiled []CompiledPattern
+	for _, p := range items {
+		if pair, ok := p.([]any); ok && len(pair) >= 2 {
+			orig, _ := pair[0].(string)
+			regex, _ := pair[1].(string)
+			if regex != "" {
+				re, err := regexp.Compile(regex)
+				if err == nil {
+					compiled = append(compiled, CompiledPattern{Original: orig, Regexp: re})
+				}
+			}
+		}
+	}
+	return compiled
+}
+
+// --- Internal helpers ---
 
 func (c *Cache) scanAndDelete(ctx context.Context, pattern string) int {
 	count := 0

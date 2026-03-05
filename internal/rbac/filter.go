@@ -3,130 +3,77 @@ package rbac
 import (
 	"regexp"
 
+	"github.com/clusterpulse/cluster-controller/pkg/types"
 	"github.com/sirupsen/logrus"
 )
 
-// parseFilterSpecsFromAny handles the JSON-decoded format where patterns come as []any.
-func parseFilterSpecsFromAny(literals []any, patterns []any) (map[string]struct{}, []CompiledPattern) {
-	literalSet := make(map[string]struct{}, len(literals))
-	for _, l := range literals {
-		if s, ok := l.(string); ok {
-			literalSet[s] = struct{}{}
+// buildMatcherFromCompiled converts a CompiledResourceFilter into a ResourceMatcher.
+func buildMatcherFromCompiled(crf *types.CompiledResourceFilter) *ResourceMatcher {
+	m := &ResourceMatcher{
+		Visibility: Visibility(crf.Visibility),
+		Labels:     crf.Labels,
+	}
+
+	if hasNameFilters(crf) {
+		m.Names = buildMatchSpec(crf.AllowedNames, crf.DeniedNames, crf.NamePatterns, crf.DenyNamePatterns)
+	}
+
+	if hasNSFilters(crf) {
+		m.Namespaces = buildMatchSpec(crf.AllowedNS, crf.DeniedNS, crf.NSPatterns, crf.DenyNSPatterns)
+	}
+
+	if len(crf.FieldFilters) > 0 {
+		m.FieldFilters = make(map[string]*MatchSpec, len(crf.FieldFilters))
+		for name, ff := range crf.FieldFilters {
+			m.FieldFilters[name] = buildFieldMatchSpec(ff)
 		}
 	}
 
-	var compiled []CompiledPattern
-	for _, p := range patterns {
-		switch v := p.(type) {
-		case []any:
-			if len(v) >= 2 {
-				orig, _ := v[0].(string)
-				regex, _ := v[1].(string)
-				if regex != "" {
-					re, err := regexp.Compile(regex)
-					if err != nil {
-						logrus.Warnf("Invalid regex pattern '%s': %v", regex, err)
-						continue
-					}
-					compiled = append(compiled, CompiledPattern{Original: orig, Regexp: re})
-				}
-			}
-		case string:
-			re, err := regexp.Compile("^" + regexp.QuoteMeta(v))
-			if err != nil {
-				continue
-			}
-			compiled = append(compiled, CompiledPattern{Original: v, Regexp: re})
-		}
-	}
-
-	return literalSet, compiled
+	return m
 }
 
-// buildFilter constructs a Filter from a compiled policy filter spec (map from JSON).
-func buildFilter(filterSpec map[string]any) *Filter {
-	visStr, _ := filterSpec["visibility"].(string)
-	visibility := Visibility(visStr)
-	if visibility != VisibilityAll && visibility != VisibilityNone && visibility != VisibilityFiltered {
-		visibility = VisibilityAll
-	}
-
-	f := NewFilter(visibility)
-	if visibility == VisibilityNone {
-		return f
-	}
-
-	// Allowed literals
-	if lits, ok := filterSpec["allowed_literals"].([]any); ok {
-		for _, l := range lits {
-			if s, ok := l.(string); ok {
-				f.Include[s] = struct{}{}
-			}
-		}
-	}
-
-	// Denied literals
-	if lits, ok := filterSpec["denied_literals"].([]any); ok {
-		for _, l := range lits {
-			if s, ok := l.(string); ok {
-				f.Exclude[s] = struct{}{}
-			}
-		}
-	}
-
-	// Allowed patterns
-	if pats, ok := filterSpec["allowed_patterns"].([]any); ok {
-		for _, p := range pats {
-			if pair, ok := p.([]any); ok && len(pair) >= 2 {
-				orig, _ := pair[0].(string)
-				regex, _ := pair[1].(string)
-				if regex != "" {
-					re, err := regexp.Compile(regex)
-					if err == nil {
-						f.Patterns = append(f.Patterns, CompiledPattern{Original: orig, Regexp: re})
-					}
-				}
-			}
-		}
-	}
-
-	// Label selectors
-	if labels, ok := filterSpec["label_selectors"].(map[string]any); ok {
-		for k, v := range labels {
-			if s, ok := v.(string); ok {
-				f.Labels[k] = s
-			}
-		}
-	}
-
-	return f
+func hasNameFilters(crf *types.CompiledResourceFilter) bool {
+	return len(crf.AllowedNames) > 0 || len(crf.DeniedNames) > 0 ||
+		len(crf.NamePatterns) > 0 || len(crf.DenyNamePatterns) > 0
 }
 
-// compilePatternList compiles a list of [pattern_str, regex] pairs from cache data.
-func compilePatternList(patterns []any) []CompiledPattern {
-	var compiled []CompiledPattern
-	for _, p := range patterns {
-		if pair, ok := p.([]any); ok && len(pair) >= 2 {
-			orig, _ := pair[0].(string)
-			regex, _ := pair[1].(string)
-			if regex != "" {
-				re, err := regexp.Compile(regex)
-				if err == nil {
-					compiled = append(compiled, CompiledPattern{Original: orig, Regexp: re})
-				}
-			}
+func hasNSFilters(crf *types.CompiledResourceFilter) bool {
+	return len(crf.AllowedNS) > 0 || len(crf.DeniedNS) > 0 ||
+		len(crf.NSPatterns) > 0 || len(crf.DenyNSPatterns) > 0
+}
+
+func buildMatchSpec(allowed, denied []string, allowedPatterns, deniedPatterns [][2]string) *MatchSpec {
+	ms := &MatchSpec{
+		Include: make(map[string]struct{}, len(allowed)),
+		Exclude: make(map[string]struct{}, len(denied)),
+	}
+	for _, s := range allowed {
+		ms.Include[s] = struct{}{}
+	}
+	for _, s := range denied {
+		ms.Exclude[s] = struct{}{}
+	}
+	ms.IncludePatterns = compilePatternPairs(allowedPatterns)
+	ms.ExcludePatterns = compilePatternPairs(deniedPatterns)
+	return ms
+}
+
+func buildFieldMatchSpec(ff *types.CompiledFieldFilter) *MatchSpec {
+	return buildMatchSpec(ff.AllowedLiterals, ff.DeniedLiterals, ff.AllowedPatterns, ff.DeniedPatterns)
+}
+
+func compilePatternPairs(pairs [][2]string) []CompiledPattern {
+	if len(pairs) == 0 {
+		return nil
+	}
+	compiled := make([]CompiledPattern, 0, len(pairs))
+	for _, p := range pairs {
+		re, err := regexp.Compile(p[1])
+		if err != nil {
+			logrus.Warnf("Invalid regex pattern %q: %v", p[1], err)
+			continue
 		}
+		compiled = append(compiled, CompiledPattern{Original: p[0], Regexp: re})
 	}
 	return compiled
-}
-
-// toStringSet converts []any to map[string]struct{}.
-func toStringSet(items []any) map[string]struct{} {
-	s := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		if str, ok := item.(string); ok {
-			s[str] = struct{}{}
-		}
-	}
-	return s
 }

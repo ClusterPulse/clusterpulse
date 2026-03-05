@@ -46,6 +46,16 @@ const (
 	ResourceCustom    ResourceType = "custom"
 )
 
+// ResourceTypeToFilterKey maps ResourceType constants to compiled filter type keys.
+var ResourceTypeToFilterKey = map[ResourceType]string{
+	ResourceNode:      "nodes",
+	ResourceOperator:  "operators",
+	ResourceNamespace: "namespaces",
+	ResourcePod:       "pods",
+	ResourceAlert:     "alerts",
+	ResourceEvent:     "events",
+}
+
 // Decision represents authorization decisions.
 type Decision string
 
@@ -65,7 +75,6 @@ const (
 )
 
 // PermissionMapping maps policy JSON keys to Action constants.
-// All actions must have a corresponding entry so they can be granted by policy.
 var PermissionMapping = map[string]Action{
 	"view":          ActionView,
 	"viewMetrics":   ActionViewMetrics,
@@ -136,92 +145,72 @@ type CompiledPattern struct {
 	Regexp   *regexp.Regexp
 }
 
-// Filter represents resource filter configuration.
-type Filter struct {
-	Visibility Visibility
-	Include    map[string]struct{}
-	Exclude    map[string]struct{}
-	Patterns   []CompiledPattern
-	Labels     map[string]string
+// MatchSpec defines include/exclude matching for a single dimension (name, namespace, etc.)
+type MatchSpec struct {
+	Include         map[string]struct{}
+	Exclude         map[string]struct{}
+	IncludePatterns []CompiledPattern
+	ExcludePatterns []CompiledPattern
 }
 
-// NewFilter creates a Filter with defaults.
-func NewFilter(visibility Visibility) *Filter {
-	return &Filter{
-		Visibility: visibility,
-		Include:    make(map[string]struct{}),
-		Exclude:    make(map[string]struct{}),
-		Labels:     make(map[string]string),
-	}
-}
-
-// IsEmpty checks if filter has no restrictions.
-func (f *Filter) IsEmpty() bool {
-	return f.Visibility == VisibilityAll &&
-		len(f.Include) == 0 &&
-		len(f.Exclude) == 0 &&
-		len(f.Patterns) == 0 &&
-		len(f.Labels) == 0
-}
-
-// Matches checks if item matches filter criteria.
-func (f *Filter) Matches(item string, labels map[string]string) bool {
-	if f.Visibility == VisibilityNone {
+// Matches checks if an item passes the match spec criteria.
+func (ms *MatchSpec) Matches(item string) bool {
+	// Check exclusions first
+	if _, excluded := ms.Exclude[item]; excluded {
 		return false
 	}
-	if f.Visibility == VisibilityAll && len(f.Exclude) == 0 && len(f.Include) == 0 && len(f.Patterns) == 0 && len(f.Labels) == 0 {
+	for _, p := range ms.ExcludePatterns {
+		if p.Regexp.MatchString(item) {
+			return false
+		}
+	}
+
+	// If no include criteria, allow all non-excluded
+	if len(ms.Include) == 0 && len(ms.IncludePatterns) == 0 {
 		return true
 	}
 
-	if _, excluded := f.Exclude[item]; excluded {
-		return false
+	// Check inclusions
+	if _, ok := ms.Include[item]; ok {
+		return true
 	}
-
-	// Check include list and patterns. When either is set, the item must match
-	// at least one of them.
-	if len(f.Include) > 0 || len(f.Patterns) > 0 {
-		included := false
-		if _, ok := f.Include[item]; ok {
-			included = true
-		}
-		if !included {
-			for _, p := range f.Patterns {
-				if p.Regexp.MatchString(item) {
-					included = true
-					break
-				}
-			}
-		}
-		if !included {
-			return false
+	for _, p := range ms.IncludePatterns {
+		if p.Regexp.MatchString(item) {
+			return true
 		}
 	}
 
-	// Resources with nil labels must not bypass label-based filters.
-	if len(f.Labels) > 0 {
-		if labels == nil {
-			return false
-		}
-		for k, v := range f.Labels {
-			if labels[k] != v {
-				return false
-			}
-		}
-	}
+	return false
+}
 
-	return true
+// ResourceMatcher is the unified filter type for all resource types.
+type ResourceMatcher struct {
+	Visibility   Visibility
+	Names        *MatchSpec
+	Namespaces   *MatchSpec
+	Labels       map[string]string
+	FieldFilters map[string]*MatchSpec
+}
+
+// IsUnrestricted checks if matcher imposes no restrictions.
+func (m *ResourceMatcher) IsUnrestricted() bool {
+	return m.Visibility == VisibilityAll &&
+		m.Names == nil &&
+		m.Namespaces == nil &&
+		len(m.Labels) == 0 &&
+		len(m.FieldFilters) == 0
 }
 
 // RBACDecision represents an authorization decision result.
 type RBACDecision struct {
-	Decision        Decision                 `json:"decision"`
-	Request         *Request                 `json:"-"`
-	Reason          string                   `json:"reason"`
-	Filters         map[ResourceType]*Filter `json:"-"`
-	Permissions     map[Action]struct{}      `json:"-"`
-	Metadata        map[string]any           `json:"metadata,omitempty"`
-	AppliedPolicies []string                 `json:"applied_policies,omitempty"`
-	Cached          bool                     `json:"cached,omitempty"`
+	Decision        Decision                       `json:"decision"`
+	Request         *Request                       `json:"-"`
+	Reason          string                         `json:"reason"`
+	Matchers        map[string]*ResourceMatcher    `json:"-"`
+	Permissions     map[Action]struct{}            `json:"-"`
+	Metadata        map[string]any                 `json:"metadata,omitempty"`
+	AppliedPolicies []string                       `json:"applied_policies,omitempty"`
+	Cached          bool                           `json:"cached,omitempty"`
 }
 
 // Allowed returns true if decision allows access.
@@ -240,165 +229,13 @@ func (d *RBACDecision) Can(action Action) bool {
 	return ok
 }
 
-// GetFilter returns the filter for a resource type, or nil.
-func (d *RBACDecision) GetFilter(rt ResourceType) *Filter {
-	if d.Filters == nil {
+// GetMatcher returns the matcher for a resource type, or nil.
+func (d *RBACDecision) GetMatcher(rt ResourceType) *ResourceMatcher {
+	if d.Matchers == nil {
 		return nil
 	}
-	return d.Filters[rt]
-}
-
-// FieldFilter holds allowed/denied literals and patterns for a single field.
-type FieldFilter struct {
-	AllowedLiterals map[string]struct{}
-	AllowedPatterns []CompiledPattern
-	DeniedLiterals  map[string]struct{}
-	DeniedPatterns  []CompiledPattern
-}
-
-// CustomResourceFilter supports namespace, name, and field-based filtering.
-type CustomResourceFilter struct {
-	Visibility               Visibility
-	NamespaceLiterals        map[string]struct{}
-	NamespacePatterns        []CompiledPattern
-	NamespaceExcludeLiterals map[string]struct{}
-	NamespaceExcludePatterns []CompiledPattern
-	NameLiterals             map[string]struct{}
-	NamePatterns             []CompiledPattern
-	NameExcludeLiterals      map[string]struct{}
-	NameExcludePatterns      []CompiledPattern
-	FieldFilters             map[string]*FieldFilter
-}
-
-// NewCustomResourceFilter creates a CustomResourceFilter with defaults.
-func NewCustomResourceFilter() *CustomResourceFilter {
-	return &CustomResourceFilter{
-		Visibility:               VisibilityAll,
-		NamespaceLiterals:        make(map[string]struct{}),
-		NamespaceExcludeLiterals: make(map[string]struct{}),
-		NameLiterals:             make(map[string]struct{}),
-		NameExcludeLiterals:      make(map[string]struct{}),
-		FieldFilters:             make(map[string]*FieldFilter),
-	}
-}
-
-// IsUnrestricted checks if filter imposes no restrictions.
-func (f *CustomResourceFilter) IsUnrestricted() bool {
-	return f.Visibility == VisibilityAll &&
-		len(f.NamespaceLiterals) == 0 && len(f.NamespacePatterns) == 0 &&
-		len(f.NamespaceExcludeLiterals) == 0 && len(f.NamespaceExcludePatterns) == 0 &&
-		len(f.NameLiterals) == 0 && len(f.NamePatterns) == 0 &&
-		len(f.NameExcludeLiterals) == 0 && len(f.NameExcludePatterns) == 0 &&
-		len(f.FieldFilters) == 0
-}
-
-// MatchesNamespace checks if namespace passes filter criteria.
-func (f *CustomResourceFilter) MatchesNamespace(namespace string) bool {
-	if f.Visibility == VisibilityNone {
-		return false
-	}
-	// Cluster-scoped resources (empty namespace) pass
-	if namespace == "" {
-		return true
-	}
-
-	// Check exclusions first
-	if _, excluded := f.NamespaceExcludeLiterals[namespace]; excluded {
-		return false
-	}
-	for _, p := range f.NamespaceExcludePatterns {
-		if p.Regexp.MatchString(namespace) {
-			return false
-		}
-	}
-
-	// If no include filters, allow all non-excluded
-	if len(f.NamespaceLiterals) == 0 && len(f.NamespacePatterns) == 0 {
-		return true
-	}
-
-	// Check inclusions
-	if _, included := f.NamespaceLiterals[namespace]; included {
-		return true
-	}
-	for _, p := range f.NamespacePatterns {
-		if p.Regexp.MatchString(namespace) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// MatchesName checks if resource name passes filter criteria.
-func (f *CustomResourceFilter) MatchesName(name string) bool {
-	if f.Visibility == VisibilityNone {
-		return false
-	}
-
-	if _, excluded := f.NameExcludeLiterals[name]; excluded {
-		return false
-	}
-	for _, p := range f.NameExcludePatterns {
-		if p.Regexp.MatchString(name) {
-			return false
-		}
-	}
-
-	if len(f.NameLiterals) == 0 && len(f.NamePatterns) == 0 {
-		return true
-	}
-
-	if _, included := f.NameLiterals[name]; included {
-		return true
-	}
-	for _, p := range f.NamePatterns {
-		if p.Regexp.MatchString(name) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// MatchesField checks if a field value passes filter criteria.
-func (f *CustomResourceFilter) MatchesField(fieldName string, fieldValue any) bool {
-	ff, ok := f.FieldFilters[fieldName]
-	if !ok {
-		return true
-	}
-
-	valueStr := ""
-	if fieldValue != nil {
-		valueStr = fmt.Sprintf("%v", fieldValue)
-	}
-
-	// Check exclusions first
-	if _, denied := ff.DeniedLiterals[valueStr]; denied {
-		return false
-	}
-	for _, p := range ff.DeniedPatterns {
-		if p.Regexp.MatchString(valueStr) {
-			return false
-		}
-	}
-
-	// If no include filters, allow all non-excluded
-	if len(ff.AllowedLiterals) == 0 && len(ff.AllowedPatterns) == 0 {
-		return true
-	}
-
-	// Check inclusions
-	if _, allowed := ff.AllowedLiterals[valueStr]; allowed {
-		return true
-	}
-	for _, p := range ff.AllowedPatterns {
-		if p.Regexp.MatchString(valueStr) {
-			return true
-		}
-	}
-
-	return false
+	key := ResourceTypeToFilterKey[rt]
+	return d.Matchers[key]
 }
 
 // CustomResourceDecision is the authorization decision for custom resource access.
@@ -407,7 +244,7 @@ type CustomResourceDecision struct {
 	ResourceTypeName    string
 	Cluster             string
 	Reason              string
-	Filters             *CustomResourceFilter
+	Matcher             *ResourceMatcher
 	AllowedAggregations *map[string]struct{} // nil means all allowed
 	DeniedAggregations  map[string]struct{}
 	Permissions         map[Action]struct{}

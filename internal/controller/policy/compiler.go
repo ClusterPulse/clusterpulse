@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,10 @@ func NewCompiler() *Compiler {
 	return &Compiler{
 		patternCache: make(map[string]compiledPattern),
 	}
+}
+
+var standardResourceTypes = map[string]bool{
+	"nodes": true, "operators": true, "namespaces": true, "pods": true,
 }
 
 // Compile compiles a MonitorAccessPolicy spec into a CompiledPolicy
@@ -106,58 +111,76 @@ func (c *Compiler) compileClusterRules(clusters *v1alpha1.PolicyClusters) ([]typ
 	customTypesSet := map[string]bool{}
 
 	for _, rule := range clusters.Rules {
-		// Build selector map
-		selector := map[string]any{}
-		if rule.Selector.MatchLabels != nil {
-			selector["matchLabels"] = rule.Selector.MatchLabels
-		}
-		if rule.Selector.MatchNames != nil {
-			selector["matchNames"] = rule.Selector.MatchNames
-		}
-		if rule.Selector.MatchPattern != "" {
-			selector["matchPattern"] = rule.Selector.MatchPattern
+		selector := types.CompiledClusterSelector{
+			MatchNames:   rule.Selector.MatchNames,
+			MatchPattern: rule.Selector.MatchPattern,
+			MatchLabels:  rule.Selector.MatchLabels,
 		}
 
 		permissions := permissionsToMap(rule.Permissions)
 
-		var nodeFilter, operatorFilter, namespaceFilter, podFilter *types.CompiledResourceFilter
-		customResources := map[string]*types.CompiledCustomResourceFilter{}
-
-		if rule.Resources != nil {
-			if rule.Resources.Nodes != nil {
-				nodeFilter = c.compileNodeFilter(rule.Resources.Nodes)
-			}
-			if rule.Resources.Operators != nil {
-				operatorFilter = c.compileOperatorFilter(rule.Resources.Operators)
-			}
-			if rule.Resources.Namespaces != nil {
-				namespaceFilter = c.compileNamespaceFilter(rule.Resources.Namespaces)
-			}
-			if rule.Resources.Pods != nil {
-				podFilter = c.compilePodFilter(rule.Resources.Pods)
-			}
-			if rule.Resources.Custom != nil {
-				customResources, customTypesSet = c.compileCustomResources(rule.Resources.Custom, customTypesSet)
+		var resources []types.CompiledResourceFilter
+		for i := range rule.Resources {
+			compiled := c.compileResourceFilter(&rule.Resources[i])
+			resources = append(resources, compiled)
+			if !standardResourceTypes[rule.Resources[i].Type] {
+				customTypesSet[rule.Resources[i].Type] = true
 			}
 		}
 
 		rules = append(rules, types.CompiledClusterRule{
 			ClusterSelector: selector,
 			Permissions:     permissions,
-			NodeFilter:      nodeFilter,
-			OperatorFilter:  operatorFilter,
-			NamespaceFilter: namespaceFilter,
-			PodFilter:       podFilter,
-			CustomResources: customResources,
+			Resources:       resources,
 		})
 	}
 
-	customTypes := make([]string, 0, len(customTypesSet))
-	for t := range customTypesSet {
-		customTypes = append(customTypes, t)
-	}
+	customTypes := slices.Sorted(func(yield func(string) bool) {
+		for t := range customTypesSet {
+			if !yield(t) {
+				return
+			}
+		}
+	})
 
 	return rules, customTypes
+}
+
+func (c *Compiler) compileResourceFilter(rf *v1alpha1.ResourceFilter) types.CompiledResourceFilter {
+	result := types.CompiledResourceFilter{
+		Type:       rf.Type,
+		Visibility: rf.Visibility,
+	}
+	if result.Visibility == "" {
+		result.Visibility = "all"
+	}
+
+	if rf.Filters != nil {
+		if rf.Filters.Names != nil {
+			c.addPatterns(&result.AllowedNames, &result.NamePatterns, rf.Filters.Names.Allowed)
+			c.addPatterns(&result.DeniedNames, &result.DenyNamePatterns, rf.Filters.Names.Denied)
+		}
+		if rf.Filters.Namespaces != nil {
+			c.addPatterns(&result.AllowedNS, &result.NSPatterns, rf.Filters.Namespaces.Allowed)
+			c.addPatterns(&result.DeniedNS, &result.DenyNSPatterns, rf.Filters.Namespaces.Denied)
+		}
+		result.Labels = rf.Filters.Labels
+		if len(rf.Filters.Fields) > 0 {
+			result.FieldFilters = make(map[string]*types.CompiledFieldFilter, len(rf.Filters.Fields))
+			for name, spec := range rf.Filters.Fields {
+				result.FieldFilters[name] = c.compileFieldFilter(&spec)
+			}
+		}
+	}
+
+	if rf.Aggregations != nil {
+		result.AggregationRules = &types.CompiledAggregationRules{
+			Include: ensureStringSlice(rf.Aggregations.Include),
+			Exclude: ensureStringSlice(rf.Aggregations.Exclude),
+		}
+	}
+
+	return result
 }
 
 // permissionsToMap converts typed PolicyPermissions to map[string]bool for the compiled format.
@@ -193,187 +216,8 @@ func permissionsToMap(p *v1alpha1.PolicyPermissions) map[string]bool {
 	return m
 }
 
-func (c *Compiler) compileNodeFilter(cfg *v1alpha1.NodeResourceConfig) *types.CompiledResourceFilter {
-	filter := &types.CompiledResourceFilter{
-		Visibility:        cfg.Visibility,
-		AllowedPatterns:   [][2]string{},
-		DeniedPatterns:    [][2]string{},
-		AllowedLiterals:   []string{},
-		DeniedLiterals:    []string{},
-		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]any{},
-	}
-
-	if cfg.Filters == nil {
-		return filter
-	}
-
-	for k, v := range cfg.Filters.LabelSelector {
-		filter.LabelSelectors[k] = v
-	}
-
-	if cfg.Filters.HideMasters {
-		filter.AdditionalFilters["hide_masters"] = true
-	}
-
-	if cfg.Filters.HideByLabels != nil {
-		var val any
-		_ = json.Unmarshal(cfg.Filters.HideByLabels.Raw, &val)
-		filter.AdditionalFilters["hide_by_labels"] = val
-	}
-
-	return filter
-}
-
-func (c *Compiler) compileOperatorFilter(cfg *v1alpha1.OperatorResourceConfig) *types.CompiledResourceFilter {
-	filter := &types.CompiledResourceFilter{
-		Visibility:        cfg.Visibility,
-		AllowedPatterns:   [][2]string{},
-		DeniedPatterns:    [][2]string{},
-		AllowedLiterals:   []string{},
-		DeniedLiterals:    []string{},
-		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]any{},
-	}
-
-	if cfg.Filters == nil {
-		return filter
-	}
-
-	c.addPrefixedPatternsFromSlice(filter, cfg.Filters.AllowedNamespaces, "ns:", true)
-	c.addPrefixedPatternsFromSlice(filter, cfg.Filters.DeniedNamespaces, "ns:", false)
-	c.addPrefixedPatternsFromSlice(filter, cfg.Filters.AllowedNames, "name:", true)
-	c.addPrefixedPatternsFromSlice(filter, cfg.Filters.DeniedNames, "name:", false)
-
-	return filter
-}
-
-func (c *Compiler) compileNamespaceFilter(cfg *v1alpha1.NamespaceResourceConfig) *types.CompiledResourceFilter {
-	filter := &types.CompiledResourceFilter{
-		Visibility:        cfg.Visibility,
-		AllowedPatterns:   [][2]string{},
-		DeniedPatterns:    [][2]string{},
-		AllowedLiterals:   []string{},
-		DeniedLiterals:    []string{},
-		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]any{},
-	}
-
-	if cfg.Filters == nil {
-		return filter
-	}
-
-	c.addPatternsFromSlice(filter, cfg.Filters.Allowed, true)
-	c.addPatternsFromSlice(filter, cfg.Filters.Denied, false)
-
-	return filter
-}
-
-func (c *Compiler) compilePodFilter(cfg *v1alpha1.PodResourceConfig) *types.CompiledResourceFilter {
-	filter := &types.CompiledResourceFilter{
-		Visibility:        cfg.Visibility,
-		AllowedPatterns:   [][2]string{},
-		DeniedPatterns:    [][2]string{},
-		AllowedLiterals:   []string{},
-		DeniedLiterals:    []string{},
-		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]any{},
-	}
-
-	if cfg.Filters == nil {
-		return filter
-	}
-
-	c.addPatternsFromSlice(filter, cfg.Filters.AllowedNamespaces, true)
-
-	return filter
-}
-
-func (c *Compiler) compileCustomResources(
-	custom map[string]v1alpha1.CustomResourceConfig,
-	existingTypes map[string]bool,
-) (map[string]*types.CompiledCustomResourceFilter, map[string]bool) {
-	result := map[string]*types.CompiledCustomResourceFilter{}
-
-	for resourceType, cfg := range custom {
-		existingTypes[resourceType] = true
-
-		compiled := &types.CompiledCustomResourceFilter{
-			ResourceTypeName: resourceType,
-			Visibility:       cfg.Visibility,
-			FieldFilters:     map[string]*types.CompiledFieldFilter{},
-		}
-
-		if cfg.Visibility == "" {
-			compiled.Visibility = "all"
-		}
-
-		if cfg.Filters != nil {
-			if cfg.Filters.Namespaces != nil {
-				compiled.NamespaceFilter = c.compilePatternFilter(cfg.Filters.Namespaces)
-			}
-			if cfg.Filters.Names != nil {
-				compiled.NameFilter = c.compilePatternFilter(cfg.Filters.Names)
-			}
-			for fieldName, fieldCfg := range cfg.Filters.Fields {
-				compiled.FieldFilters[fieldName] = c.compileFieldFilter(fieldName, &fieldCfg)
-			}
-		}
-
-		if cfg.Aggregations != nil {
-			compiled.AggregationRules = &types.CompiledAggregationRules{
-				Include: ensureStringSlice(cfg.Aggregations.Include),
-				Exclude: ensureStringSlice(cfg.Aggregations.Exclude),
-			}
-		}
-
-		result[resourceType] = compiled
-	}
-
-	return result, existingTypes
-}
-
-func (c *Compiler) compilePatternFilter(pf *v1alpha1.PatternFilter) *types.CompiledResourceFilter {
-	filter := &types.CompiledResourceFilter{
-		Visibility:        "filtered",
-		AllowedPatterns:   [][2]string{},
-		DeniedPatterns:    [][2]string{},
-		AllowedLiterals:   []string{},
-		DeniedLiterals:    []string{},
-		LabelSelectors:    map[string]string{},
-		AdditionalFilters: map[string]any{},
-	}
-
-	for _, pattern := range pf.Allowed {
-		cp := c.compilePattern(pattern)
-		if cp.kind == "literal" {
-			filter.AllowedLiterals = append(filter.AllowedLiterals, cp.literal)
-		} else {
-			filter.AllowedPatterns = append(filter.AllowedPatterns, [2]string{pattern, cp.regex.String()})
-		}
-	}
-
-	for _, pattern := range pf.Denied {
-		cp := c.compilePattern(pattern)
-		if cp.kind == "literal" {
-			filter.DeniedLiterals = append(filter.DeniedLiterals, cp.literal)
-		} else {
-			filter.DeniedPatterns = append(filter.DeniedPatterns, [2]string{pattern, cp.regex.String()})
-		}
-	}
-
-	return filter
-}
-
-func (c *Compiler) compileFieldFilter(fieldName string, cfg *v1alpha1.FieldFilterConfig) *types.CompiledFieldFilter {
-	filter := &types.CompiledFieldFilter{
-		FieldName:       fieldName,
-		AllowedPatterns: [][2]string{},
-		DeniedPatterns:  [][2]string{},
-		AllowedLiterals: []string{},
-		DeniedLiterals:  []string{},
-		Conditions:      [][2]any{},
-	}
+func (c *Compiler) compileFieldFilter(cfg *v1alpha1.PatternFilter) *types.CompiledFieldFilter {
+	filter := &types.CompiledFieldFilter{}
 
 	for _, s := range cfg.Allowed {
 		cp := c.compilePattern(s)
@@ -391,12 +235,6 @@ func (c *Compiler) compileFieldFilter(fieldName string, cfg *v1alpha1.FieldFilte
 		} else {
 			filter.DeniedPatterns = append(filter.DeniedPatterns, [2]string{s, cp.regex.String()})
 		}
-	}
-
-	for _, cond := range cfg.Conditions {
-		var val any
-		_ = json.Unmarshal(cond.Value.Raw, &val)
-		filter.Conditions = append(filter.Conditions, [2]any{cond.Operator, val})
 	}
 
 	return filter
@@ -423,40 +261,13 @@ func (c *Compiler) compilePattern(pattern string) compiledPattern {
 	return result
 }
 
-func (c *Compiler) addPatternsFromSlice(filter *types.CompiledResourceFilter, patterns []string, allowed bool) {
-	for _, s := range patterns {
+func (c *Compiler) addPatterns(literals *[]string, patterns *[][2]string, sources []string) {
+	for _, s := range sources {
 		cp := c.compilePattern(s)
-		if allowed {
-			if cp.kind == "literal" {
-				filter.AllowedLiterals = append(filter.AllowedLiterals, cp.literal)
-			} else {
-				filter.AllowedPatterns = append(filter.AllowedPatterns, [2]string{s, cp.regex.String()})
-			}
+		if cp.kind == "literal" {
+			*literals = append(*literals, cp.literal)
 		} else {
-			if cp.kind == "literal" {
-				filter.DeniedLiterals = append(filter.DeniedLiterals, cp.literal)
-			} else {
-				filter.DeniedPatterns = append(filter.DeniedPatterns, [2]string{s, cp.regex.String()})
-			}
-		}
-	}
-}
-
-func (c *Compiler) addPrefixedPatternsFromSlice(filter *types.CompiledResourceFilter, patterns []string, prefix string, allowed bool) {
-	for _, s := range patterns {
-		cp := c.compilePattern(s)
-		if allowed {
-			if cp.kind == "literal" {
-				filter.AllowedLiterals = append(filter.AllowedLiterals, prefix+cp.literal)
-			} else {
-				filter.AllowedPatterns = append(filter.AllowedPatterns, [2]string{prefix + s, cp.regex.String()})
-			}
-		} else {
-			if cp.kind == "literal" {
-				filter.DeniedLiterals = append(filter.DeniedLiterals, prefix+cp.literal)
-			} else {
-				filter.DeniedPatterns = append(filter.DeniedPatterns, [2]string{prefix + s, cp.regex.String()})
-			}
+			*patterns = append(*patterns, [2]string{s, cp.regex.String()})
 		}
 	}
 }

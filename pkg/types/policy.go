@@ -9,67 +9,64 @@ const (
 )
 
 // CompiledPolicy is the top-level compiled policy stored in Redis.
-// JSON tags use snake_case to match the Python to_dict() format exactly.
 type CompiledPolicy struct {
-	PolicyName           string                    `json:"policy_name"`
-	Namespace            string                    `json:"namespace"`
-	Priority             int                       `json:"priority"`
-	Effect               string                    `json:"effect"`
-	Enabled              bool                      `json:"enabled"`
-	Users                []string                  `json:"users"`
-	Groups               []string                  `json:"groups"`
-	ServiceAccounts      []string                  `json:"service_accounts"`
-	DefaultClusterAccess string                    `json:"default_cluster_access"`
-	ClusterRules         []CompiledClusterRule     `json:"cluster_rules"`
-	NotBefore            *string                   `json:"not_before"`
-	NotAfter             *string                   `json:"not_after"`
-	AuditConfig          map[string]bool           `json:"audit_config"`
-	CompiledAt           string                    `json:"compiled_at"`
-	Hash                 string                    `json:"hash"`
-	CustomResourceTypes  []string                  `json:"custom_resource_types"`
+	PolicyName           string                `json:"policy_name"`
+	Namespace            string                `json:"namespace"`
+	Priority             int                   `json:"priority"`
+	Effect               string                `json:"effect"`
+	Enabled              bool                  `json:"enabled"`
+	Users                []string              `json:"users"`
+	Groups               []string              `json:"groups"`
+	ServiceAccounts      []string              `json:"service_accounts"`
+	DefaultClusterAccess string                `json:"default_cluster_access"`
+	ClusterRules         []CompiledClusterRule `json:"cluster_rules"`
+	NotBefore            *string               `json:"not_before"`
+	NotAfter             *string               `json:"not_after"`
+	AuditConfig          map[string]bool       `json:"audit_config"`
+	CompiledAt           string                `json:"compiled_at"`
+	Hash                 string                `json:"hash"`
+	CustomResourceTypes  []string              `json:"custom_resource_types"`
+	RedisKey             string                `json:"-"`
+}
+
+// CompiledClusterSelector identifies which clusters a rule applies to
+type CompiledClusterSelector struct {
+	MatchNames   []string          `json:"matchNames,omitempty"`
+	MatchPattern string            `json:"matchPattern,omitempty"`
+	MatchLabels  map[string]string `json:"matchLabels,omitempty"`
 }
 
 // CompiledClusterRule is a compiled cluster access rule
 type CompiledClusterRule struct {
-	ClusterSelector map[string]any                `json:"cluster_selector"`
-	Permissions     map[string]bool                       `json:"permissions"`
-	NodeFilter      *CompiledResourceFilter               `json:"node_filter"`
-	OperatorFilter  *CompiledResourceFilter               `json:"operator_filter"`
-	NamespaceFilter *CompiledResourceFilter               `json:"namespace_filter"`
-	PodFilter       *CompiledResourceFilter               `json:"pod_filter"`
-	CustomResources map[string]*CompiledCustomResourceFilter `json:"custom_resources"`
+	ClusterSelector CompiledClusterSelector  `json:"cluster_selector"`
+	Permissions     map[string]bool          `json:"permissions"`
+	Resources       []CompiledResourceFilter `json:"resources"`
 }
 
 // CompiledResourceFilter is a compiled resource filter for efficient evaluation.
 // Patterns are stored as [][2]string where [0]=original, [1]=regex.
 type CompiledResourceFilter struct {
-	Visibility        string                 `json:"visibility"`
-	AllowedPatterns   [][2]string            `json:"allowed_patterns"`
-	DeniedPatterns    [][2]string            `json:"denied_patterns"`
-	AllowedLiterals   []string               `json:"allowed_literals"`
-	DeniedLiterals    []string               `json:"denied_literals"`
-	LabelSelectors    map[string]string      `json:"label_selectors"`
-	AdditionalFilters map[string]any `json:"additional_filters"`
+	Type             string                          `json:"type"`
+	Visibility       string                          `json:"visibility"`
+	AllowedNames     []string                        `json:"allowed_names,omitempty"`
+	DeniedNames      []string                        `json:"denied_names,omitempty"`
+	NamePatterns     [][2]string                     `json:"name_patterns,omitempty"`
+	DenyNamePatterns [][2]string                     `json:"deny_name_patterns,omitempty"`
+	AllowedNS        []string                        `json:"allowed_ns,omitempty"`
+	DeniedNS         []string                        `json:"denied_ns,omitempty"`
+	NSPatterns       [][2]string                     `json:"ns_patterns,omitempty"`
+	DenyNSPatterns   [][2]string                     `json:"deny_ns_patterns,omitempty"`
+	Labels           map[string]string               `json:"labels,omitempty"`
+	FieldFilters     map[string]*CompiledFieldFilter `json:"field_filters,omitempty"`
+	AggregationRules *CompiledAggregationRules       `json:"aggregation_rules,omitempty"`
 }
 
 // CompiledFieldFilter is a compiled filter for a single custom resource field
 type CompiledFieldFilter struct {
-	FieldName       string      `json:"field_name"`
-	AllowedPatterns [][2]string `json:"allowed_patterns"`
-	DeniedPatterns  [][2]string `json:"denied_patterns"`
-	AllowedLiterals []string    `json:"allowed_literals"`
-	DeniedLiterals  []string    `json:"denied_literals"`
-	Conditions      [][2]any `json:"conditions"`
-}
-
-// CompiledCustomResourceFilter is a compiled filter for a custom resource type
-type CompiledCustomResourceFilter struct {
-	ResourceTypeName string                       `json:"resource_type_name"`
-	Visibility       string                       `json:"visibility"`
-	NamespaceFilter  *CompiledResourceFilter      `json:"namespace_filter"`
-	NameFilter       *CompiledResourceFilter      `json:"name_filter"`
-	FieldFilters     map[string]*CompiledFieldFilter `json:"field_filters"`
-	AggregationRules *CompiledAggregationRules    `json:"aggregation_rules"`
+	AllowedLiterals []string    `json:"allowed_literals,omitempty"`
+	DeniedLiterals  []string    `json:"denied_literals,omitempty"`
+	AllowedPatterns [][2]string `json:"allowed_patterns,omitempty"`
+	DeniedPatterns  [][2]string `json:"denied_patterns,omitempty"`
 }
 
 // CompiledAggregationRules controls which aggregations are visible
