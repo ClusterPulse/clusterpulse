@@ -65,6 +65,7 @@ const (
 )
 
 // PermissionMapping maps policy JSON keys to Action constants.
+// All actions must have a corresponding entry so they can be granted by policy.
 var PermissionMapping = map[string]Action{
 	"view":          ActionView,
 	"viewMetrics":   ActionViewMetrics,
@@ -73,6 +74,9 @@ var PermissionMapping = map[string]Action{
 	"viewSecrets":   ActionViewSecrets,
 	"viewMetadata":  ActionViewMetadata,
 	"viewAuditInfo": ActionViewAudit,
+	"edit":          ActionEdit,
+	"delete":        ActionDelete,
+	"execute":       ActionExecute,
 }
 
 // Principal represents the entity making the request.
@@ -165,7 +169,7 @@ func (f *Filter) Matches(item string, labels map[string]string) bool {
 	if f.Visibility == VisibilityNone {
 		return false
 	}
-	if f.Visibility == VisibilityAll && len(f.Exclude) == 0 && len(f.Include) == 0 {
+	if f.Visibility == VisibilityAll && len(f.Exclude) == 0 && len(f.Include) == 0 && len(f.Patterns) == 0 && len(f.Labels) == 0 {
 		return true
 	}
 
@@ -173,22 +177,31 @@ func (f *Filter) Matches(item string, labels map[string]string) bool {
 		return false
 	}
 
-	if len(f.Include) > 0 {
-		if _, included := f.Include[item]; !included {
-			matched := false
+	// Check include list and patterns. When either is set, the item must match
+	// at least one of them.
+	if len(f.Include) > 0 || len(f.Patterns) > 0 {
+		included := false
+		if _, ok := f.Include[item]; ok {
+			included = true
+		}
+		if !included {
 			for _, p := range f.Patterns {
 				if p.Regexp.MatchString(item) {
-					matched = true
+					included = true
 					break
 				}
 			}
-			if !matched {
-				return false
-			}
+		}
+		if !included {
+			return false
 		}
 	}
 
-	if len(f.Labels) > 0 && labels != nil {
+	// Resources with nil labels must not bypass label-based filters.
+	if len(f.Labels) > 0 {
+		if labels == nil {
+			return false
+		}
 		for k, v := range f.Labels {
 			if labels[k] != v {
 				return false

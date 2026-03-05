@@ -6,12 +6,17 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	store "github.com/clusterpulse/cluster-controller/internal/store"
 	"github.com/sirupsen/logrus"
 )
+
+// maxPatternLength is the maximum allowed length for matchPattern regex strings.
+const maxPatternLength = 256
 
 // Engine is the RBAC authorization engine.
 type Engine struct {
@@ -20,6 +25,7 @@ type Engine struct {
 	cacheEnabled bool
 	hits         atomic.Int64
 	misses       atomic.Int64
+	regexCache   sync.Map // string -> *regexp.Regexp
 }
 
 // NewEngine creates a new RBAC engine.
@@ -31,12 +37,43 @@ func NewEngine(s *store.Client, cacheTTLSeconds int) *Engine {
 	}
 }
 
+// compilePattern returns a cached compiled regex, or compiles and caches it.
+// Returns nil if the pattern is invalid or exceeds maxPatternLength.
+func (e *Engine) compilePattern(pattern string) *regexp.Regexp {
+	if len(pattern) > maxPatternLength {
+		logrus.Warnf("Regex pattern exceeds max length (%d > %d), rejecting", len(pattern), maxPatternLength)
+		return nil
+	}
+	if cached, ok := e.regexCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp)
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		logrus.Warnf("Invalid regex pattern %q: %v", pattern, err)
+		return nil
+	}
+	e.regexCache.Store(pattern, re)
+	return re
+}
+
 // =========================================================================
 // Standard Resource Authorization
 // =========================================================================
 
 // Authorize authorizes a request for standard resources.
 func (e *Engine) Authorize(ctx context.Context, request *Request) *RBACDecision {
+	// Guard against nil principal to prevent panic in CacheKey().
+	if request.Principal == nil {
+		return &RBACDecision{
+			Decision:    DecisionDeny,
+			Request:     request,
+			Reason:      "No principal provided",
+			Permissions: make(map[Action]struct{}),
+			Filters:     make(map[ResourceType]*Filter),
+			Metadata:    make(map[string]any),
+		}
+	}
+
 	if e.cacheEnabled {
 		cacheKey := fmt.Sprintf("rbac:decision:%s", request.CacheKey())
 		if cached := e.cache.GetDecision(ctx, cacheKey); cached != nil {
@@ -49,7 +86,19 @@ func (e *Engine) Authorize(ctx context.Context, request *Request) *RBACDecision 
 
 	e.misses.Add(1)
 
-	policies, _ := e.getApplicablePolicies(ctx, request.Principal)
+	// Log policy fetch errors so silent Redis failures are diagnosable.
+	policies, err := e.getApplicablePolicies(ctx, request.Principal)
+	if err != nil {
+		logrus.WithError(err).Warn("Failed to fetch applicable policies, defaulting to deny")
+		return &RBACDecision{
+			Decision:    DecisionDeny,
+			Request:     request,
+			Reason:      "Policy fetch failed: " + err.Error(),
+			Permissions: make(map[Action]struct{}),
+			Filters:     make(map[ResourceType]*Filter),
+			Metadata:    make(map[string]any),
+		}
+	}
 	decision := e.evaluatePolicies(request, policies)
 
 	if e.cacheEnabled {
@@ -266,15 +315,33 @@ func (e *Engine) FilterAggregations(ctx context.Context, principal *Principal, a
 }
 
 // ClearCache clears authorization cache for a principal (or all).
+// Clears both rbac:decision:* and rbac:custom:* caches.
 func (e *Engine) ClearCache(ctx context.Context, principal *Principal) int {
 	if !e.cacheEnabled {
 		return 0
 	}
-	pattern := "rbac:decision:*"
+	decisionPattern := "rbac:decision:*"
+	customPattern := "rbac:custom:*"
 	if principal != nil {
-		pattern = fmt.Sprintf("rbac:decision:%s:*", principal.CacheKey())
+		escaped := escapeRedisGlob(principal.CacheKey())
+		decisionPattern = fmt.Sprintf("rbac:decision:%s:*", escaped)
+		customPattern = fmt.Sprintf("rbac:custom:%s:*", escaped)
 	}
-	return e.cache.ClearDecisions(ctx, pattern)
+	count := e.cache.ClearDecisions(ctx, decisionPattern)
+	count += e.cache.ClearDecisions(ctx, customPattern)
+	return count
+}
+
+// escapeRedisGlob escapes Redis glob metacharacters in a string.
+// Prevents cache key pattern injection via usernames containing *, ?, [, ].
+func escapeRedisGlob(s string) string {
+	replacer := strings.NewReplacer(
+		`*`, `\*`,
+		`?`, `\?`,
+		`[`, `\[`,
+		`]`, `\]`,
+	)
+	return replacer.Replace(s)
 }
 
 // =========================================================================
@@ -332,6 +399,8 @@ func (e *Engine) evaluatePolicies(request *Request, policies []map[string]any) *
 			if logAccess, _ := auditConfig["log_access"].(bool); logAccess {
 				decision.Metadata["audit_required"] = true
 			}
+			// First-match-wins — highest-priority Allow takes precedence.
+			break
 		}
 	}
 
@@ -347,14 +416,24 @@ func (e *Engine) isPolicyValid(policy map[string]any) bool {
 
 	if nb, ok := policy["not_before"].(string); ok && nb != "" {
 		t, err := time.Parse(time.RFC3339, nb)
-		if err == nil && now.Before(t) {
+		if err != nil {
+			// Treat unparseable time constraint as invalid policy.
+			logrus.Warnf("Policy %s has invalid not_before %q, treating as invalid", getStr(policy, "policy_name"), nb)
+			return false
+		}
+		if now.Before(t) {
 			return false
 		}
 	}
 
 	if na, ok := policy["not_after"].(string); ok && na != "" {
 		t, err := time.Parse(time.RFC3339, na)
-		if err == nil && now.After(t) {
+		if err != nil {
+			// Treat unparseable time constraint as invalid policy.
+			logrus.Warnf("Policy %s has invalid not_after %q, treating as invalid", getStr(policy, "policy_name"), na)
+			return false
+		}
+		if now.After(t) {
 			return false
 		}
 	}
@@ -404,13 +483,13 @@ func (e *Engine) matchCluster(resource *Resource, policy map[string]any) map[str
 
 		// matchPattern
 		if pat, ok := selector["matchPattern"].(string); ok {
-			if matched, _ := regexp.MatchString(pat, resource.Name); matched {
+			if re := e.compilePattern(pat); re != nil && re.MatchString(resource.Name) {
 				return rule
 			}
 		}
 
-		// matchLabels
-		if labels, ok := selector["matchLabels"].(map[string]any); ok && resource.Labels != nil {
+		// matchLabels — empty matchLabels matches all resources per K8s semantics
+		if labels, ok := selector["matchLabels"].(map[string]any); ok && (resource.Labels != nil || len(labels) == 0) {
 			allMatch := true
 			for k, v := range labels {
 				vs, _ := v.(string)
@@ -449,8 +528,9 @@ func (e *Engine) matchClusterName(clusterName string, policy map[string]any) map
 			}
 		}
 
+		// matchPattern
 		if pat, ok := selector["matchPattern"].(string); ok {
-			if matched, _ := regexp.MatchString(pat, clusterName); matched {
+			if re := e.compilePattern(pat); re != nil && re.MatchString(clusterName) {
 				return rule
 			}
 		}
@@ -660,8 +740,9 @@ func (e *Engine) applyDataFilters(resource map[string]any, _ ResourceType, permi
 		filtered[k] = v
 	}
 
+	// "secrets" is handled exclusively by ActionViewSecrets (replace-with-count semantics).
 	sensitiveFields := map[Action][]string{
-		ActionViewSensitive: {"tokens", "credentials", "secrets", "certificates", "private_keys",
+		ActionViewSensitive: {"tokens", "credentials", "certificates", "private_keys",
 			"service_account_tokens", "kubeconfig", "password", "api_key", "auth_token", "bearer_token"},
 		ActionViewCosts: {"cost", "costs", "billing", "price", "prices", "estimated_cost",
 			"monthly_cost", "usage_cost", "hourly_rate", "discount", "credits"},

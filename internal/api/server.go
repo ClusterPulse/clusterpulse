@@ -31,12 +31,15 @@ func NewServer(cfg *APIConfig, s *store.Client, engine *rbac.Engine) *Server {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
+	// X-Forwarded-User/Email should only come from the OAuth proxy, not browser CORS
+	// requests. Only enable credentials if origins are explicitly configured (not wildcard).
+	allowCreds := len(cfg.CORSOrigins) > 0 && cfg.CORSOrigins[0] != "*"
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Forwarded-User", "X-Forwarded-Email"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
+		AllowCredentials: allowCreds,
 		MaxAge:           300,
 	}))
 	r.Use(SecurityHeaders)

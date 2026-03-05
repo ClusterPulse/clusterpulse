@@ -20,6 +20,7 @@ type APIConfig struct {
 	OAuthHeaderUser   string
 	OAuthHeaderEmail  string
 	Environment       string
+	EnableDevAuth     bool // Explicit flag to enable dev-mode auth bypass
 	RBACCacheTTL      int
 	SwaggerEnabled    bool
 	SwaggerHost       string
@@ -27,15 +28,22 @@ type APIConfig struct {
 
 // LoadAPIConfig loads API configuration from environment variables.
 func LoadAPIConfig() *APIConfig {
+	// Do not default CORS origins to wildcard in production.
+	corsDefault := ""
+	if envStr("ENVIRONMENT", "production") == "development" {
+		corsDefault = "*"
+	}
+
 	cfg := &APIConfig{
 		Config:            config.Load(),
 		Port:              envInt("API_PORT", 8080),
 		Host:              envStr("API_HOST", "0.0.0.0"),
-		CORSOrigins:       strings.Split(envStr("CORS_ORIGINS", "*"), ","),
+		CORSOrigins:       strings.Split(envStr("CORS_ORIGINS", corsDefault), ","),
 		OAuthProxyEnabled: envBool("OAUTH_PROXY_ENABLED", true),
 		OAuthHeaderUser:   envStr("OAUTH_HEADER_USER", "X-Forwarded-User"),
 		OAuthHeaderEmail:  envStr("OAUTH_HEADER_EMAIL", "X-Forwarded-Email"),
 		Environment:       envStr("ENVIRONMENT", "production"),
+		EnableDevAuth:     envBool("ENABLE_DEV_AUTH", false),
 		RBACCacheTTL:      envInt("RBAC_CACHE_TTL", 0),
 		SwaggerEnabled:    envBool("SWAGGER_ENABLED", false),
 		SwaggerHost:       envStr("SWAGGER_HOST", ""),

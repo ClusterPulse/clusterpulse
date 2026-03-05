@@ -451,7 +451,7 @@ func (h *ClusterHandler) GetClusterEvents(w http.ResponseWriter, r *http.Request
 	limit := int64(100)
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.ParseInt(l, 10, 64); err == nil && n > 0 {
-			limit = n
+			limit = min(n, 10000) // Cap to prevent excessive Redis scans.
 		}
 	}
 

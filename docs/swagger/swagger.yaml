@@ -1,0 +1,632 @@
+basePath: /api/v1
+info:
+  contact: {}
+  description: RBAC-enabled multi-cluster operator API
+  title: ClusterPulse API
+  version: "1.0"
+paths:
+  /auth/cache/clear:
+    post:
+      description: Clears RBAC cache entries for the current user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Clear RBAC cache
+      tags:
+      - auth
+  /auth/logout:
+    post:
+      description: Clears RBAC and group caches for the current user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Logout
+      tags:
+      - auth
+  /auth/me:
+    get:
+      description: Returns the authenticated user's username, email, and groups
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Get current user
+      tags:
+      - auth
+  /auth/permissions:
+    get:
+      description: Returns per-cluster permission summary for the authenticated user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Get user permissions
+      tags:
+      - auth
+  /auth/policies:
+    get:
+      description: Returns all RBAC policies that apply to the authenticated user
+        sorted by priority
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Get user policies
+      tags:
+      - auth
+  /auth/status:
+    get:
+      description: Returns whether the current user is authenticated
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Authentication status
+      tags:
+      - auth
+  /clusters:
+    get:
+      description: Returns all clusters accessible to the authenticated user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List clusters
+      tags:
+      - clusters
+  /clusters/{name}:
+    get:
+      description: Returns detailed information for a specific cluster
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Get cluster details
+      tags:
+      - clusters
+  /clusters/{name}/alerts:
+    get:
+      description: Returns RBAC-filtered alerts for a cluster
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Filter by alert severity
+        in: query
+        name: severity
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List cluster alerts
+      tags:
+      - clusters
+  /clusters/{name}/custom/{type}:
+    get:
+      description: Returns RBAC-filtered custom resources for a cluster with pagination
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Custom resource type name
+        in: path
+        name: type
+        required: true
+        type: string
+      - description: Filter by namespace
+        in: query
+        name: namespace
+        type: string
+      - description: Field to sort by
+        in: query
+        name: sort_by
+        type: string
+      - description: Sort order (asc/desc)
+        in: query
+        name: sort_order
+        type: string
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 100
+        description: Page size
+        in: query
+        name: page_size
+        type: integer
+      - default: true
+        description: Include aggregations
+        in: query
+        name: include_aggregations
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List custom resources
+      tags:
+      - clusters
+  /clusters/{name}/events:
+    get:
+      description: Returns RBAC-filtered events for a cluster
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      - default: 100
+        description: Max events to return
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List cluster events
+      tags:
+      - clusters
+  /clusters/{name}/namespaces:
+    get:
+      description: Returns RBAC-filtered namespaces for a cluster
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Include operator counts per namespace
+        in: query
+        name: with_operator_count
+        type: boolean
+      - description: Include resource counts per namespace
+        in: query
+        name: with_resource_counts
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List cluster namespaces
+      tags:
+      - clusters
+  /clusters/{name}/nodes:
+    get:
+      description: Returns RBAC-filtered nodes for a cluster
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Filter by node role
+        in: query
+        name: role
+        type: string
+      - description: Filter by node status
+        in: query
+        name: status
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List cluster nodes
+      tags:
+      - clusters
+  /clusters/{name}/nodes/{node}:
+    get:
+      description: Returns detailed information about a specific node in a cluster
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Node name
+        in: path
+        name: node
+        required: true
+        type: string
+      - description: Include metrics history
+        in: query
+        name: include_metrics
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Get node details
+      tags:
+      - clusters
+  /clusters/{name}/operators:
+    get:
+      description: Returns RBAC-filtered operators for a cluster
+      parameters:
+      - description: Cluster name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Filter by namespace
+        in: query
+        name: namespace
+        type: string
+      - description: Filter by operator status
+        in: query
+        name: status
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List cluster operators
+      tags:
+      - clusters
+  /custom-types:
+    get:
+      description: Returns all custom resource types accessible to the authenticated
+        user
+      parameters:
+      - description: Include source definition details
+        in: query
+        name: include_source_details
+        type: boolean
+      - description: Include clusters with data
+        in: query
+        name: include_cluster_availability
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List custom resource types
+      tags:
+      - custom-types
+  /custom-types/clusters:
+    get:
+      description: Returns RBAC-filtered resource counts per type per cluster
+      parameters:
+      - collectionFormat: csv
+        description: Custom resource type names
+        in: query
+        items:
+          type: string
+        name: type
+        required: true
+        type: array
+      - collectionFormat: csv
+        description: Filter by cluster names
+        in: query
+        items:
+          type: string
+        name: clusters
+        type: array
+      - description: Include aggregation values
+        in: query
+        name: include_aggregations
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: Get custom resource counts
+      tags:
+      - custom-types
+  /healthz:
+    get:
+      description: Returns API health status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Health check
+      tags:
+      - health
+  /readyz:
+    get:
+      description: Returns readiness status by pinging Redis
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Readiness check
+      tags:
+      - health
+  /registries/status:
+    get:
+      description: Returns availability status for all container registries
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - OAuthProxy: []
+      summary: List registry statuses
+      tags:
+      - registries
+securityDefinitions:
+  OAuthProxy:
+    in: header
+    name: X-Forwarded-User
+    type: apiKey
+swagger: "2.0"

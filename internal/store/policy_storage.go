@@ -204,7 +204,9 @@ func (c *Client) UpdatePolicyStatus(ctx context.Context, namespace, name string,
 	return c.client.HSet(ctx, policyKey, "status", string(statusData)).Err()
 }
 
-// InvalidateEvaluationCaches clears evaluation caches for affected identities
+// InvalidateEvaluationCaches clears evaluation caches for affected identities.
+// Also clears rbac:decision:* and rbac:custom:* caches so stale
+// authorization decisions don't persist after policy changes.
 func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, serviceAccounts []string) {
 	count := 0
 	pipe := c.client.Pipeline()
@@ -212,6 +214,9 @@ func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, 
 	for _, user := range users {
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:%s:*", user))
 		pipe.Del(ctx, fmt.Sprintf(keyUserPermissions, user))
+		// Clear RBAC engine decision caches for this user
+		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:decision:%s:*", escapeRedisGlobChars(user)))
+		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:%s:*", escapeRedisGlobChars(user)))
 	}
 
 	for _, group := range groups {
@@ -220,6 +225,8 @@ func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, 
 			for _, member := range members {
 				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:%s:*", member))
 				pipe.Del(ctx, fmt.Sprintf(keyUserPermissions, member))
+				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:decision:%s:*", escapeRedisGlobChars(member)))
+				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:%s:*", escapeRedisGlobChars(member)))
 			}
 		}
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:*:group:%s:*", group))
@@ -227,6 +234,8 @@ func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, 
 
 	for _, sa := range serviceAccounts {
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:%s:*", sa))
+		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:decision:%s:*", escapeRedisGlobChars(sa)))
+		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:%s:*", escapeRedisGlobChars(sa)))
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -234,6 +243,16 @@ func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, 
 	}
 
 	logrus.Debugf("Cleared %d evaluation cache entries", count)
+}
+
+// escapeRedisGlobChars escapes Redis glob metacharacters to prevent pattern injection.
+func escapeRedisGlobChars(s string) string {
+	return strings.NewReplacer(
+		`*`, `\*`,
+		`?`, `\?`,
+		`[`, `\[`,
+		`]`, `\]`,
+	).Replace(s)
 }
 
 // PublishPolicyEvent publishes a policy change event
