@@ -1,6 +1,6 @@
 # Add an OpenShift Cluster
 
-This guide covers connecting an OpenShift cluster to ClusterPulse for monitoring.
+This guide covers connecting an OpenShift cluster to ClusterPulse for monitoring. This is specifically covering PULL mode. PUSH mode is covered in [this guide](configure-ingester-tls.md)
 
 ## Prerequisites
 
@@ -170,6 +170,18 @@ The secret must contain:
 |-----|----------|-------------|
 | `token` | Yes | Bearer token for API authentication |
 | `ca.crt` | No | CA certificate for TLS verification. If omitted, TLS verification is skipped. |
+
+## Push Mode with TLS
+
+For push-mode collection over the network, the ingester must be exposed via a TLS-enabled Route. Set `collectionMode: push` and `ingesterAddress` to the Route hostname:
+
+```yaml
+spec:
+  collectionMode: push
+  ingesterAddress: "clusterpulse-ingester-clusterpulse.apps.cluster.example.com:443"
+```
+
+See [Configure Ingester TLS](configure-ingester-tls.md) for the full setup.
 
 ## Troubleshooting
 

@@ -35,9 +35,10 @@ in push mode. It:
 
 ### Ingester (embedded in Cluster Controller)
 
-The Ingester is a gRPC server embedded in the cluster controller (`cmd/manager/`):
+The Ingester is a gRPC server embedded in the cluster controller (`cmd/manager/`). It can be enabled via `clusterEngine.ingester.enabled` in the ClusterPulse CR, which provisions the Service, Route, and TLS infrastructure automatically (see [Configure Ingester TLS](../how-to/clusters/configure-ingester-tls.md)).
 
 - Accepts bidirectional streaming connections from collector agents
+- Supports optional TLS termination for OpenShift Route passthrough (see [Configure Ingester TLS](../how-to/clusters/configure-ingester-tls.md))
 - Authenticates collectors via bearer token metadata
 - Transforms protobuf messages to internal types
 - Dual-writes to Redis (current state) and optionally VictoriaMetrics (time-series)

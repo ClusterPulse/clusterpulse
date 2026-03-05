@@ -31,8 +31,16 @@ type Config struct {
 	PolicyValidationInterval int
 
 	// Ingester Settings
-	IngesterEnabled bool
-	IngesterPort    int
+	IngesterEnabled        bool
+	IngesterPort           int
+	IngesterTLSEnabled     bool
+	IngesterTLSCert        string
+	IngesterTLSKey         string
+	IngesterTLSUseSystemCA bool
+	IngesterServiceName    string
+	CollectorCAConfigMap   string
+	CollectorCANamespace   string
+	CollectorCAKey         string
 
 	// VictoriaMetrics Settings
 	VMEnabled  bool
@@ -60,8 +68,16 @@ func Load() *Config {
 		PolicyValidationInterval: getEnvIntWithMin("POLICY_VALIDATION_INTERVAL", 300, 60),
 
 		// Ingester Configuration
-		IngesterEnabled: getEnvBool("INGESTER_ENABLED", true),
-		IngesterPort:    getEnvIntWithMin("INGESTER_PORT", 9443, 1024),
+		IngesterEnabled:    getEnvBool("INGESTER_ENABLED", true),
+		IngesterPort:       getEnvIntWithMin("INGESTER_PORT", 9443, 1024),
+		IngesterTLSEnabled: getEnvBool("INGESTER_TLS_ENABLED", false),
+		IngesterTLSCert:    getEnv("INGESTER_TLS_CERT", "/etc/ingester-tls/tls.crt"),
+		IngesterTLSKey:         getEnv("INGESTER_TLS_KEY", "/etc/ingester-tls/tls.key"),
+		IngesterTLSUseSystemCA: getEnvBool("INGESTER_TLS_USE_SYSTEM_CA", false),
+		IngesterServiceName:    getEnv("INGESTER_SERVICE_NAME", "clusterpulse-ingester"),
+		CollectorCAConfigMap:   getEnv("COLLECTOR_CA_CONFIGMAP", "ingester-ca"),
+		CollectorCANamespace:   getEnv("COLLECTOR_CA_NAMESPACE", ""),
+		CollectorCAKey:         getEnv("COLLECTOR_CA_KEY", "service-ca.crt"),
 
 		// VictoriaMetrics Configuration
 		VMEnabled:  getEnvBool("VM_ENABLED", false),

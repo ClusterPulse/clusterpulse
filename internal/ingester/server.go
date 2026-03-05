@@ -1,17 +1,19 @@
 package ingester
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/clusterpulse/cluster-controller/internal/config"
 	redis "github.com/clusterpulse/cluster-controller/internal/store"
 	pb "github.com/clusterpulse/cluster-controller/proto/collectorpb"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
-	"time"
 )
 
 // Server is the gRPC ingester that accepts metrics from collector agents.
@@ -55,7 +57,7 @@ func NewServer(cfg *config.Config, redisClient *redis.Client) *Server {
 
 	s.handler = NewHandler(redisClient, vmw)
 
-	s.grpcServer = grpc.NewServer(
+	opts := []grpc.ServerOption{
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			Time:    30 * time.Second,
 			Timeout: 10 * time.Second,
@@ -64,7 +66,22 @@ func NewServer(cfg *config.Config, redisClient *redis.Client) *Server {
 			MinTime:             10 * time.Second,
 			PermitWithoutStream: true,
 		}),
-	)
+	}
+
+	if cfg.IngesterTLSEnabled {
+		cert, err := tls.LoadX509KeyPair(cfg.IngesterTLSCert, cfg.IngesterTLSKey)
+		if err != nil {
+			logrus.WithError(err).Fatal("Failed to load ingester TLS certificate")
+		}
+		tlsCfg := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+		logrus.Info("Ingester TLS enabled")
+	}
+
+	s.grpcServer = grpc.NewServer(opts...)
 
 	pb.RegisterCollectorServiceServer(s.grpcServer, s)
 	return s
