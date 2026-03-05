@@ -359,7 +359,7 @@ Collector agent that runs on managed clusters in push mode.
 **Key behaviors:**
 - Reuses `internal/metricsource/collector` for local collection (same code as hub)
 - Buffers up to 10 collection cycles during network outages
-- Exponential backoff reconnect (1s → 5min cap)
+- Exponential backoff reconnect (1s → 5min cap), resets on successful registration
 - Receives MetricSource configs from ingester (no hub k8s API access needed)
 - gRPC keepalive every 30s
 

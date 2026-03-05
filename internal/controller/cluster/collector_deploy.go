@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/clusterpulse/cluster-controller/api/v1alpha1"
 	"github.com/clusterpulse/cluster-controller/internal/version"
@@ -51,7 +52,7 @@ func (r *ClusterReconciler) ensureCollectorDeployed(ctx context.Context, cluster
 		return fmt.Errorf("failed to get token: %w", err)
 	}
 
-	log.Info("Deploying collector agent on managed cluster")
+	log.Debug("Ensuring collector agent on managed cluster")
 
 	if err := ensureNamespace(ctx, dynClient, collectorNamespace); err != nil {
 		return fmt.Errorf("namespace: %w", err)
@@ -355,11 +356,11 @@ func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, na
 		"resources": map[string]any{
 			"requests": map[string]any{
 				"cpu":    "50m",
-				"memory": "32Mi",
+				"memory": "128Mi",
 			},
 			"limits": map[string]any{
 				"cpu":    "200m",
-				"memory": "64Mi",
+				"memory": "512Mi",
 			},
 		},
 	}
@@ -409,16 +410,36 @@ func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, na
 		},
 	}
 
+	log := logrus.WithField("deployment", collectorDeploymentName)
+
 	existing, err := client.Resource(gvr).Namespace(namespace).Get(ctx, collectorDeploymentName, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		_, err = client.Resource(gvr).Namespace(namespace).Create(ctx, deploy, metav1.CreateOptions{})
+		if err == nil {
+			log.Info("Created collector deployment on managed cluster")
+		}
 		return err
 	}
 	if err != nil {
 		return err
 	}
 
+	if deploymentSpecMatches(existing, deploy) {
+		return nil
+	}
+
 	deploy.SetResourceVersion(existing.GetResourceVersion())
 	_, err = client.Resource(gvr).Namespace(namespace).Update(ctx, deploy, metav1.UpdateOptions{})
+	if err == nil {
+		log.Info("Updated collector deployment on managed cluster")
+	}
 	return err
+}
+
+func deploymentSpecMatches(existing, desired *unstructured.Unstructured) bool {
+	existingContainers, _, _ := unstructured.NestedSlice(existing.Object,
+		"spec", "template", "spec", "containers")
+	desiredContainers, _, _ := unstructured.NestedSlice(desired.Object,
+		"spec", "template", "spec", "containers")
+	return reflect.DeepEqual(existingContainers, desiredContainers)
 }
