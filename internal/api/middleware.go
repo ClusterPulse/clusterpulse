@@ -30,6 +30,11 @@ func GetPrincipal(r *http.Request) *rbac.Principal {
 func AuthMiddleware(cfg *APIConfig) func(http.Handler) http.Handler {
 	dynClient := initDynamicClient()
 
+	// Log a prominent warning if running in dev mode.
+	if cfg.IsDevelopment() && !cfg.OAuthProxyEnabled {
+		logrus.Warn("SECURITY: Running in development mode with OAuth proxy disabled — dev-user auth fallback is active")
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip auth for health endpoints
@@ -41,8 +46,8 @@ func AuthMiddleware(cfg *APIConfig) func(http.Handler) http.Handler {
 			username := r.Header.Get(cfg.OAuthHeaderUser)
 			email := r.Header.Get(cfg.OAuthHeaderEmail)
 
-			// Dev mode fallback
-			if username == "" && cfg.IsDevelopment() && !cfg.OAuthProxyEnabled {
+			// Dev mode fallback only when explicitly enabled.
+			if username == "" && cfg.IsDevelopment() && !cfg.OAuthProxyEnabled && cfg.EnableDevAuth {
 				principal := &rbac.Principal{
 					Username: "dev-user",
 					Email:    "dev@clusterpulse.local",
@@ -83,9 +88,15 @@ func OptionalAuthMiddleware(cfg *APIConfig) func(http.Handler) http.Handler {
 			username := r.Header.Get(cfg.OAuthHeaderUser)
 			email := r.Header.Get(cfg.OAuthHeaderEmail)
 
-			if username == "" && cfg.IsDevelopment() && !cfg.OAuthProxyEnabled {
-				// Dev mode: still set nil principal (caller checks)
-				next.ServeHTTP(w, r)
+			// Apply same dev-user fallback as AuthMiddleware for consistency.
+			if username == "" && cfg.IsDevelopment() && !cfg.OAuthProxyEnabled && cfg.EnableDevAuth {
+				principal := &rbac.Principal{
+					Username: "dev-user",
+					Email:    "dev@clusterpulse.local",
+					Groups:   []string{"developers", "cluster-viewers"},
+				}
+				ctx := context.WithValue(r.Context(), principalKey, principal)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 

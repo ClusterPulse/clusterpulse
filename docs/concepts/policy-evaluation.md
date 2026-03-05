@@ -72,12 +72,20 @@ if not policy.enabled:
 ```python
 now = datetime.utcnow()
 
-if policy.not_before and now < policy.not_before:
-    skip_policy()  # Policy not yet active
+if policy.not_before:
+    if not parseable(policy.not_before):
+        skip_policy()  # Invalid time format treated as invalid policy
+    elif now < policy.not_before:
+        skip_policy()  # Policy not yet active
 
-if policy.not_after and now > policy.not_after:
-    skip_policy()  # Policy expired
+if policy.not_after:
+    if not parseable(policy.not_after):
+        skip_policy()  # Invalid time format treated as invalid policy
+    elif now > policy.not_after:
+        skip_policy()  # Policy expired
 ```
+
+> **Note:** Malformed time constraints cause the policy to be treated as invalid (fail-closed). A warning is logged.
 
 ## Step 3: Resource Matching
 
@@ -443,9 +451,12 @@ patterns = [
     f"policy:eval:{user}:*",
     f"policy:eval:*:group:{group}:*",
     f"policy:eval:{service_account}:*",
-    f"rbac:custom:{user}:*"  # Custom resource cache
+    f"rbac:decision:{user}:*",   # Standard decision cache
+    f"rbac:custom:{user}:*",     # Custom resource decision cache
 ]
 ```
+
+> **Note:** Redis glob metacharacters (`*`, `?`, `[`, `]`) in usernames are escaped before constructing SCAN patterns to prevent unintended cache key matching.
 
 ## Performance Considerations
 

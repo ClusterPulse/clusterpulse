@@ -410,20 +410,27 @@ flowchart LR
 | `policies:enabled` | Set of enabled policy keys |
 | `policies:by:priority` | Sorted set by priority |
 
+### Development Mode
+
+Dev-mode auth bypass (`dev-user` principal) is only active when **all** of these are true:
+
+1. `ENVIRONMENT=development`
+2. `OAUTH_PROXY_ENABLED=false`
+3. `ENABLE_DEV_AUTH=true` (explicit opt-in)
+
 ## Caching
 
 The RBAC engine supports optional decision caching:
 
-- Cache key: `{principal}:{action}:{resource}`
+- Decision cache key: `rbac:decision:{principal}:{action}:{resource}`
 - Custom resource cache key: `rbac:custom:{principal}:{typename}:{cluster}:{action}`
 - Configurable TTL (default: disabled for real-time evaluation)
 - Automatically invalidated when policies change
 
 Cache invalidation occurs when:
 
-1. A policy is created, updated, or deleted
-2. Policy affects users, groups, or service accounts that have cached decisions
-3. Manual cache clear via API
+1. A policy is created, updated, or deleted — clears `policy:eval:*`, `rbac:decision:*`, and `rbac:custom:*` for affected users/groups
+2. Manual cache clear via `POST /api/v1/auth/cache/clear` — clears both `rbac:decision:*` and `rbac:custom:*`
 
 ## Related Documentation
 
