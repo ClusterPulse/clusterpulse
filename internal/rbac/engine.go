@@ -563,36 +563,43 @@ func (e *Engine) matchCluster(resource *Resource, policy *types.CompiledPolicy) 
 	return nil
 }
 
-func (e *Engine) matchClusterName(clusterName string, policy *types.CompiledPolicy) *types.CompiledClusterRule {
-	for i := range policy.ClusterRules {
-		rule := &policy.ClusterRules[i]
-		sel := &rule.ClusterSelector
-
-		if slices.Contains(sel.MatchNames, clusterName) {
-			return rule
-		}
-
-		if sel.MatchPattern != "" {
-			if re := e.compilePattern(sel.MatchPattern); re != nil && re.MatchString(clusterName) {
-				return rule
-			}
+func (e *Engine) clusterMatchesSelector(clusterName string, sel *types.CompiledClusterSelector) bool {
+	if slices.Contains(sel.MatchNames, clusterName) {
+		return true
+	}
+	if sel.MatchPattern != "" {
+		if re := e.compilePattern(sel.MatchPattern); re != nil && re.MatchString(clusterName) {
+			return true
 		}
 	}
+	return false
+}
 
+func (e *Engine) matchClusterName(clusterName string, policy *types.CompiledPolicy) *types.CompiledClusterRule {
+	for i := range policy.ClusterRules {
+		if e.clusterMatchesSelector(clusterName, &policy.ClusterRules[i].ClusterSelector) {
+			return &policy.ClusterRules[i]
+		}
+	}
 	return nil
 }
 
-func (e *Engine) extractPermissionsAndMatchers(rule *types.CompiledClusterRule) (map[Action]struct{}, map[string]*ResourceMatcher) {
+func permissionsFromRule(perms map[string]bool) map[Action]struct{} {
 	permissions := make(map[Action]struct{})
-	if rule.Permissions == nil {
+	if perms == nil {
 		permissions[ActionView] = struct{}{}
 	} else {
 		for key, action := range PermissionMapping {
-			if rule.Permissions[key] {
+			if perms[key] {
 				permissions[action] = struct{}{}
 			}
 		}
 	}
+	return permissions
+}
+
+func (e *Engine) extractPermissionsAndMatchers(rule *types.CompiledClusterRule) (map[Action]struct{}, map[string]*ResourceMatcher) {
+	permissions := permissionsFromRule(rule.Permissions)
 
 	matchers := make(map[string]*ResourceMatcher, len(rule.Resources))
 	for i := range rule.Resources {
@@ -737,8 +744,12 @@ func (e *Engine) evaluateCustomResourcePolicies(typeName, cluster string, _ Acti
 
 		if policy.Effect == "Deny" {
 			for j := range policy.ClusterRules {
-				for k := range policy.ClusterRules[j].Resources {
-					if policy.ClusterRules[j].Resources[k].Type == typeName {
+				rule := &policy.ClusterRules[j]
+				if cluster != "" && !e.clusterMatchesSelector(cluster, &rule.ClusterSelector) {
+					continue
+				}
+				for k := range rule.Resources {
+					if rule.Resources[k].Type == typeName {
 						decision.Decision = DecisionDeny
 						decision.Reason = fmt.Sprintf("Denied by policy %s", policy.PolicyName)
 						decision.AppliedPolicies = append(decision.AppliedPolicies, policyKey)
@@ -755,6 +766,9 @@ func (e *Engine) evaluateCustomResourcePolicies(typeName, cluster string, _ Acti
 
 		for j := range policy.ClusterRules {
 			rule := &policy.ClusterRules[j]
+			if cluster != "" && !e.clusterMatchesSelector(cluster, &rule.ClusterSelector) {
+				continue
+			}
 			for k := range rule.Resources {
 				rf := &rule.Resources[k]
 				if rf.Type != typeName {
@@ -777,18 +791,7 @@ func (e *Engine) evaluateCustomResourcePolicies(typeName, cluster string, _ Acti
 
 				decision.Matcher = matcher
 				decision.Reason = fmt.Sprintf("Allowed by policy %s", policy.PolicyName)
-
-				// Permissions from the rule
-				decision.Permissions = make(map[Action]struct{})
-				if rule.Permissions == nil {
-					decision.Permissions[ActionView] = struct{}{}
-				} else {
-					for key, action := range PermissionMapping {
-						if rule.Permissions[key] {
-							decision.Permissions[action] = struct{}{}
-						}
-					}
-				}
+				decision.Permissions = permissionsFromRule(rule.Permissions)
 
 				// Aggregation rules
 				if rf.AggregationRules != nil {

@@ -34,18 +34,6 @@ type PolicyPermissions struct {
 	// ViewAuditInfo grants access to audit information
 	// +optional
 	ViewAuditInfo *bool `json:"viewAuditInfo,omitempty"`
-
-	// Edit grants permission to modify resources
-	// +optional
-	Edit *bool `json:"edit,omitempty"`
-
-	// Delete grants permission to delete resources
-	// +optional
-	Delete *bool `json:"delete,omitempty"`
-
-	// Execute grants permission to execute actions (e.g., pod exec)
-	// +optional
-	Execute *bool `json:"execute,omitempty"`
 }
 
 // MonitorAccessPolicySpec defines the desired state of MonitorAccessPolicy

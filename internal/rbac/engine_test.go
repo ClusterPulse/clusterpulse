@@ -439,6 +439,108 @@ func TestBuildMatcherFromCompiled(t *testing.T) {
 }
 
 // =========================================================================
+// Custom resource cluster selector scoping
+// =========================================================================
+
+func TestCustomResource_ClusterSelectorScoping(t *testing.T) {
+	e := &Engine{}
+
+	policies := []types.CompiledPolicy{{
+		PolicyName: "prod-vms",
+		Effect:     "Allow",
+		Enabled:    true,
+		ClusterRules: []types.CompiledClusterRule{{
+			ClusterSelector: types.CompiledClusterSelector{MatchPattern: "^prod-.*"},
+			Permissions:     map[string]bool{"view": true},
+			Resources: []types.CompiledResourceFilter{{
+				Type:       "virtualmachines",
+				Visibility: "all",
+			}},
+		}},
+	}}
+
+	// dev-1 should NOT match the prod-* rule
+	devDecision := e.evaluateCustomResourcePolicies("virtualmachines", "dev-1", ActionView, policies)
+	if devDecision.Decision != DecisionDeny {
+		t.Fatalf("expected Deny for dev-1, got %s", devDecision.Decision)
+	}
+
+	// prod-east should match
+	prodDecision := e.evaluateCustomResourcePolicies("virtualmachines", "prod-east", ActionView, policies)
+	if prodDecision.Decision == DecisionDeny {
+		t.Fatalf("expected Allow for prod-east, got Deny: %s", prodDecision.Reason)
+	}
+}
+
+func TestCustomResource_DenyRespectsClusterSelector(t *testing.T) {
+	e := &Engine{}
+
+	policies := []types.CompiledPolicy{
+		{
+			PolicyName: "deny-prod-vms",
+			Effect:     "Deny",
+			Enabled:    true,
+			ClusterRules: []types.CompiledClusterRule{{
+				ClusterSelector: types.CompiledClusterSelector{MatchPattern: "^prod-.*"},
+				Resources: []types.CompiledResourceFilter{{
+					Type:       "virtualmachines",
+					Visibility: "all",
+				}},
+			}},
+		},
+		{
+			PolicyName: "allow-all-vms",
+			Effect:     "Allow",
+			Enabled:    true,
+			ClusterRules: []types.CompiledClusterRule{{
+				ClusterSelector: types.CompiledClusterSelector{MatchPattern: ".*"},
+				Permissions:     map[string]bool{"view": true},
+				Resources: []types.CompiledResourceFilter{{
+					Type:       "virtualmachines",
+					Visibility: "all",
+				}},
+			}},
+		},
+	}
+
+	// prod-east should be denied
+	prodDecision := e.evaluateCustomResourcePolicies("virtualmachines", "prod-east", ActionView, policies)
+	if prodDecision.Decision != DecisionDeny {
+		t.Fatalf("expected Deny for prod-east, got %s", prodDecision.Decision)
+	}
+
+	// dev-1 should be allowed (deny rule doesn't match)
+	devDecision := e.evaluateCustomResourcePolicies("virtualmachines", "dev-1", ActionView, policies)
+	if devDecision.Decision == DecisionDeny {
+		t.Fatalf("expected Allow for dev-1, got Deny: %s", devDecision.Reason)
+	}
+}
+
+func TestCustomResource_EmptyClusterSkipsSelectorCheck(t *testing.T) {
+	e := &Engine{}
+
+	policies := []types.CompiledPolicy{{
+		PolicyName: "prod-vms",
+		Effect:     "Allow",
+		Enabled:    true,
+		ClusterRules: []types.CompiledClusterRule{{
+			ClusterSelector: types.CompiledClusterSelector{MatchPattern: "^prod-.*"},
+			Permissions:     map[string]bool{"view": true},
+			Resources: []types.CompiledResourceFilter{{
+				Type:       "virtualmachines",
+				Visibility: "all",
+			}},
+		}},
+	}}
+
+	// Empty cluster (type discovery) should find the type
+	decision := e.evaluateCustomResourcePolicies("virtualmachines", "", ActionView, policies)
+	if decision.Decision == DecisionDeny {
+		t.Fatalf("expected Allow for empty cluster (type discovery), got Deny: %s", decision.Reason)
+	}
+}
+
+// =========================================================================
 // Helpers
 // =========================================================================
 

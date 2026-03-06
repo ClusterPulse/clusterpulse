@@ -98,9 +98,6 @@ Operations that can be performed:
 | `VIEW_SECRETS` | Access to secret values |
 | `VIEW_METADATA` | Access to filtering metadata |
 | `VIEW_AUDIT` | Access to audit logs |
-| `EDIT` | Modify resources |
-| `DELETE` | Delete resources |
-| `EXECUTE` | Execute commands |
 
 ## Policy Structure
 

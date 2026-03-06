@@ -17,17 +17,13 @@ const (
 	ActionViewCosts     Action = "view_costs"
 	ActionViewSecrets   Action = "view_secrets"
 	ActionViewMetadata  Action = "view_metadata"
-	ActionViewAudit     Action = "view_audit"
-	ActionEdit          Action = "edit"
-	ActionDelete        Action = "delete"
-	ActionExecute       Action = "execute"
+	ActionViewAudit Action = "view_audit"
 )
 
 // AllActions returns all valid actions for iteration.
 var AllActions = []Action{
 	ActionView, ActionViewMetrics, ActionViewSensitive, ActionViewCosts,
 	ActionViewSecrets, ActionViewMetadata, ActionViewAudit,
-	ActionEdit, ActionDelete, ActionExecute,
 }
 
 // ResourceType represents resource types.
@@ -83,9 +79,6 @@ var PermissionMapping = map[string]Action{
 	"viewSecrets":   ActionViewSecrets,
 	"viewMetadata":  ActionViewMetadata,
 	"viewAuditInfo": ActionViewAudit,
-	"edit":          ActionEdit,
-	"delete":        ActionDelete,
-	"execute":       ActionExecute,
 }
 
 // Principal represents the entity making the request.

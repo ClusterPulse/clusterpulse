@@ -412,7 +412,7 @@ Permissions from a matching `Allow` policy are not additive. Only the first matc
 
 ```
 Priority 100: Allow {view: true}           <-- This applies
-Priority 200: Allow {view: true, edit: true} (not reached)
+Priority 200: Allow {view: true, viewMetrics: true} (not reached)
 ```
 
 ## Caching Behavior
