@@ -93,11 +93,6 @@ Operations that can be performed:
 |--------|-------------|
 | `VIEW` | Basic read access |
 | `VIEW_METRICS` | Access to performance metrics |
-| `VIEW_SENSITIVE` | Access to sensitive data |
-| `VIEW_COSTS` | Access to cost information |
-| `VIEW_SECRETS` | Access to secret values |
-| `VIEW_METADATA` | Access to filtering metadata |
-| `VIEW_AUDIT` | Access to audit logs |
 
 ## Policy Structure
 
@@ -133,11 +128,6 @@ spec:
     validity:
       notBefore: "2024-01-01T00:00:00Z"
       notAfter: "2024-12-31T23:59:59Z"
-  
-  operations:
-    audit:
-      logAccess: true
-      requireReason: false
 ```
 
 ### Identity Section

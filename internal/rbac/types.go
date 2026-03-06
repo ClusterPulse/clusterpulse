@@ -11,19 +11,13 @@ import (
 type Action string
 
 const (
-	ActionView          Action = "view"
-	ActionViewMetrics   Action = "view_metrics"
-	ActionViewSensitive Action = "view_sensitive"
-	ActionViewCosts     Action = "view_costs"
-	ActionViewSecrets   Action = "view_secrets"
-	ActionViewMetadata  Action = "view_metadata"
-	ActionViewAudit Action = "view_audit"
+	ActionView        Action = "view"
+	ActionViewMetrics Action = "view_metrics"
 )
 
 // AllActions returns all valid actions for iteration.
 var AllActions = []Action{
-	ActionView, ActionViewMetrics, ActionViewSensitive, ActionViewCosts,
-	ActionViewSecrets, ActionViewMetadata, ActionViewAudit,
+	ActionView, ActionViewMetrics,
 }
 
 // ResourceType represents resource types.
@@ -72,13 +66,8 @@ const (
 
 // PermissionMapping maps policy JSON keys to Action constants.
 var PermissionMapping = map[string]Action{
-	"view":          ActionView,
-	"viewMetrics":   ActionViewMetrics,
-	"viewSensitive": ActionViewSensitive,
-	"viewCosts":     ActionViewCosts,
-	"viewSecrets":   ActionViewSecrets,
-	"viewMetadata":  ActionViewMetadata,
-	"viewAuditInfo": ActionViewAudit,
+	"view":        ActionView,
+	"viewMetrics": ActionViewMetrics,
 }
 
 // Principal represents the entity making the request.

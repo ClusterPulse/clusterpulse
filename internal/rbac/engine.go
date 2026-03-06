@@ -227,7 +227,7 @@ func (e *Engine) FilterResources(ctx context.Context, principal *Principal, reso
 	var filtered []map[string]any
 	for _, resource := range resources {
 		if e.matchesResource(resource, matcher, handler) {
-			filtered = append(filtered, e.applyDataFilters(resource, resourceType, decision.Permissions))
+			filtered = append(filtered, resource)
 		}
 	}
 
@@ -468,10 +468,7 @@ func (e *Engine) evaluatePolicies(request *Request, policies []types.CompiledPol
 			decision.Matchers = matchers
 			decision.Reason = fmt.Sprintf("Allowed by policy %s", policy.PolicyName)
 
-			if policy.AuditConfig["log_access"] {
-				decision.Metadata["audit_required"] = true
-			}
-			// First-match-wins
+				// First-match-wins
 			break
 		}
 	}
@@ -677,43 +674,6 @@ func (e *Engine) matchesResource(resource map[string]any, matcher *ResourceMatch
 	}
 
 	return true
-}
-
-func (e *Engine) applyDataFilters(resource map[string]any, _ ResourceType, permissions map[Action]struct{}) map[string]any {
-	filtered := make(map[string]any, len(resource))
-	for k, v := range resource {
-		filtered[k] = v
-	}
-
-	sensitiveFields := map[Action][]string{
-		ActionViewSensitive: {"tokens", "credentials", "certificates", "private_keys",
-			"service_account_tokens", "kubeconfig", "password", "api_key", "auth_token", "bearer_token"},
-		ActionViewCosts: {"cost", "costs", "billing", "price", "prices", "estimated_cost",
-			"monthly_cost", "usage_cost", "hourly_rate", "discount", "credits"},
-		ActionViewSecrets:  {"secrets", "configmaps"},
-		ActionViewMetadata: {"filtered_count", "total_before_filter", "filter_reason", "applied_policies", "access_decision", "permission_source"},
-		ActionViewAudit:    {"audit_log", "access_history", "policy_evaluation", "last_accessed_by", "access_count"},
-	}
-
-	for action, fields := range sensitiveFields {
-		if _, has := permissions[action]; !has {
-			for _, field := range fields {
-				if _, exists := filtered[field]; exists {
-					if action == ActionViewSecrets && (field == "secrets" || field == "configmaps") {
-						if arr, ok := filtered[field].([]any); ok {
-							filtered[field] = len(arr)
-						} else {
-							filtered[field] = 0
-						}
-					} else {
-						delete(filtered, field)
-					}
-				}
-			}
-		}
-	}
-
-	return filtered
 }
 
 // =========================================================================

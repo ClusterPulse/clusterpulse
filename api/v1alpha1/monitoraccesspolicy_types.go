@@ -14,26 +14,6 @@ type PolicyPermissions struct {
 	// ViewMetrics grants access to cluster metrics
 	// +optional
 	ViewMetrics *bool `json:"viewMetrics,omitempty"`
-
-	// ViewSensitive grants access to sensitive data
-	// +optional
-	ViewSensitive *bool `json:"viewSensitive,omitempty"`
-
-	// ViewCosts grants access to cost data
-	// +optional
-	ViewCosts *bool `json:"viewCosts,omitempty"`
-
-	// ViewSecrets grants access to secrets
-	// +optional
-	ViewSecrets *bool `json:"viewSecrets,omitempty"`
-
-	// ViewMetadata grants access to metadata
-	// +optional
-	ViewMetadata *bool `json:"viewMetadata,omitempty"`
-
-	// ViewAuditInfo grants access to audit information
-	// +optional
-	ViewAuditInfo *bool `json:"viewAuditInfo,omitempty"`
 }
 
 // MonitorAccessPolicySpec defines the desired state of MonitorAccessPolicy
@@ -50,10 +30,6 @@ type MonitorAccessPolicySpec struct {
 	// Lifecycle defines validity periods
 	// +optional
 	Lifecycle *PolicyLifecycle `json:"lifecycle,omitempty"`
-
-	// Operations defines audit and operational settings
-	// +optional
-	Operations *PolicyOperations `json:"operations,omitempty"`
 }
 
 // PolicyIdentity defines who this policy applies to
@@ -229,24 +205,6 @@ type PolicyValidity struct {
 	// NotAfter - policy expires after this time
 	// +optional
 	NotAfter string `json:"notAfter,omitempty"`
-}
-
-// PolicyOperations defines audit and operational settings
-type PolicyOperations struct {
-	// Audit defines audit configuration
-	// +optional
-	Audit *PolicyAudit `json:"audit,omitempty"`
-}
-
-// PolicyAudit defines audit settings
-type PolicyAudit struct {
-	// LogAccess logs all access attempts
-	// +kubebuilder:default=false
-	LogAccess bool `json:"logAccess,omitempty"`
-
-	// RequireReason requires a reason for access
-	// +kubebuilder:default=false
-	RequireReason bool `json:"requireReason,omitempty"`
 }
 
 // MonitorAccessPolicyStatus defines the observed state of MonitorAccessPolicy

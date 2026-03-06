@@ -22,7 +22,6 @@ type CompiledPolicy struct {
 	ClusterRules         []CompiledClusterRule `json:"cluster_rules"`
 	NotBefore            *string               `json:"not_before"`
 	NotAfter             *string               `json:"not_after"`
-	AuditConfig          map[string]bool       `json:"audit_config"`
 	CompiledAt           string                `json:"compiled_at"`
 	Hash                 string                `json:"hash"`
 	CustomResourceTypes  []string              `json:"custom_resource_types"`

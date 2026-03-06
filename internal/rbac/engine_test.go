@@ -113,9 +113,6 @@ func TestEvaluatePolicies_FirstMatchWins(t *testing.T) {
 	if _, has := decision.Permissions[ActionViewMetrics]; has {
 		t.Fatal("expected viewMetrics NOT granted (first-match-wins should use restrictive policy)")
 	}
-	if _, has := decision.Permissions[ActionViewSensitive]; has {
-		t.Fatal("expected viewSensitive NOT granted (first-match-wins should use restrictive policy)")
-	}
 }
 
 // =========================================================================
@@ -360,30 +357,6 @@ func TestMatchCluster_EmptyMatchLabels_MatchesAll(t *testing.T) {
 	result := e.matchCluster(resource, policy)
 	if result == nil {
 		t.Fatal("expected empty matchLabels to match all resources")
-	}
-}
-
-// =========================================================================
-// Secrets field uses count semantic
-// =========================================================================
-
-func TestApplyDataFilters_SecretsUsesCountSemantic(t *testing.T) {
-	e := &Engine{}
-	resource := map[string]any{
-		"name":    "test",
-		"secrets": []any{"s1", "s2"},
-	}
-
-	permissions := map[Action]struct{}{ActionView: {}}
-
-	filtered := e.applyDataFilters(resource, ResourceCluster, permissions)
-
-	val, exists := filtered["secrets"]
-	if !exists {
-		t.Fatal("expected 'secrets' to be present (replaced with count)")
-	}
-	if count, ok := val.(int); !ok || count != 2 {
-		t.Fatalf("expected secrets count=2, got %v", val)
 	}
 }
 
