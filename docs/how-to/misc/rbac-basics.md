@@ -416,7 +416,7 @@ oc delete monitoraccesspolicy tutorial-viewers -n clusterpulse
 
 ## Next Steps
 
-- [Create Read-Only Policy](../how-to/policies/create-readonly-policy.md) - Detailed guide on read-only access
-- [Grant Custom Resource Access](../how-to/policies/grant-custom-resource-access.md) - Full custom resource RBAC guide
-- [Filter by Namespace](../how-to/policies/filter-by-namespace.md) - Advanced namespace filtering
-- [Policy Evaluation](../concepts/policy-evaluation.md) - Understand the evaluation algorithm
+- [Create Read-Only Policy](../policies/create-readonly-policy.md) - Detailed guide on read-only access
+- [Grant Custom Resource Access](../policies/grant-custom-resource-access.md) - Full custom resource RBAC guide
+- [Filter by Namespace](../policies/filter-by-namespace.md) - Advanced namespace filtering
+- [Policy Evaluation](../../concepts/policy-evaluation.md) - Understand the evaluation algorithm

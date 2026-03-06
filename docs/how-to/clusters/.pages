@@ -1,0 +1,3 @@
+nav:
+  - add-openshift-cluster.md
+  - configure-ingester-tls.md

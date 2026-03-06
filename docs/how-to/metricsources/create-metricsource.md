@@ -13,6 +13,21 @@ A MetricSource tells ClusterPulse **what** to collect from your clusters and **h
 
 Once created, ClusterPulse continuously collects matching resources from all connected clusters and makes the data available through the API.
 
+## Default MetricSources
+
+ClusterPulse ships with two default MetricSources that are created automatically on initial install:
+
+- **default-pvc-capacity** — PVC storage capacity overview (phase, capacity, storageClass, aggregations by storage class)
+- **default-deployment-health** — Deployment availability tracking (replicas, readyPct, degraded count)
+
+These provide useful cross-cluster visibility out of the box. They are not permanently reconciled — you can delete them if they are not needed. To disable them entirely, set `defaults.metricsources.enabled: false` in your ClusterPulse CR spec.
+
+You can list them with:
+
+```bash
+kubectl get metricsource -l clusterpulse.io/default=true
+```
+
 ## Prerequisites
 
 - ClusterPulse deployed and running

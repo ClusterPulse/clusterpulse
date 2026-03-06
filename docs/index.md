@@ -18,13 +18,13 @@ resources while ensuring users only see what they're authorized to access.
 
     [Quickstart](getting-started/index.md)
 
--   **Tutorials**
+-   **How-To Guides**
 
     ---
 
-    Learn ClusterPulse through hands-on tutorials
+    Step-by-step guides for common tasks
 
-    [Tutorials](tutorials/index.md)
+    [How-To Guides](how-to/index.md)
 
 -   **Reference**
 

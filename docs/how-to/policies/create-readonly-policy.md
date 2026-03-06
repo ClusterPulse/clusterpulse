@@ -215,4 +215,4 @@ To debug policy evaluation, use the `/api/v1/auth/policies` endpoint to see whic
 
 - [Filter by Namespace](filter-by-namespace.md) - Restrict access to specific namespaces
 - [Grant Custom Resource Access](grant-custom-resource-access.md) - Fine-grained control over MetricSource types
-- [RBAC Basics Tutorial](../../tutorials/rbac-basics.md) - Learn the fundamentals of ClusterPulse RBAC
+- [RBAC Basics Tutorial](../misc/rbac-basics.md) - Learn the fundamentals of ClusterPulse RBAC
