@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"strings"
+
 	mscollector "github.com/clusterpulse/cluster-controller/internal/metricsource/collector"
 	"github.com/clusterpulse/cluster-controller/internal/version"
 	"github.com/clusterpulse/cluster-controller/pkg/types"
@@ -26,6 +28,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -51,7 +55,9 @@ type Agent struct {
 	// Local buffer for network outages
 	buffer *Buffer
 
-	startTime time.Time
+	startTime          time.Time
+	lastOperatorCollect time.Time
+	lastInfoCollect     time.Time
 }
 
 // NewAgent creates a new collector agent.
@@ -327,6 +333,18 @@ func (a *Agent) collectMetrics(ctx context.Context) (*pb.MetricsBatch, error) {
 		batch.NodeMetrics = nodeMetrics
 	}
 
+	// Collect operators and cluster info at a reduced frequency
+	scanInterval := time.Duration(a.config.OperatorScanInterval) * time.Second
+	if time.Since(a.lastOperatorCollect) >= scanInterval {
+		batch.Operators = a.collectOperators(ctx)
+		batch.ClusterOperators = a.collectClusterOperators(ctx)
+		a.lastOperatorCollect = time.Now()
+	}
+	if time.Since(a.lastInfoCollect) >= scanInterval {
+		batch.ClusterInfo = a.collectClusterInfo(ctx)
+		a.lastInfoCollect = time.Now()
+	}
+
 	// Collect custom resources from MetricSources
 	a.mu.RLock()
 	sources := a.sources
@@ -515,6 +533,309 @@ func (a *Agent) extractNodeMetrics(node *corev1.Node, pods []corev1.Pod) *pb.Nod
 	}
 
 	return nm
+}
+
+// collectOperators queries OLM Subscriptions + CSVs and returns proto OperatorInfo.
+func (a *Agent) collectOperators(ctx context.Context) []*pb.OperatorInfo {
+	subscriptionGVR := schema.GroupVersionResource{
+		Group: "operators.coreos.com", Version: "v1alpha1", Resource: "subscriptions",
+	}
+	csvGVR := schema.GroupVersionResource{
+		Group: "operators.coreos.com", Version: "v1alpha1", Resource: "clusterserviceversions",
+	}
+
+	subList, err := a.dynamicClient.Resource(subscriptionGVR).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		// OLM not installed or not available — not an error
+		logrus.WithError(err).Debug("Subscriptions not available, skipping operator collection")
+		return nil
+	}
+
+	var operators []*pb.OperatorInfo
+	for i := range subList.Items {
+		sub := &subList.Items[i]
+		namespace := sub.GetNamespace()
+
+		installedCSV, found, _ := unstructured.NestedString(sub.Object, "status", "installedCSV")
+		if !found || installedCSV == "" {
+			continue
+		}
+
+		csv, err := a.dynamicClient.Resource(csvGVR).Namespace(namespace).Get(ctx, installedCSV, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+
+		op := a.extractOperatorProto(csv, sub)
+		if op != nil {
+			operators = append(operators, op)
+		}
+	}
+
+	if len(operators) > 0 {
+		logrus.Debugf("Collected %d operators", len(operators))
+	}
+	return operators
+}
+
+// extractOperatorProto extracts operator info from CSV and subscription into proto format.
+func (a *Agent) extractOperatorProto(csv, sub *unstructured.Unstructured) *pb.OperatorInfo {
+	spec, found, _ := unstructured.NestedMap(csv.Object, "spec")
+	if !found {
+		return nil
+	}
+
+	op := &pb.OperatorInfo{
+		Name:               csv.GetName(),
+		InstalledNamespace: csv.GetNamespace(),
+	}
+
+	if v, ok := spec["displayName"].(string); ok {
+		op.DisplayName = v
+	} else {
+		op.DisplayName = csv.GetName()
+	}
+	if v, ok := spec["version"].(string); ok {
+		op.Version = v
+	}
+	if v, _, _ := unstructured.NestedString(spec, "provider", "name"); v != "" {
+		op.Provider = v
+	}
+
+	// Install modes
+	if modes, found, _ := unstructured.NestedSlice(spec, "installModes"); found {
+		for _, mode := range modes {
+			if m, ok := mode.(map[string]any); ok {
+				if name, _ := m["type"].(string); name != "" {
+					if supported, _ := m["supported"].(bool); supported {
+						op.InstallModes = append(op.InstallModes, name)
+						if name == "AllNamespaces" {
+							op.IsClusterWide = true
+							op.InstallMode = "AllNamespaces"
+						}
+					}
+				}
+			}
+		}
+		if op.InstallMode == "" {
+			op.InstallMode = "SingleNamespace"
+		}
+	}
+
+	// Subscription info
+	if subSpec, found, _ := unstructured.NestedMap(sub.Object, "spec"); found {
+		if v, ok := subSpec["installPlanApproval"].(string); ok {
+			op.Subscription = map[string]string{"installPlanApproval": v}
+		}
+		// Check WATCH_NAMESPACE env for available namespaces
+		if config, found, _ := unstructured.NestedMap(subSpec, "config"); found {
+			if envList, found, _ := unstructured.NestedSlice(config, "env"); found {
+				for _, e := range envList {
+					if em, ok := e.(map[string]any); ok {
+						if name, _ := em["name"].(string); name == "WATCH_NAMESPACE" {
+							if value, _ := em["value"].(string); value != "" {
+								op.AvailableInNamespaces = strings.Split(value, ",")
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Determine availability
+	if op.IsClusterWide {
+		op.AvailableInNamespaces = []string{"*"}
+	} else if len(op.AvailableInNamespaces) == 0 {
+		annotations := csv.GetAnnotations()
+		if targetNs, ok := annotations["olm.targetNamespaces"]; ok && targetNs != "" {
+			targetNs = strings.Trim(targetNs, `"'`)
+			if targetNs != "" {
+				op.AvailableInNamespaces = strings.Split(targetNs, ",")
+			}
+		} else {
+			op.AvailableInNamespaces = []string{op.InstalledNamespace}
+		}
+	}
+	op.AvailableCount = int32(len(op.AvailableInNamespaces))
+
+	// Status from CSV
+	if phase, _, _ := unstructured.NestedString(csv.Object, "status", "phase"); phase != "" {
+		op.Status = phase
+	} else {
+		op.Status = "Unknown"
+	}
+
+	return op
+}
+
+// collectClusterOperators queries OpenShift ClusterOperators.
+func (a *Agent) collectClusterOperators(ctx context.Context) []*pb.ClusterOperatorInfo {
+	gvr := schema.GroupVersionResource{
+		Group: "config.openshift.io", Version: "v1", Resource: "clusteroperators",
+	}
+
+	coList, err := a.dynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logrus.WithError(err).Debug("ClusterOperators not available, skipping")
+		return nil
+	}
+
+	var result []*pb.ClusterOperatorInfo
+	for i := range coList.Items {
+		co := a.extractClusterOperatorProto(&coList.Items[i])
+		if co != nil {
+			result = append(result, co)
+		}
+	}
+
+	if len(result) > 0 {
+		logrus.Debugf("Collected %d cluster operators", len(result))
+	}
+	return result
+}
+
+func (a *Agent) extractClusterOperatorProto(co *unstructured.Unstructured) *pb.ClusterOperatorInfo {
+	info := &pb.ClusterOperatorInfo{Name: co.GetName()}
+
+	status, found, _ := unstructured.NestedMap(co.Object, "status")
+	if !found {
+		return info
+	}
+
+	// Conditions
+	if conditions, found, _ := unstructured.NestedSlice(status, "conditions"); found {
+		for _, cond := range conditions {
+			cm, ok := cond.(map[string]any)
+			if !ok {
+				continue
+			}
+			pbCond := &pb.ClusterOperatorCondition{
+				Type:    strVal(cm, "type"),
+				Status:  strVal(cm, "status"),
+				Reason:  strVal(cm, "reason"),
+				Message: strVal(cm, "message"),
+			}
+			info.Conditions = append(info.Conditions, pbCond)
+
+			switch pbCond.Type {
+			case "Available":
+				info.Available = pbCond.Status == "True"
+				if pbCond.Status != "True" && pbCond.Message != "" {
+					info.Message = pbCond.Message
+					info.Reason = pbCond.Reason
+				}
+			case "Progressing":
+				info.Progressing = pbCond.Status == "True"
+				if pbCond.Status == "True" && pbCond.Message != "" && info.Message == "" {
+					info.Message = pbCond.Message
+				}
+			case "Degraded":
+				info.Degraded = pbCond.Status == "True"
+				if pbCond.Status == "True" && pbCond.Message != "" {
+					info.Message = pbCond.Message
+					info.Reason = pbCond.Reason
+				}
+			case "Upgradeable":
+				info.Upgradeable = pbCond.Status == "True"
+			}
+		}
+	}
+
+	// Versions
+	if versions, found, _ := unstructured.NestedSlice(status, "versions"); found {
+		for _, ver := range versions {
+			if vm, ok := ver.(map[string]any); ok {
+				v := &pb.ClusterOperatorVersion{
+					Name:    strVal(vm, "name"),
+					Version: strVal(vm, "version"),
+				}
+				info.Versions = append(info.Versions, v)
+				if v.Name == "operator" || v.Name == info.Name {
+					info.Version = v.Version
+				}
+			}
+		}
+	}
+	if info.Version == "" && len(info.Versions) > 0 {
+		info.Version = info.Versions[0].Version
+	}
+
+	// Related objects
+	if relObjs, found, _ := unstructured.NestedSlice(status, "relatedObjects"); found {
+		for _, obj := range relObjs {
+			if om, ok := obj.(map[string]any); ok {
+				info.RelatedObjects = append(info.RelatedObjects, &pb.RelatedObject{
+					Group:     strVal(om, "group"),
+					Resource:  strVal(om, "resource"),
+					Namespace: strVal(om, "namespace"),
+					Name:      strVal(om, "name"),
+				})
+			}
+		}
+	}
+
+	return info
+}
+
+// collectClusterInfo gathers cluster version and identity information.
+func (a *Agent) collectClusterInfo(ctx context.Context) *pb.ClusterInfo {
+	info := &pb.ClusterInfo{}
+
+	// Try OpenShift ClusterVersion first
+	cvGVR := schema.GroupVersionResource{
+		Group: "config.openshift.io", Version: "v1", Resource: "clusterversions",
+	}
+	cv, err := a.dynamicClient.Resource(cvGVR).Get(ctx, "version", metav1.GetOptions{})
+	if err == nil {
+		info.Platform = "OpenShift"
+		if spec, found, _ := unstructured.NestedMap(cv.Object, "spec"); found {
+			if v, ok := spec["channel"].(string); ok {
+				info.Channel = v
+			}
+			if v, ok := spec["clusterID"].(string); ok {
+				info.ClusterId = v
+			}
+		}
+		if desired, found, _ := unstructured.NestedMap(cv.Object, "status", "desired"); found {
+			if v, ok := desired["version"].(string); ok {
+				info.Version = v
+			}
+		}
+	} else {
+		// Fallback to standard K8s version
+		ver, err := a.clientset.Discovery().ServerVersion()
+		if err == nil {
+			info.Version = ver.GitVersion
+			info.Platform = ver.Platform
+		}
+	}
+
+	// Try to get console URL
+	routeGVR := schema.GroupVersionResource{
+		Group: "route.openshift.io", Version: "v1", Resource: "routes",
+	}
+	consoleRoute, err := a.dynamicClient.Resource(routeGVR).Namespace("openshift-console").Get(ctx, "console", metav1.GetOptions{})
+	if err == nil {
+		if host, found, _ := unstructured.NestedString(consoleRoute.Object, "spec", "host"); found && host != "" {
+			_, hasTLS, _ := unstructured.NestedMap(consoleRoute.Object, "spec", "tls")
+			if hasTLS {
+				info.ConsoleUrl = "https://" + host
+			} else {
+				info.ConsoleUrl = "http://" + host
+			}
+		}
+	}
+
+	return info
+}
+
+// strVal safely extracts a string from a map.
+func strVal(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (a *Agent) flushBuffer(ctx context.Context, stream pb.CollectorService_ConnectClient) {

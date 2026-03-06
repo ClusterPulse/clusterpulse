@@ -64,6 +64,14 @@ func (h *Handler) ProcessBatch(ctx context.Context, batch *pb.MetricsBatch) erro
 		}
 	}
 
+	// Store cluster info
+	if batch.ClusterInfo != nil {
+		info := protoToClusterInfo(batch.ClusterInfo)
+		if err := h.redisClient.StoreClusterInfo(ctx, cluster, info); err != nil {
+			log.WithError(err).Warn("Failed to store cluster info")
+		}
+	}
+
 	// Store operators
 	var ops []types.OperatorInfo
 	if len(batch.Operators) > 0 {
@@ -210,16 +218,20 @@ func protoToOperators(ops []*pb.OperatorInfo) []types.OperatorInfo {
 	result := make([]types.OperatorInfo, len(ops))
 	for i, o := range ops {
 		result[i] = types.OperatorInfo{
-			Name:               o.Name,
-			DisplayName:        o.DisplayName,
-			Version:            o.Version,
-			Status:             o.Status,
-			InstalledNamespace: o.InstalledNamespace,
-			InstallMode:        o.InstallMode,
-			Provider:           o.Provider,
-			IsClusterWide:      o.IsClusterWide,
-			CreatedAt:          time.Now(),
-			UpdatedAt:          time.Now(),
+			Name:                  o.Name,
+			DisplayName:           o.DisplayName,
+			Version:               o.Version,
+			Status:                o.Status,
+			InstalledNamespace:    o.InstalledNamespace,
+			InstallMode:           o.InstallMode,
+			Provider:              o.Provider,
+			IsClusterWide:         o.IsClusterWide,
+			InstallModes:          o.InstallModes,
+			AvailableInNamespaces: o.AvailableInNamespaces,
+			AvailableCount:        int(o.AvailableCount),
+			Subscription:          o.Subscription,
+			CreatedAt:             time.Now(),
+			UpdatedAt:             time.Now(),
 		}
 	}
 	return result
@@ -228,18 +240,61 @@ func protoToOperators(ops []*pb.OperatorInfo) []types.OperatorInfo {
 func protoToClusterOperators(cops []*pb.ClusterOperatorInfo) []types.ClusterOperatorInfo {
 	result := make([]types.ClusterOperatorInfo, len(cops))
 	for i, c := range cops {
-		result[i] = types.ClusterOperatorInfo{
-			Name:               c.Name,
-			Version:            c.Version,
-			Available:          c.Available,
-			Progressing:        c.Progressing,
-			Degraded:           c.Degraded,
-			Upgradeable:        c.Upgradeable,
-			Message:            c.Message,
-			LastTransitionTime: time.Now(),
+		info := types.ClusterOperatorInfo{
+			Name:        c.Name,
+			Version:     c.Version,
+			Available:   c.Available,
+			Progressing: c.Progressing,
+			Degraded:    c.Degraded,
+			Upgradeable: c.Upgradeable,
+			Message:     c.Message,
+			Reason:      c.Reason,
 		}
+		for _, cond := range c.Conditions {
+			tc := types.ClusterOperatorCondition{
+				Type:    cond.Type,
+				Status:  cond.Status,
+				Reason:  cond.Reason,
+				Message: cond.Message,
+			}
+			info.Conditions = append(info.Conditions, tc)
+			// Track the latest condition for LastTransitionTime fallback
+		}
+		if info.LastTransitionTime.IsZero() {
+			info.LastTransitionTime = time.Now()
+		}
+		for _, v := range c.Versions {
+			info.Versions = append(info.Versions, types.ClusterOperatorVersion{
+				Name: v.Name, Version: v.Version,
+			})
+		}
+		for _, ro := range c.RelatedObjects {
+			info.RelatedObjects = append(info.RelatedObjects, types.RelatedObject{
+				Group: ro.Group, Resource: ro.Resource,
+				Namespace: ro.Namespace, Name: ro.Name,
+			})
+		}
+		result[i] = info
 	}
 	return result
+}
+
+func protoToClusterInfo(p *pb.ClusterInfo) map[string]any {
+	info := map[string]any{
+		"api_url":  p.ApiUrl,
+		"version":  p.Version,
+		"platform": p.Platform,
+	}
+	if p.ConsoleUrl != "" {
+		info["console_url"] = p.ConsoleUrl
+	}
+	if p.Channel != "" {
+		info["channel"] = p.Channel
+	}
+	if p.ClusterId != "" {
+		info["cluster_id"] = p.ClusterId
+	}
+	return info
 }
 
 func protoToCustomResources(crBatch *pb.CustomResourceBatch, clusterName string) (*types.CustomResourceCollection, *types.AggregationResults) {
