@@ -1,0 +1,7 @@
+title: How-To Guides
+nav:
+  - index.md
+  - clusters
+  - policies
+  - metricsources
+  - misc
