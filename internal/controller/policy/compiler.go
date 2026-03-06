@@ -44,7 +44,6 @@ func (c *Compiler) Compile(name, namespace string, spec *v1alpha1.MonitorAccessP
 	subjects := c.extractSubjects(&spec.Identity.Subjects)
 	clusterRules, customTypes := c.compileClusterRules(&spec.Scope.Clusters)
 	notBefore, notAfter := c.extractValidity(spec.Lifecycle)
-	auditConfig := c.extractAuditConfig(spec.Operations)
 	hash := c.generateHash(spec)
 
 	enabled := true
@@ -65,7 +64,6 @@ func (c *Compiler) Compile(name, namespace string, spec *v1alpha1.MonitorAccessP
 		ClusterRules:         clusterRules,
 		NotBefore:            notBefore,
 		NotAfter:             notAfter,
-		AuditConfig:          auditConfig,
 		CompiledAt:           time.Now().UTC().Format(time.RFC3339),
 		Hash:                 hash,
 		CustomResourceTypes:  customTypes,
@@ -195,21 +193,6 @@ func permissionsToMap(p *v1alpha1.PolicyPermissions) map[string]bool {
 	if p.ViewMetrics != nil {
 		m["viewMetrics"] = *p.ViewMetrics
 	}
-	if p.ViewSensitive != nil {
-		m["viewSensitive"] = *p.ViewSensitive
-	}
-	if p.ViewCosts != nil {
-		m["viewCosts"] = *p.ViewCosts
-	}
-	if p.ViewSecrets != nil {
-		m["viewSecrets"] = *p.ViewSecrets
-	}
-	if p.ViewMetadata != nil {
-		m["viewMetadata"] = *p.ViewMetadata
-	}
-	if p.ViewAuditInfo != nil {
-		m["viewAuditInfo"] = *p.ViewAuditInfo
-	}
 	if len(m) == 0 {
 		m["view"] = true
 	}
@@ -285,18 +268,6 @@ func (c *Compiler) extractValidity(lifecycle *v1alpha1.PolicyLifecycle) (*string
 		notAfter = &lifecycle.Validity.NotAfter
 	}
 	return notBefore, notAfter
-}
-
-func (c *Compiler) extractAuditConfig(ops *v1alpha1.PolicyOperations) map[string]bool {
-	config := map[string]bool{
-		"log_access":     false,
-		"require_reason": false,
-	}
-	if ops != nil && ops.Audit != nil {
-		config["log_access"] = ops.Audit.LogAccess
-		config["require_reason"] = ops.Audit.RequireReason
-	}
-	return config
 }
 
 func (c *Compiler) generateHash(spec *v1alpha1.MonitorAccessPolicySpec) string {
