@@ -54,6 +54,9 @@ message MetricsBatch {
   // Operator data
   repeated OperatorInfo operators = 7;
   repeated ClusterOperatorInfo cluster_operators = 8;
+
+  // Cluster identity/version info (collected by push-mode agents)
+  ClusterInfo cluster_info = 9;
 }
 
 // ClusterMetrics mirrors pkg/types.ClusterMetrics in protobuf form.
@@ -145,6 +148,10 @@ message OperatorInfo {
   string install_mode = 6;
   string provider = 7;
   bool is_cluster_wide = 8;
+  repeated string install_modes = 9;
+  repeated string available_in_namespaces = 10;
+  int32 available_count = 11;
+  map<string, string> subscription = 12;
 }
 
 // ClusterOperatorInfo mirrors pkg/types.ClusterOperatorInfo.
@@ -156,6 +163,42 @@ message ClusterOperatorInfo {
   bool degraded = 5;
   bool upgradeable = 6;
   string message = 7;
+  string reason = 8;
+  repeated ClusterOperatorCondition conditions = 9;
+  repeated ClusterOperatorVersion versions = 10;
+  repeated RelatedObject related_objects = 11;
+}
+
+// ClusterOperatorCondition represents a condition of a ClusterOperator.
+message ClusterOperatorCondition {
+  string type = 1;
+  string status = 2;
+  string reason = 3;
+  string message = 4;
+}
+
+// ClusterOperatorVersion represents version information for a ClusterOperator.
+message ClusterOperatorVersion {
+  string name = 1;
+  string version = 2;
+}
+
+// RelatedObject represents a Kubernetes resource related to a ClusterOperator.
+message RelatedObject {
+  string group = 1;
+  string resource = 2;
+  string namespace = 3;
+  string name = 4;
+}
+
+// ClusterInfo carries cluster identity and version data.
+message ClusterInfo {
+  string api_url = 1;
+  string version = 2;
+  string platform = 3;
+  string console_url = 4;
+  string channel = 5;
+  string cluster_id = 6;
 }
 
 // HealthReport is a periodic heartbeat from the collector.

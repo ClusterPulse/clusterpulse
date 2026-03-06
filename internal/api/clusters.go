@@ -111,10 +111,21 @@ func (h *ClusterHandler) GetCluster(w http.ResponseWriter, r *http.Request) {
 	bundle, _ := h.store.GetClusterBundle(ctx, clusterName)
 	resourceMeta, _ := h.store.GetClusterResourceMetadata(ctx, clusterName)
 
+	spec := ensureMap(bundle.Spec)
+	info := ensureMap(bundle.Info)
+
+	// For push-mode clusters the collector cannot know the external API URL;
+	// backfill from the ClusterConnection spec endpoint.
+	if info["api_url"] == nil || info["api_url"] == "" {
+		if ep, ok := spec["endpoint"].(string); ok && ep != "" {
+			info["api_url"] = ep
+		}
+	}
+
 	result := map[string]any{
 		"name":    clusterName,
-		"spec":    ensureMap(bundle.Spec),
-		"info":    ensureMap(bundle.Info),
+		"spec":    spec,
+		"info":    info,
 		"metrics": ensureMap(bundle.Metrics),
 		"status":  statusWithFallback(bundle.Status),
 	}

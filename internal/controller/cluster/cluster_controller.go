@@ -116,6 +116,11 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req reconcile.Request
 
 	log.Debug("Starting reconciliation")
 
+	// Store CRD-derived data (no remote API calls required).
+	// This runs for both push and pull modes so that cluster spec/labels
+	// are always available even when the push-mode collector handles metrics.
+	r.storeCRDData(ctx, clusterConn)
+
 	// For push-mode clusters, update collector status and skip pull-based collection
 	// if the collector is actively connected.
 	if clusterConn.Spec.CollectionMode == "push" && r.Ingester != nil {
@@ -221,24 +226,7 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		return fmt.Errorf("connection test failed: %w", err)
 	}
 
-	// Store cluster spec for backend compatibility
-	specData := map[string]any{
-		"displayName": clusterConn.Spec.DisplayName,
-		"endpoint":    clusterConn.Spec.Endpoint,
-		"credentialsRef": map[string]any{
-			"name":      clusterConn.Spec.CredentialsRef.Name,
-			"namespace": clusterConn.Spec.CredentialsRef.Namespace,
-		},
-		"labels": clusterConn.Spec.Labels,
-		"monitoring": map[string]any{
-			"interval": clusterConn.Spec.Monitoring.Interval,
-			"timeout":  clusterConn.Spec.Monitoring.Timeout,
-		},
-	}
-
-	if err := r.RedisClient.StoreClusterSpec(ctx, clusterConn.Name, specData); err != nil {
-		log.WithError(err).Debug("Failed to store cluster spec")
-	}
+	// Cluster spec/labels already stored by storeCRDData() in Reconcile().
 
 	// Collect metrics in parallel
 	g, gctx := errgroup.WithContext(ctx)
@@ -351,11 +339,6 @@ func (r *ClusterReconciler) reconcileCluster(ctx context.Context, clusterConn *v
 		}
 	}
 
-	// Store cluster labels if present
-	if len(clusterConn.Spec.Labels) > 0 {
-		r.RedisClient.StoreClusterLabels(ctx, clusterConn.Name, clusterConn.Spec.Labels)
-	}
-
 	// Health: cluster is reachable and we have node/operator data
 	health := types.HealthHealthy
 	message := "Cluster is reachable"
@@ -396,6 +379,34 @@ func (r *ClusterReconciler) statusEqual(a, b v1alpha1.ClusterConnectionStatus) b
 	return a.Phase == b.Phase &&
 		a.Health == b.Health &&
 		a.Message == b.Message
+}
+
+// storeCRDData persists cluster spec and labels from the CRD to Redis.
+// No remote API calls — reads only from the in-memory ClusterConnection object.
+func (r *ClusterReconciler) storeCRDData(ctx context.Context, clusterConn *v1alpha1.ClusterConnection) {
+	log := logrus.WithField("cluster", clusterConn.Name)
+
+	specData := map[string]any{
+		"displayName": clusterConn.Spec.DisplayName,
+		"endpoint":    clusterConn.Spec.Endpoint,
+		"credentialsRef": map[string]any{
+			"name":      clusterConn.Spec.CredentialsRef.Name,
+			"namespace": clusterConn.Spec.CredentialsRef.Namespace,
+		},
+		"labels": clusterConn.Spec.Labels,
+		"monitoring": map[string]any{
+			"interval": clusterConn.Spec.Monitoring.Interval,
+			"timeout":  clusterConn.Spec.Monitoring.Timeout,
+		},
+	}
+
+	if err := r.RedisClient.StoreClusterSpec(ctx, clusterConn.Name, specData); err != nil {
+		log.WithError(err).Debug("Failed to store cluster spec")
+	}
+
+	if len(clusterConn.Spec.Labels) > 0 {
+		r.RedisClient.StoreClusterLabels(ctx, clusterConn.Name, clusterConn.Spec.Labels)
+	}
 }
 
 func (r *ClusterReconciler) getClusterClient(ctx context.Context, clusterConn *v1alpha1.ClusterConnection) (*cluster.ClusterClient, error) {

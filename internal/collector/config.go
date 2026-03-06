@@ -17,6 +17,7 @@ type Config struct {
 	TLSEnabled             bool
 	TLSCACert              string
 	TLSServerName          string
+	OperatorScanInterval   int
 
 	// Internal: tracks consecutive reconnection failures for backoff
 	reconnectAttempts int
@@ -33,6 +34,7 @@ func LoadConfig() *Config {
 		TLSEnabled:             getEnvBool("INGESTER_TLS_ENABLED", false),
 		TLSCACert:              getEnv("INGESTER_TLS_CA", ""),
 		TLSServerName:          getEnv("INGESTER_TLS_SERVER_NAME", ""),
+		OperatorScanInterval:   getEnvInt("OPERATOR_SCAN_INTERVAL", 300),
 	}
 }
 

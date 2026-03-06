@@ -84,7 +84,7 @@ func (r *ClusterReconciler) ensureCollectorDeployed(ctx context.Context, cluster
 	if tlsEnabled {
 		tlsServerName = fmt.Sprintf("%s.%s.svc", r.Config.IngesterServiceName, r.Config.Namespace)
 	}
-	if err := ensureCollectorDeployment(ctx, dynClient, collectorNamespace, clusterConn.Name, ingesterAddr, clusterConn.Spec.CollectorVersion, tlsEnabled, useSystemCA, tlsServerName); err != nil {
+	if err := ensureCollectorDeployment(ctx, dynClient, collectorNamespace, clusterConn.Name, ingesterAddr, clusterConn.Spec.CollectorVersion, tlsEnabled, useSystemCA, tlsServerName, r.Config.OperatorScanInterval); err != nil {
 		return fmt.Errorf("deployment: %w", err)
 	}
 
@@ -288,7 +288,7 @@ func (r *ClusterReconciler) ensureIngesterCA(ctx context.Context, managedClient 
 	return err
 }
 
-func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, namespace, clusterName, ingesterAddr, collectorVersion string, tlsEnabled, useSystemCA bool, tlsServerName string) error {
+func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, namespace, clusterName, ingesterAddr, collectorVersion string, tlsEnabled, useSystemCA bool, tlsServerName string, operatorScanInterval int) error {
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
 	imageTag := collectorVersion
@@ -316,6 +316,10 @@ func ensureCollectorDeployment(ctx context.Context, client dynamic.Interface, na
 					"key":  "token",
 				},
 			},
+		},
+		map[string]any{
+			"name":  "OPERATOR_SCAN_INTERVAL",
+			"value": fmt.Sprintf("%d", operatorScanInterval),
 		},
 	}
 
