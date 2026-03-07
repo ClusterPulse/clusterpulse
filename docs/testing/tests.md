@@ -70,7 +70,7 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 | `internal/store` | `registry_storage_test.go` | 8 | StoreRegistrySpec/Status/Metrics, GetRegistryStatus, GetAllRegistries, DeleteRegistryData |
 | `internal/store` | `resource_storage_test.go` | 4 | StoreResourceCollection |
 | `internal/store` | `reader_test.go` | 16 | GetJSON, GetJSONList, GetHashJSON, GetClusterBundle, GetAllClusterNames, GetClusterNodes, GetNodeMetricsHistory, GetPoliciesForPrincipal |
-| `internal/rbac` | `cache_test.go` | 19 | NewCache, Get/SetDecision, ClearDecisions, Get/SetCustomDecision, serialization round-trips |
+| `internal/rbac` | `cache_test.go` | 16 | NewCache, Get/SetDecision, ClearDecisions, Get/SetCustomDecision, DTO converter round-trips |
 
 ### API Integration Tests (miniredis + httptest)
 

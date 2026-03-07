@@ -27,6 +27,61 @@ func NewCache(redis *goredis.Client, ttlSeconds int) *Cache {
 	}
 }
 
+// --- Cache DTOs (JSON-serializable) ---
+
+type cachedDecision struct {
+	Decision        string                            `json:"decision"`
+	Reason          string                            `json:"reason"`
+	Permissions     []string                          `json:"permissions"`
+	AppliedPolicies []string                          `json:"applied_policies,omitempty"`
+	Metadata        map[string]any                    `json:"metadata,omitempty"`
+	Matchers        map[string]*cachedResourceMatcher `json:"matchers,omitempty"`
+	Principal       *cachedPrincipal                  `json:"principal,omitempty"`
+	Action          string                            `json:"action,omitempty"`
+	Resource        *cachedResource                   `json:"resource,omitempty"`
+}
+
+type cachedCustomDecision struct {
+	Decision            string                 `json:"decision"`
+	ResourceTypeName    string                 `json:"resource_type_name"`
+	Cluster             string                 `json:"cluster,omitempty"`
+	Reason              string                 `json:"reason"`
+	Permissions         []string               `json:"permissions"`
+	AppliedPolicies     []string               `json:"applied_policies,omitempty"`
+	Metadata            map[string]any         `json:"metadata,omitempty"`
+	AllowedAggregations *[]string              `json:"allowed_aggregations,omitempty"`
+	DeniedAggregations  []string               `json:"denied_aggregations"`
+	Matcher             *cachedResourceMatcher `json:"matcher"`
+}
+
+type cachedPrincipal struct {
+	Username string   `json:"username"`
+	Email    string   `json:"email,omitempty"`
+	Groups   []string `json:"groups"`
+}
+
+type cachedResource struct {
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Cluster   string `json:"cluster,omitempty"`
+}
+
+type cachedResourceMatcher struct {
+	Visibility   string                      `json:"visibility"`
+	Names        *cachedMatchSpec            `json:"names,omitempty"`
+	Namespaces   *cachedMatchSpec            `json:"namespaces,omitempty"`
+	Labels       map[string]string           `json:"labels,omitempty"`
+	FieldFilters map[string]*cachedMatchSpec `json:"field_filters,omitempty"`
+}
+
+type cachedMatchSpec struct {
+	Include         []string    `json:"include"`
+	Exclude         []string    `json:"exclude"`
+	IncludePatterns [][2]string `json:"include_patterns,omitempty"`
+	ExcludePatterns [][2]string `json:"exclude_patterns,omitempty"`
+}
+
 // --- Standard Decision Cache ---
 
 // GetDecision retrieves a cached standard RBAC decision.
@@ -39,44 +94,19 @@ func (c *Cache) GetDecision(ctx context.Context, key string) *RBACDecision {
 		return nil
 	}
 
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+	var cd cachedDecision
+	if err := json.Unmarshal([]byte(data), &cd); err != nil {
 		return nil
 	}
 
-	decision := &RBACDecision{
-		Decision:    Decision(strVal(raw, "decision")),
-		Reason:      strVal(raw, "reason"),
-		Permissions: make(map[Action]struct{}),
-		Matchers:    make(map[string]*ResourceMatcher),
-		Metadata:    mapVal(raw, "metadata"),
+	return &RBACDecision{
+		Decision:        Decision(cd.Decision),
+		Reason:          cd.Reason,
+		Permissions:     stringsToActionSet(cd.Permissions),
+		AppliedPolicies: cd.AppliedPolicies,
+		Metadata:        cd.Metadata,
+		Matchers:        fromCachedMatchers(cd.Matchers),
 	}
-
-	if perms, ok := raw["permissions"].([]any); ok {
-		for _, p := range perms {
-			if s, ok := p.(string); ok {
-				decision.Permissions[Action(s)] = struct{}{}
-			}
-		}
-	}
-
-	if policies, ok := raw["applied_policies"].([]any); ok {
-		for _, p := range policies {
-			if s, ok := p.(string); ok {
-				decision.AppliedPolicies = append(decision.AppliedPolicies, s)
-			}
-		}
-	}
-
-	if matchers, ok := raw["matchers"].(map[string]any); ok {
-		for typeKey, mData := range matchers {
-			if md, ok := mData.(map[string]any); ok {
-				decision.Matchers[typeKey] = deserializeResourceMatcher(md)
-			}
-		}
-	}
-
-	return decision
 }
 
 // SetDecision caches a standard RBAC decision.
@@ -85,41 +115,31 @@ func (c *Cache) SetDecision(ctx context.Context, key string, d *RBACDecision) {
 		return
 	}
 
-	perms := make([]string, 0, len(d.Permissions))
-	for a := range d.Permissions {
-		perms = append(perms, string(a))
-	}
-
-	matchers := make(map[string]any, len(d.Matchers))
-	for typeKey, m := range d.Matchers {
-		matchers[typeKey] = serializeResourceMatcher(m)
-	}
-
-	data := map[string]any{
-		"decision":         string(d.Decision),
-		"reason":           d.Reason,
-		"permissions":      perms,
-		"metadata":         d.Metadata,
-		"applied_policies": d.AppliedPolicies,
-		"matchers":         matchers,
+	cd := &cachedDecision{
+		Decision:        string(d.Decision),
+		Reason:          d.Reason,
+		Permissions:     actionSetToStrings(d.Permissions),
+		AppliedPolicies: d.AppliedPolicies,
+		Metadata:        d.Metadata,
+		Matchers:        toCachedMatchers(d.Matchers),
 	}
 
 	if d.Request != nil {
-		data["principal"] = map[string]any{
-			"username": d.Request.Principal.Username,
-			"email":    d.Request.Principal.Email,
-			"groups":   d.Request.Principal.Groups,
+		cd.Principal = &cachedPrincipal{
+			Username: d.Request.Principal.Username,
+			Email:    d.Request.Principal.Email,
+			Groups:   d.Request.Principal.Groups,
 		}
-		data["action"] = string(d.Request.Action)
-		data["resource"] = map[string]any{
-			"type":      string(d.Request.Resource.Type),
-			"name":      d.Request.Resource.Name,
-			"namespace": d.Request.Resource.Namespace,
-			"cluster":   d.Request.Resource.Cluster,
+		cd.Action = string(d.Request.Action)
+		cd.Resource = &cachedResource{
+			Type:      string(d.Request.Resource.Type),
+			Name:      d.Request.Resource.Name,
+			Namespace: d.Request.Resource.Namespace,
+			Cluster:   d.Request.Resource.Cluster,
 		}
 	}
 
-	raw, err := json.Marshal(data)
+	raw, err := json.Marshal(cd)
 	if err != nil {
 		return
 	}
@@ -145,59 +165,29 @@ func (c *Cache) GetCustomDecision(ctx context.Context, key string) *CustomResour
 		return nil
 	}
 
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+	var cd cachedCustomDecision
+	if err := json.Unmarshal([]byte(data), &cd); err != nil {
 		return nil
 	}
 
 	d := &CustomResourceDecision{
-		Decision:           Decision(strVal(raw, "decision")),
-		ResourceTypeName:   strVal(raw, "resource_type_name"),
-		Cluster:            strVal(raw, "cluster"),
-		Reason:             strVal(raw, "reason"),
-		Permissions:        make(map[Action]struct{}),
-		DeniedAggregations: make(map[string]struct{}),
-		Metadata:           mapVal(raw, "metadata"),
+		Decision:           Decision(cd.Decision),
+		ResourceTypeName:   cd.ResourceTypeName,
+		Cluster:            cd.Cluster,
+		Reason:             cd.Reason,
+		Permissions:        stringsToActionSet(cd.Permissions),
+		AppliedPolicies:    cd.AppliedPolicies,
+		Metadata:           cd.Metadata,
+		DeniedAggregations: sliceToStringSet(cd.DeniedAggregations),
 	}
 
-	if perms, ok := raw["permissions"].([]any); ok {
-		for _, p := range perms {
-			if s, ok := p.(string); ok {
-				d.Permissions[Action(s)] = struct{}{}
-			}
-		}
+	if cd.AllowedAggregations != nil {
+		allowed := sliceToStringSet(*cd.AllowedAggregations)
+		d.AllowedAggregations = &allowed
 	}
 
-	if policies, ok := raw["applied_policies"].([]any); ok {
-		for _, p := range policies {
-			if s, ok := p.(string); ok {
-				d.AppliedPolicies = append(d.AppliedPolicies, s)
-			}
-		}
-	}
-
-	if aa, ok := raw["allowed_aggregations"]; ok && aa != nil {
-		if aList, ok := aa.([]any); ok {
-			allowed := make(map[string]struct{}, len(aList))
-			for _, a := range aList {
-				if s, ok := a.(string); ok {
-					allowed[s] = struct{}{}
-				}
-			}
-			d.AllowedAggregations = &allowed
-		}
-	}
-
-	if da, ok := raw["denied_aggregations"].([]any); ok {
-		for _, a := range da {
-			if s, ok := a.(string); ok {
-				d.DeniedAggregations[s] = struct{}{}
-			}
-		}
-	}
-
-	if matcherData, ok := raw["matcher"].(map[string]any); ok {
-		d.Matcher = deserializeResourceMatcher(matcherData)
+	if cd.Matcher != nil {
+		d.Matcher = fromCachedMatcher(cd.Matcher)
 	} else {
 		d.Matcher = &ResourceMatcher{Visibility: VisibilityAll}
 	}
@@ -211,31 +201,24 @@ func (c *Cache) SetCustomDecision(ctx context.Context, key string, d *CustomReso
 		return
 	}
 
-	perms := make([]string, 0, len(d.Permissions))
-	for a := range d.Permissions {
-		perms = append(perms, string(a))
+	cd := &cachedCustomDecision{
+		Decision:           string(d.Decision),
+		ResourceTypeName:   d.ResourceTypeName,
+		Cluster:            d.Cluster,
+		Reason:             d.Reason,
+		Permissions:        actionSetToStrings(d.Permissions),
+		AppliedPolicies:    d.AppliedPolicies,
+		Metadata:           d.Metadata,
+		DeniedAggregations: setToSlice(d.DeniedAggregations),
+		Matcher:            toCachedMatcher(d.Matcher),
 	}
 
-	var allowedAgg any
 	if d.AllowedAggregations != nil {
 		list := setToSlice(*d.AllowedAggregations)
-		allowedAgg = list
+		cd.AllowedAggregations = &list
 	}
 
-	data := map[string]any{
-		"decision":             string(d.Decision),
-		"resource_type_name":   d.ResourceTypeName,
-		"cluster":              d.Cluster,
-		"reason":               d.Reason,
-		"permissions":          perms,
-		"applied_policies":     d.AppliedPolicies,
-		"metadata":             d.Metadata,
-		"allowed_aggregations": allowedAgg,
-		"denied_aggregations":  setToSlice(d.DeniedAggregations),
-		"matcher":              serializeResourceMatcher(d.Matcher),
-	}
-
-	raw, err := json.Marshal(data)
+	raw, err := json.Marshal(cd)
 	if err != nil {
 		return
 	}
@@ -244,109 +227,84 @@ func (c *Cache) SetCustomDecision(ctx context.Context, key string, d *CustomReso
 	}
 }
 
-// --- Serialization helpers ---
+// --- DTO Conversion ---
 
-func serializeResourceMatcher(m *ResourceMatcher) map[string]any {
-	result := map[string]any{
-		"visibility": string(m.Visibility),
+func toCachedMatchers(matchers map[string]*ResourceMatcher) map[string]*cachedResourceMatcher {
+	if len(matchers) == 0 {
+		return nil
 	}
-	if m.Names != nil {
-		result["names"] = serializeMatchSpec(m.Names)
-	}
-	if m.Namespaces != nil {
-		result["namespaces"] = serializeMatchSpec(m.Namespaces)
-	}
-	if len(m.Labels) > 0 {
-		result["labels"] = m.Labels
-	}
-	if len(m.FieldFilters) > 0 {
-		fields := make(map[string]any, len(m.FieldFilters))
-		for name, ms := range m.FieldFilters {
-			fields[name] = serializeMatchSpec(ms)
-		}
-		result["field_filters"] = fields
+	result := make(map[string]*cachedResourceMatcher, len(matchers))
+	for k, m := range matchers {
+		result[k] = toCachedMatcher(m)
 	}
 	return result
 }
 
-func serializeMatchSpec(ms *MatchSpec) map[string]any {
-	return map[string]any{
-		"include":          setToSlice(ms.Include),
-		"exclude":          setToSlice(ms.Exclude),
-		"include_patterns": patternsToSlice(ms.IncludePatterns),
-		"exclude_patterns": patternsToSlice(ms.ExcludePatterns),
+func toCachedMatcher(m *ResourceMatcher) *cachedResourceMatcher {
+	cm := &cachedResourceMatcher{
+		Visibility: string(m.Visibility),
+		Labels:     m.Labels,
+		Names:      toCachedMatchSpec(m.Names),
+		Namespaces: toCachedMatchSpec(m.Namespaces),
+	}
+	if len(m.FieldFilters) > 0 {
+		cm.FieldFilters = make(map[string]*cachedMatchSpec, len(m.FieldFilters))
+		for name, ms := range m.FieldFilters {
+			cm.FieldFilters[name] = toCachedMatchSpec(ms)
+		}
+	}
+	return cm
+}
+
+func toCachedMatchSpec(ms *MatchSpec) *cachedMatchSpec {
+	if ms == nil {
+		return nil
+	}
+	return &cachedMatchSpec{
+		Include:         setToSlice(ms.Include),
+		Exclude:         setToSlice(ms.Exclude),
+		IncludePatterns: patternsToPairs(ms.IncludePatterns),
+		ExcludePatterns: patternsToPairs(ms.ExcludePatterns),
 	}
 }
 
-func deserializeResourceMatcher(data map[string]any) *ResourceMatcher {
+func fromCachedMatchers(matchers map[string]*cachedResourceMatcher) map[string]*ResourceMatcher {
+	result := make(map[string]*ResourceMatcher, len(matchers))
+	for k, cm := range matchers {
+		result[k] = fromCachedMatcher(cm)
+	}
+	return result
+}
+
+func fromCachedMatcher(cm *cachedResourceMatcher) *ResourceMatcher {
 	m := &ResourceMatcher{
-		Visibility: Visibility(strVal(data, "visibility")),
+		Visibility: Visibility(cm.Visibility),
+		Labels:     cm.Labels,
+		Names:      fromCachedMatchSpec(cm.Names),
+		Namespaces: fromCachedMatchSpec(cm.Namespaces),
 	}
 	if m.Visibility == "" {
 		m.Visibility = VisibilityAll
 	}
-
-	if nd, ok := data["names"].(map[string]any); ok {
-		m.Names = deserializeMatchSpec(nd)
-	}
-	if nd, ok := data["namespaces"].(map[string]any); ok {
-		m.Namespaces = deserializeMatchSpec(nd)
-	}
-	if labels, ok := data["labels"].(map[string]any); ok {
-		m.Labels = make(map[string]string, len(labels))
-		for k, v := range labels {
-			if s, ok := v.(string); ok {
-				m.Labels[k] = s
-			}
+	if len(cm.FieldFilters) > 0 {
+		m.FieldFilters = make(map[string]*MatchSpec, len(cm.FieldFilters))
+		for name, cms := range cm.FieldFilters {
+			m.FieldFilters[name] = fromCachedMatchSpec(cms)
 		}
 	}
-	if ffData, ok := data["field_filters"].(map[string]any); ok {
-		m.FieldFilters = make(map[string]*MatchSpec, len(ffData))
-		for name, v := range ffData {
-			if md, ok := v.(map[string]any); ok {
-				m.FieldFilters[name] = deserializeMatchSpec(md)
-			}
-		}
-	}
-
 	return m
 }
 
-func deserializeMatchSpec(data map[string]any) *MatchSpec {
-	ms := &MatchSpec{
-		Include: anySliceToStringSet(sliceVal(data, "include")),
-		Exclude: anySliceToStringSet(sliceVal(data, "exclude")),
+func fromCachedMatchSpec(cms *cachedMatchSpec) *MatchSpec {
+	if cms == nil {
+		return nil
 	}
-	ms.IncludePatterns = deserializePatterns(sliceVal(data, "include_patterns"))
-	ms.ExcludePatterns = deserializePatterns(sliceVal(data, "exclude_patterns"))
-	return ms
-}
-
-func anySliceToStringSet(items []any) map[string]struct{} {
-	s := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		if str, ok := item.(string); ok {
-			s[str] = struct{}{}
-		}
+	return &MatchSpec{
+		Include:         sliceToStringSet(cms.Include),
+		Exclude:         sliceToStringSet(cms.Exclude),
+		IncludePatterns: compilePairs(cms.IncludePatterns),
+		ExcludePatterns: compilePairs(cms.ExcludePatterns),
 	}
-	return s
-}
-
-func deserializePatterns(items []any) []CompiledPattern {
-	var compiled []CompiledPattern
-	for _, p := range items {
-		if pair, ok := p.([]any); ok && len(pair) >= 2 {
-			orig, _ := pair[0].(string)
-			regex, _ := pair[1].(string)
-			if regex != "" {
-				re, err := regexp.Compile(regex)
-				if err == nil {
-					compiled = append(compiled, CompiledPattern{Original: orig, Regexp: re})
-				}
-			}
-		}
-	}
-	return compiled
 }
 
 // --- Internal helpers ---
@@ -371,12 +329,47 @@ func (c *Cache) scanAndDelete(ctx context.Context, pattern string) int {
 	return count
 }
 
-func patternsToSlice(patterns []CompiledPattern) [][]string {
-	result := make([][]string, len(patterns))
-	for i, p := range patterns {
-		result[i] = []string{p.Original, p.Regexp.String()}
+func actionSetToStrings(perms map[Action]struct{}) []string {
+	result := make([]string, 0, len(perms))
+	for a := range perms {
+		result = append(result, string(a))
 	}
 	return result
+}
+
+func stringsToActionSet(items []string) map[Action]struct{} {
+	result := make(map[Action]struct{}, len(items))
+	for _, s := range items {
+		result[Action(s)] = struct{}{}
+	}
+	return result
+}
+
+func patternsToPairs(patterns []CompiledPattern) [][2]string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	result := make([][2]string, len(patterns))
+	for i, p := range patterns {
+		result[i] = [2]string{p.Original, p.Regexp.String()}
+	}
+	return result
+}
+
+func compilePairs(pairs [][2]string) []CompiledPattern {
+	if len(pairs) == 0 {
+		return nil
+	}
+	compiled := make([]CompiledPattern, 0, len(pairs))
+	for _, p := range pairs {
+		if p[1] != "" {
+			re, err := regexp.Compile(p[1])
+			if err == nil {
+				compiled = append(compiled, CompiledPattern{Original: p[0], Regexp: re})
+			}
+		}
+	}
+	return compiled
 }
 
 func setToSlice(s map[string]struct{}) []string {
@@ -387,25 +380,12 @@ func setToSlice(s map[string]struct{}) []string {
 	return result
 }
 
-func strVal(m map[string]any, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
+func sliceToStringSet(items []string) map[string]struct{} {
+	s := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		s[item] = struct{}{}
 	}
-	return ""
-}
-
-func mapVal(m map[string]any, key string) map[string]any {
-	if v, ok := m[key].(map[string]any); ok {
-		return v
-	}
-	return nil
-}
-
-func sliceVal(m map[string]any, key string) []any {
-	if v, ok := m[key].([]any); ok {
-		return v
-	}
-	return nil
+	return s
 }
 
 // CustomResourceCacheKey generates a cache key for custom resource decisions.

@@ -351,13 +351,17 @@ func (h *ClusterHandler) GetClusterNamespaces(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	var filteredOps []map[string]any
+	if withOpCount {
+		operators, _ := h.store.GetClusterOperatorsList(ctx, clusterName)
+		filteredOps = h.engine.FilterResources(ctx, principal, operators, rbac.ResourceOperator, clusterName)
+	}
+
 	var details []map[string]any
 	for _, ns := range allowed {
 		detail := map[string]any{"name": ns}
 
 		if withOpCount {
-			operators, _ := h.store.GetClusterOperatorsList(ctx, clusterName)
-			filteredOps := h.engine.FilterResources(ctx, principal, operators, rbac.ResourceOperator, clusterName)
 			count := 0
 			for _, op := range filteredOps {
 				availNS := getStringSliceFromMap(op, "available_in_namespaces")

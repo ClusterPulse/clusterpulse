@@ -1,7 +1,6 @@
 package rbac
 
 import (
-	"encoding/json"
 	"regexp"
 	"testing"
 
@@ -285,7 +284,7 @@ func TestCustomResourceCacheKey_EmptyCluster(t *testing.T) {
 	}
 }
 
-func TestSerializeResourceMatcher_RoundTrip(t *testing.T) {
+func TestCachedMatcherRoundTrip(t *testing.T) {
 	original := &ResourceMatcher{
 		Visibility: VisibilityFiltered,
 		Names: &MatchSpec{
@@ -297,12 +296,7 @@ func TestSerializeResourceMatcher_RoundTrip(t *testing.T) {
 		Labels: map[string]string{"env": "prod"},
 	}
 
-	// Simulate JSON round-trip (as the cache does)
-	serialized := serializeResourceMatcher(original)
-	raw, _ := json.Marshal(serialized)
-	var deserialized map[string]any
-	json.Unmarshal(raw, &deserialized)
-	got := deserializeResourceMatcher(deserialized)
+	got := fromCachedMatcher(toCachedMatcher(original))
 
 	if got.Visibility != VisibilityFiltered {
 		t.Errorf("visibility = %v", got.Visibility)
@@ -321,14 +315,14 @@ func TestSerializeResourceMatcher_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestDeserializeResourceMatcher_EmptyVisibility(t *testing.T) {
-	m := deserializeResourceMatcher(map[string]any{})
-	if m.Visibility != VisibilityAll {
-		t.Errorf("default visibility = %v, want 'all'", m.Visibility)
+func TestCachedMatcher_EmptyVisibility(t *testing.T) {
+	got := fromCachedMatcher(&cachedResourceMatcher{})
+	if got.Visibility != VisibilityAll {
+		t.Errorf("default visibility = %v, want 'all'", got.Visibility)
 	}
 }
 
-func TestSerializeMatchSpec_RoundTrip(t *testing.T) {
+func TestCachedMatchSpecRoundTrip(t *testing.T) {
 	original := &MatchSpec{
 		Include:         map[string]struct{}{"x": {}, "y": {}},
 		Exclude:         map[string]struct{}{"z": {}},
@@ -336,12 +330,7 @@ func TestSerializeMatchSpec_RoundTrip(t *testing.T) {
 		ExcludePatterns: []CompiledPattern{{Original: "bar-?", Regexp: regexp.MustCompile("^bar-.$")}},
 	}
 
-	// Simulate JSON round-trip (as the cache does)
-	serialized := serializeMatchSpec(original)
-	raw, _ := json.Marshal(serialized)
-	var deserialized map[string]any
-	json.Unmarshal(raw, &deserialized)
-	got := deserializeMatchSpec(deserialized)
+	got := fromCachedMatchSpec(toCachedMatchSpec(original))
 
 	if _, ok := got.Include["x"]; !ok {
 		t.Error("missing include 'x'")
@@ -354,45 +343,5 @@ func TestSerializeMatchSpec_RoundTrip(t *testing.T) {
 	}
 	if len(got.ExcludePatterns) != 1 || got.ExcludePatterns[0].Original != "bar-?" {
 		t.Errorf("exclude patterns = %v", got.ExcludePatterns)
-	}
-}
-
-func TestStrVal(t *testing.T) {
-	m := map[string]any{"key": "value", "num": 42}
-	if got := strVal(m, "key"); got != "value" {
-		t.Errorf("got %q", got)
-	}
-	if got := strVal(m, "num"); got != "" {
-		t.Errorf("non-string should return empty, got %q", got)
-	}
-	if got := strVal(m, "missing"); got != "" {
-		t.Errorf("missing should return empty, got %q", got)
-	}
-}
-
-func TestMapVal(t *testing.T) {
-	inner := map[string]any{"a": 1}
-	m := map[string]any{"data": inner, "str": "nope"}
-	if got := mapVal(m, "data"); got == nil || got["a"] != 1 {
-		t.Errorf("got %v", got)
-	}
-	if got := mapVal(m, "str"); got != nil {
-		t.Errorf("non-map should return nil, got %v", got)
-	}
-	if got := mapVal(m, "missing"); got != nil {
-		t.Errorf("missing should return nil, got %v", got)
-	}
-}
-
-func TestSliceVal(t *testing.T) {
-	m := map[string]any{"items": []any{"a", "b"}, "str": "nope"}
-	if got := sliceVal(m, "items"); len(got) != 2 {
-		t.Errorf("got %v", got)
-	}
-	if got := sliceVal(m, "str"); got != nil {
-		t.Errorf("non-slice should return nil, got %v", got)
-	}
-	if got := sliceVal(m, "missing"); got != nil {
-		t.Errorf("missing should return nil, got %v", got)
 	}
 }
