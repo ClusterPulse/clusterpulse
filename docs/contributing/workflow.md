@@ -13,6 +13,24 @@ Apply labels to pull requests for automatic changelog categorization when creati
 
 At least one of these labels is **required** — PRs cannot be merged without one. PRs without a matching label appear under **Other Changes** in the changelog.
 
+## CI Checks
+
+Every pull request runs three automated checks:
+
+- **Lint** — `golangci-lint` static analysis
+- **Test** — full test suite with race detection and coverage
+- **Build** — compilation of all binaries
+
+All checks must pass before merging. Results appear as a comment on the PR.
+
+Run checks locally before pushing:
+
+```bash
+make lint
+make test
+make build
+```
+
 ## Branch Naming
 
 Follow these conventions:

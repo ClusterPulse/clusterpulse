@@ -156,3 +156,34 @@ go test ./internal/api/...
 4. Run `go test -race` to verify thread safety
 5. For Redis-dependent tests, use `miniredis.RunT(t)` — no real Redis needed
 6. For HTTP handler tests, use `httptest.NewRecorder()` + `httptest.NewRequest()`
+
+## Continuous Integration
+
+All tests run automatically on every pull request targeting `main` via GitHub Actions (`.github/workflows/ci.yml`).
+
+### CI Jobs
+
+| Job | What it does |
+|-----|-------------|
+| **Lint** | Runs `golangci-lint` with the project's `.golangci.yml` config |
+| **Test** | Runs `go test -race -coverprofile=coverage.out ./...` |
+| **Build** | Compiles all binaries (`cmd/api`, `cmd/collector`, `cmd/manager`) |
+
+All three jobs must pass before a PR can be merged. Results are posted as a sticky comment on the PR with test counts and coverage percentage.
+
+### Running CI Checks Locally
+
+```bash
+# Run tests (same as CI)
+make test
+
+# Run linter (requires golangci-lint v2.1+)
+make lint
+
+# Verify build
+make build
+```
+
+### Linter Configuration
+
+The project uses `golangci-lint` v2 with the `standard` preset. Configuration is in `.golangci.yml` at the project root. Generated code (`zz_generated.deepcopy.go`, protobuf files) is excluded automatically.
