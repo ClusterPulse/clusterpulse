@@ -87,4 +87,3 @@ kubeconfig
 # Build artifacts
 bin/
 manager
-collector
