@@ -455,8 +455,8 @@ func (a *Agent) extractNodeMetrics(node *corev1.Node, pods []corev1.Pod) *pb.Nod
 
 	// Roles
 	for label := range node.Labels {
-		if len(label) > 23 && label[:23] == "node-role.kubernetes.io/" {
-			nm.Roles = append(nm.Roles, label[23:])
+		if role, ok := strings.CutPrefix(label, "node-role.kubernetes.io/"); ok {
+			nm.Roles = append(nm.Roles, role)
 		}
 	}
 
