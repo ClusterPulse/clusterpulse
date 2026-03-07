@@ -10,8 +10,19 @@ permissions:
   pull-requests: write
 
 jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+
   lint:
     name: Lint
+    needs: setup
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +35,7 @@ jobs:
 
   test:
     name: Test
+    needs: setup
     runs-on: ubuntu-latest
     outputs:
       total: ${{ steps.coverage.outputs.total }}
@@ -41,9 +53,9 @@ jobs:
         if: always()
         id: coverage
         run: |
-          TOTAL=$(go tool cover -func=coverage.out 2>/dev/null | grep '^total:' | awk '{print $NF}' || echo "N/A")
-          PASSED=$(grep -c '^--- PASS' test-output.txt 2>/dev/null || echo "0")
-          FAILED=$(grep -c '^--- FAIL' test-output.txt 2>/dev/null || echo "0")
+          TOTAL=$(go tool cover -func=coverage.out 2>/dev/null | grep '^total:' | awk '{print $NF}') || TOTAL="N/A"
+          PASSED=$(grep -c '^--- PASS' test-output.txt 2>/dev/null) || PASSED=0
+          FAILED=$(grep -c '^--- FAIL' test-output.txt 2>/dev/null) || FAILED=0
           TESTS=$((PASSED + FAILED))
           echo "total=${TOTAL}" >> "$GITHUB_OUTPUT"
           echo "tests=${TESTS}" >> "$GITHUB_OUTPUT"
@@ -52,6 +64,7 @@ jobs:
 
   build:
     name: Build
+    needs: setup
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
