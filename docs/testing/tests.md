@@ -36,9 +36,9 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 | `internal/metricsource/compiler` | `compiler_test.go` | 30 | Validation, helpers (parseAPIVersion, pluralize, etc.) |
 | `internal/config` | `config_test.go` | 15 | Env var parsing (getEnv, getEnvInt, getEnvBool, getEnvIntWithMin) |
 | `internal/collector` | `buffer_test.go` | 10 | Bounded FIFO buffer with concurrent access |
-| `internal/collector` | `agent_test.go` | 4 | toFloat64, extractNodeMetrics helpers |
+| `internal/collector` | `agent_test.go` | 13 | toFloat64, extractNodeMetrics, strVal, applyConfig, extractOperatorProto, extractClusterOperatorProto |
 | `internal/rbac` | `types_test.go` | 20 | Principal/Resource/Request cache keys, MatchSpec, RBACDecision, CustomResourceDecision |
-| `internal/rbac` | `engine_test.go` | 19 | RBAC engine security |
+| `internal/rbac` | `engine_test.go` | 35 | RBAC engine security, FilterResources, evaluatePolicies (deny/disabled/default), matchCluster, matchesResource, aggregation rules, helpers |
 | `internal/rbac` | `filter_test.go` | 12 | buildMatcherFromCompiled, filter helpers, pattern compilation |
 | `internal/api` | `handlers_test.go` | 5 | HealthHandler + writeJSON |
 | `internal/api` | `aggregations_test.go` | 22 | getFieldValue, matchesFilter, computeSingle, computeGrouped, toFloat |
@@ -57,6 +57,10 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 
 | Package | File | Tests | What It Covers |
 |---------|------|-------|----------------|
+| `internal/client/cluster` | `client_test.go` | 14 | deriveConsoleURL, getStringValue, extractNodeMetrics (ready/unschedulable/notReady/noPods), extractClusterOperatorInfo, extractOperatorInfo, getLastUsed |
+| `internal/client/registry` | `client_test.go` | 15 | NewDockerV2Client, HealthCheck (OK/401/500/refused/auth), CheckCatalog (OK/maxEntries/error), detectRegistryInfo, ExtendedHealthCheck |
+| `internal/metricsource/collector` | `collector_test.go` | 8 | filterNamespaces (nil/include/exclude/combined/wildcards) |
+| `internal/version` | `version_test.go` | 1 | Default build variable values |
 | `internal/controller/cluster` | `cluster_controller_test.go` | 6 | getReconcileInterval, statusEqual, countAvailable, countDegraded |
 | `internal/controller/registry` | `registry_controller_test.go` | 12 | getReconcileInterval, calculateRegistryHealth, shouldUpdateStatus, generateHealthMessage, mapsEqual |
 
