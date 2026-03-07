@@ -517,6 +517,338 @@ func TestCustomResource_EmptyClusterSkipsSelectorCheck(t *testing.T) {
 // Helpers
 // =========================================================================
 
+// =========================================================================
+// FilterResources
+// =========================================================================
+
+func TestFilterResources_EmptyResources(t *testing.T) {
+	e := &Engine{}
+	principal := &Principal{Username: "alice"}
+	result := e.FilterResources(t.Context(), principal, nil, ResourceNode, "cluster1")
+	if result != nil {
+		t.Fatal("expected nil for empty resources")
+	}
+}
+
+func TestFilterResources_WithMatchers(t *testing.T) {
+	e := &Engine{}
+
+	resources := []map[string]any{
+		{"name": "node-prod-1", "labels": map[string]string{"env": "prod"}},
+		{"name": "node-dev-1", "labels": map[string]string{"env": "dev"}},
+		{"name": "node-prod-2", "labels": map[string]string{"env": "prod"}},
+	}
+
+	// Test matchesResource directly with a matcher that filters by name pattern
+	matcher := &ResourceMatcher{
+		Visibility: VisibilityFiltered,
+		Names: &MatchSpec{
+			Include:         make(map[string]struct{}),
+			Exclude:         make(map[string]struct{}),
+			IncludePatterns: []CompiledPattern{{Original: "node-prod-.*", Regexp: mustCompile("^node-prod-.*$")}},
+		},
+	}
+	handler := standardHandlers["nodes"]
+
+	var filtered []map[string]any
+	for _, r := range resources {
+		if e.matchesResource(r, matcher, handler) {
+			filtered = append(filtered, r)
+		}
+	}
+
+	if len(filtered) != 2 {
+		t.Fatalf("filtered count = %d, want 2", len(filtered))
+	}
+	for _, r := range filtered {
+		name := r["name"].(string)
+		if name != "node-prod-1" && name != "node-prod-2" {
+			t.Errorf("unexpected resource: %s", name)
+		}
+	}
+}
+
+// =========================================================================
+// evaluatePolicies — Deny overrides Allow
+// =========================================================================
+
+func TestEvaluatePolicies_DenyOverridesAllow(t *testing.T) {
+	e := &Engine{}
+
+	request := &Request{
+		Principal: &Principal{Username: "alice"},
+		Action:    ActionView,
+		Resource:  &Resource{Type: ResourceCluster, Name: "prod-1", Cluster: "prod-1"},
+	}
+
+	policies := []types.CompiledPolicy{
+		{
+			PolicyName: "deny-prod",
+			Effect:     "Deny",
+			Enabled:    true,
+			ClusterRules: []types.CompiledClusterRule{{
+				ClusterSelector: types.CompiledClusterSelector{MatchNames: []string{"prod-1"}},
+			}},
+		},
+		{
+			PolicyName: "allow-all",
+			Effect:     "Allow",
+			Enabled:    true,
+			ClusterRules: []types.CompiledClusterRule{{
+				ClusterSelector: types.CompiledClusterSelector{MatchNames: []string{"prod-1"}},
+				Permissions:     map[string]bool{"view": true},
+			}},
+		},
+	}
+
+	decision := e.evaluatePolicies(request, policies)
+	if decision.Decision != DecisionDeny {
+		t.Fatalf("expected Deny, got %s", decision.Decision)
+	}
+}
+
+func TestEvaluatePolicies_DisabledPolicySkipped(t *testing.T) {
+	e := &Engine{}
+
+	request := &Request{
+		Principal: &Principal{Username: "alice"},
+		Action:    ActionView,
+		Resource:  &Resource{Type: ResourceCluster, Name: "test", Cluster: "test"},
+	}
+
+	policies := []types.CompiledPolicy{
+		{
+			PolicyName: "disabled-allow",
+			Effect:     "Allow",
+			Enabled:    false,
+			ClusterRules: []types.CompiledClusterRule{{
+				ClusterSelector: types.CompiledClusterSelector{MatchNames: []string{"test"}},
+				Permissions:     map[string]bool{"view": true},
+			}},
+		},
+	}
+
+	decision := e.evaluatePolicies(request, policies)
+	if decision.Decision != DecisionDeny {
+		t.Fatal("expected Deny when only policy is disabled")
+	}
+}
+
+func TestEvaluatePolicies_DefaultClusterAccess(t *testing.T) {
+	e := &Engine{}
+
+	request := &Request{
+		Principal: &Principal{Username: "alice"},
+		Action:    ActionView,
+		Resource:  &Resource{Type: ResourceNode, Name: "node-1", Cluster: "unknown-cluster"},
+	}
+
+	policies := []types.CompiledPolicy{{
+		PolicyName:           "default-access",
+		Effect:               "Allow",
+		Enabled:              true,
+		DefaultClusterAccess: "allow",
+		ClusterRules:         []types.CompiledClusterRule{},
+	}}
+
+	decision := e.evaluatePolicies(request, policies)
+	if decision.Denied() {
+		t.Fatalf("expected Allow via defaultClusterAccess, got %s: %s", decision.Decision, decision.Reason)
+	}
+}
+
+// =========================================================================
+// matchCluster — pattern matching
+// =========================================================================
+
+func TestMatchCluster_ByPattern(t *testing.T) {
+	e := &Engine{}
+
+	resource := &Resource{Type: ResourceCluster, Name: "prod-east-1"}
+	policy := &types.CompiledPolicy{
+		ClusterRules: []types.CompiledClusterRule{{
+			ClusterSelector: types.CompiledClusterSelector{MatchPattern: "^prod-.*"},
+			Permissions:     map[string]bool{"view": true},
+		}},
+	}
+
+	result := e.matchCluster(resource, policy)
+	if result == nil {
+		t.Fatal("expected pattern match")
+	}
+}
+
+func TestMatchCluster_NoMatch(t *testing.T) {
+	e := &Engine{}
+
+	resource := &Resource{Type: ResourceCluster, Name: "dev-1"}
+	policy := &types.CompiledPolicy{
+		ClusterRules: []types.CompiledClusterRule{{
+			ClusterSelector: types.CompiledClusterSelector{MatchNames: []string{"prod-1"}},
+		}},
+	}
+
+	result := e.matchCluster(resource, policy)
+	if result != nil {
+		t.Fatal("expected no match")
+	}
+}
+
+// =========================================================================
+// matchesResource — nil matcher passthrough
+// =========================================================================
+
+func TestMatchesResource_NilMatcher(t *testing.T) {
+	e := &Engine{}
+	resource := map[string]any{"name": "anything"}
+	if !e.matchesResource(resource, nil, standardHandlers["nodes"]) {
+		t.Fatal("nil matcher should pass all resources")
+	}
+}
+
+func TestMatchesResource_VisibilityNone(t *testing.T) {
+	e := &Engine{}
+	resource := map[string]any{"name": "anything"}
+	matcher := &ResourceMatcher{Visibility: VisibilityNone}
+	if e.matchesResource(resource, matcher, standardHandlers["nodes"]) {
+		t.Fatal("VisibilityNone should reject all resources")
+	}
+}
+
+// =========================================================================
+// Custom resource aggregation filtering
+// =========================================================================
+
+func TestCustomResourceDecision_AggregationRules(t *testing.T) {
+	e := &Engine{}
+
+	policies := []types.CompiledPolicy{{
+		PolicyName: "vm-aggs",
+		Effect:     "Allow",
+		Enabled:    true,
+		ClusterRules: []types.CompiledClusterRule{{
+			ClusterSelector: types.CompiledClusterSelector{MatchPattern: ".*"},
+			Permissions:     map[string]bool{"view": true, "viewMetrics": true},
+			Resources: []types.CompiledResourceFilter{{
+				Type:       "virtualmachines",
+				Visibility: "all",
+				AggregationRules: &types.CompiledAggregationRules{
+					Include: []string{"total_count", "running_count"},
+					Exclude: []string{"secret_metric"},
+				},
+			}},
+		}},
+	}}
+
+	decision := e.evaluateCustomResourcePolicies("virtualmachines", "cluster1", ActionView, policies)
+	if decision.Denied() {
+		t.Fatal("expected Allow")
+	}
+
+	if !decision.IsAggregationAllowed("total_count") {
+		t.Error("expected total_count to be allowed")
+	}
+	if !decision.IsAggregationAllowed("running_count") {
+		t.Error("expected running_count to be allowed")
+	}
+	if decision.IsAggregationAllowed("secret_metric") {
+		t.Error("expected secret_metric to be denied")
+	}
+	if decision.IsAggregationAllowed("unknown_metric") {
+		t.Error("expected unknown_metric to be denied (not in include list)")
+	}
+}
+
+// =========================================================================
+// Helper functions
+// =========================================================================
+
+func TestIsStandardResourceType(t *testing.T) {
+	if !isStandardResourceType("nodes") {
+		t.Error("nodes should be standard")
+	}
+	if !isStandardResourceType("pods") {
+		t.Error("pods should be standard")
+	}
+	if isStandardResourceType("virtualmachines") {
+		t.Error("virtualmachines should not be standard")
+	}
+}
+
+func TestGetStr(t *testing.T) {
+	m := map[string]any{"name": "test", "count": 42}
+	if getStr(m, "name") != "test" {
+		t.Error("expected test")
+	}
+	if getStr(m, "count") != "" {
+		t.Error("expected empty for non-string")
+	}
+	if getStr(m, "missing") != "" {
+		t.Error("expected empty for missing")
+	}
+}
+
+func TestGetStringSlice(t *testing.T) {
+	// []any input
+	m := map[string]any{"ns": []any{"default", "kube-system"}}
+	result := getStringSlice(m, "ns")
+	if len(result) != 2 || result[0] != "default" {
+		t.Errorf("got %v", result)
+	}
+
+	// []string input
+	m2 := map[string]any{"ns": []string{"a", "b"}}
+	result2 := getStringSlice(m2, "ns")
+	if len(result2) != 2 {
+		t.Errorf("got %v", result2)
+	}
+
+	// missing key
+	if getStringSlice(m, "nope") != nil {
+		t.Error("expected nil for missing key")
+	}
+}
+
+func TestPermissionsFromRule(t *testing.T) {
+	// nil permissions defaults to view only
+	perms := permissionsFromRule(nil)
+	if _, ok := perms[ActionView]; !ok {
+		t.Error("expected view permission for nil input")
+	}
+	if len(perms) != 1 {
+		t.Errorf("expected 1 permission, got %d", len(perms))
+	}
+
+	// explicit permissions
+	perms2 := permissionsFromRule(map[string]bool{"view": true, "viewMetrics": true})
+	if _, ok := perms2[ActionView]; !ok {
+		t.Error("expected view")
+	}
+	if _, ok := perms2[ActionViewMetrics]; !ok {
+		t.Error("expected viewMetrics")
+	}
+}
+
+func TestOperatorNamespaces_ClusterWide(t *testing.T) {
+	r := map[string]any{"available_in_namespaces": []any{"*"}}
+	result := operatorNamespaces(r)
+	if result != nil {
+		t.Error("expected nil for cluster-wide operator")
+	}
+}
+
+func TestNamespaceName_FallbackToName(t *testing.T) {
+	r := map[string]any{"name": "my-ns"}
+	if namespaceName(r) != "my-ns" {
+		t.Error("expected fallback to name field")
+	}
+
+	r2 := map[string]any{"namespace": "explicit-ns", "name": "other"}
+	if namespaceName(r2) != "explicit-ns" {
+		t.Error("expected namespace field to take priority")
+	}
+}
+
 func mustCompile(pattern string) *regexp.Regexp {
 	return regexp.MustCompile(pattern)
 }

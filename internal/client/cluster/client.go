@@ -343,8 +343,8 @@ func (c *ClusterClient) extractNodeMetrics(node *corev1.Node, pods []corev1.Pod)
 
 	// Extract roles from labels
 	for label := range node.Labels {
-		if len(label) > 23 && label[:23] == "node-role.kubernetes.io/" {
-			metrics.Roles = append(metrics.Roles, label[23:])
+		if role, ok := strings.CutPrefix(label, "node-role.kubernetes.io/"); ok {
+			metrics.Roles = append(metrics.Roles, role)
 		}
 	}
 
