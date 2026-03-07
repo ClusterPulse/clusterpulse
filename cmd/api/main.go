@@ -60,7 +60,7 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to connect to Redis")
 	}
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 	logrus.Info("Connected to Redis")
 
 	// Create RBAC engine

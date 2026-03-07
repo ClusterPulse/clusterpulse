@@ -108,7 +108,7 @@ func (c *DockerV2Client) HealthCheck(ctx context.Context) (*HealthCheckResult, e
 		c.logger.WithError(err).Error("Health check failed")
 		return result, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check status code
 	switch resp.StatusCode {
@@ -154,7 +154,7 @@ func (c *DockerV2Client) CheckCatalog(ctx context.Context, maxEntries int) (*Cat
 	if err != nil {
 		return nil, fmt.Errorf("catalog request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
