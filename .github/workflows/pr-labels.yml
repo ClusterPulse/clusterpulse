@@ -2,6 +2,7 @@ name: Require PR Label
 
 on:
   pull_request:
+    branches: [main]
     types: [opened, labeled, unlabeled, synchronize]
 
 jobs:

@@ -1,11 +1,14 @@
-.PHONY: generate-crd-docs docs-serve
+SHELL := /bin/bash
 
-generate-crd-docs:
-	go run github.com/elastic/crd-ref-docs@v0.3.0 \
-		--source-path=api/v1alpha1 \
-		--config=docs/crd-ref-docs.yaml \
-		--renderer=markdown \
-		--output-path=docs/references/crds.md
+.PHONY: test lint build
 
-docs-serve: generate-crd-docs
-	mkdocs serve
+test:
+	set -o pipefail && go test -race -coverprofile=coverage.out ./... 2>&1 | tee test-output.txt
+
+lint:
+	golangci-lint run ./...
+
+build:
+	go build -o /dev/null ./cmd/api
+	go build -o /dev/null ./cmd/collector
+	go build -o /dev/null ./cmd/manager

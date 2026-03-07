@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, labeled, unlabeled, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+
+  lint:
+    name: Lint
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+
+  test:
+    name: Test
+    needs: setup
+    runs-on: ubuntu-latest
+    outputs:
+      total: ${{ steps.coverage.outputs.total }}
+      tests: ${{ steps.coverage.outputs.tests }}
+      passed: ${{ steps.coverage.outputs.passed }}
+      failed: ${{ steps.coverage.outputs.failed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee test-output.txt
+      - name: Parse results
+        if: always()
+        id: coverage
+        run: |
+          TOTAL=$(go tool cover -func=coverage.out 2>/dev/null | grep '^total:' | awk '{print $NF}') || TOTAL="N/A"
+          PASSED=$(grep -c '^--- PASS' test-output.txt 2>/dev/null) || PASSED=0
+          FAILED=$(grep -c '^--- FAIL' test-output.txt 2>/dev/null) || FAILED=0
+          TESTS=$((PASSED + FAILED))
+          echo "total=${TOTAL}" >> "$GITHUB_OUTPUT"
+          echo "tests=${TESTS}" >> "$GITHUB_OUTPUT"
+          echo "passed=${PASSED}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build all binaries
+        run: go build ./...
+
+  comment:
+    name: PR Comment
+    if: always() && github.event_name == 'pull_request'
+    needs: [lint, test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: ci-results
+          message: |
+            ## CI Results
+
+            | Check | Status |
+            |-------|--------|
+            | **Lint** | ${{ needs.lint.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+            | **Test** | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+            | **Build** | ${{ needs.build.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+
+            **Tests:** ${{ needs.test.outputs.passed || '0' }} passed, ${{ needs.test.outputs.failed || '0' }} failed (${{ needs.test.outputs.tests || '0' }} total) | **Coverage:** ${{ needs.test.outputs.total || 'N/A' }}
