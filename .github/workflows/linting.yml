@@ -31,7 +31,8 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1
+          version: v2.1.6
+          install-mode: goinstall
 
   test:
     name: Test
@@ -48,7 +49,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run tests
-        run: go test -race -coverprofile=coverage.out ./... 2>&1 | tee test-output.txt
+        run: go test -v -race -coverprofile=coverage.out ./... 2>&1 | tee test-output.txt
       - name: Parse results
         if: always()
         id: coverage
