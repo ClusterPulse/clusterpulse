@@ -257,12 +257,13 @@ func (r *RegistryReconciler) reconcileRegistry(ctx context.Context, regConn *v1a
 
 		// Log health changes at appropriate level
 		if previousHealth != string(health) {
-			if health == types.HealthHealthy {
+			switch health {
+			case types.HealthHealthy:
 				log.Infof("Registry %s is healthy (response: %dms)",
 					regConn.Name, healthResult.ResponseTime)
-			} else if health == types.HealthDegraded {
+			case types.HealthDegraded:
 				log.Warnf("Registry %s is degraded: %s", regConn.Name, message)
-			} else if health == types.HealthUnhealthy {
+			case types.HealthUnhealthy:
 				log.Errorf("Registry %s is unhealthy: %s", regConn.Name, message)
 			}
 		}

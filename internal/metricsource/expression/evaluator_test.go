@@ -275,16 +275,9 @@ func TestCoerceResult(t *testing.T) {
 
 	t.Run("float", func(t *testing.T) {
 		result := e.coerceResult(int64(5), "float")
-		if result != 0.0 {
-			// int64 toFloat returns 0 via default, but let's check the actual behavior
-			// Actually toFloat handles int64 -> returns float64(v)
-			// Wait, coerceResult calls toFloat which handles int64
-			// Let me re-check: the val passed is int64(5) from our test
+		if result != 5.0 {
+			t.Errorf("got %v, want 5.0", result)
 		}
-		// Actually, coerceResult(int64(5), "float") -> toFloat(int64(5)) -> float64(5)
-		// But we passed 3.7 above which returned int64(3)... Let me check
-		// coerceResult calls toFloat which is the package-level toFloat from evaluator.go
-		// toFloat handles int64 -> float64(val). So int64(5) -> 5.0
 	})
 
 	t.Run("boolean", func(t *testing.T) {

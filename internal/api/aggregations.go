@@ -250,7 +250,7 @@ func toFloat(v any) float64 {
 	default:
 		// Try parsing string as number
 		var f float64
-		fmt.Sscanf(fmt.Sprintf("%v", v), "%f", &f)
+		_, _ = fmt.Sscanf(fmt.Sprintf("%v", v), "%f", &f)
 		return f
 	}
 }

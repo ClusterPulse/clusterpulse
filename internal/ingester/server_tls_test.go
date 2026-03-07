@@ -46,9 +46,7 @@ func TestServerTLS(t *testing.T) {
 	addr := lis.Addr().String()
 
 	go func() {
-		if err := srv.grpcServer.Serve(lis); err != nil {
-			// Expected on graceful stop
-		}
+		_ = srv.grpcServer.Serve(lis)
 	}()
 
 	// Dial with TLS using the test CA

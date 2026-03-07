@@ -405,7 +405,9 @@ func (r *ClusterReconciler) storeCRDData(ctx context.Context, clusterConn *v1alp
 	}
 
 	if len(clusterConn.Spec.Labels) > 0 {
-		r.RedisClient.StoreClusterLabels(ctx, clusterConn.Name, clusterConn.Spec.Labels)
+		if err := r.RedisClient.StoreClusterLabels(ctx, clusterConn.Name, clusterConn.Spec.Labels); err != nil {
+			log.WithError(err).Debug("Failed to store cluster labels")
+		}
 	}
 }
 

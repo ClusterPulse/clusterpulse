@@ -150,7 +150,7 @@ func (w *VMWriter) send(ctx context.Context, lines []string) {
 		logrus.WithError(err).Debug("Failed to write to VictoriaMetrics")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		logrus.WithField("status", resp.StatusCode).Debug("VictoriaMetrics write returned non-2xx")

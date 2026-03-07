@@ -112,7 +112,7 @@ func main() {
 		setupLog.Error(err, "unable to create redis client")
 		os.Exit(1)
 	}
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	logrus.Info("Connected to Redis successfully")
 

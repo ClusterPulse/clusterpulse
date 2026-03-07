@@ -425,12 +425,13 @@ func parseJSONPath(path string) []string {
 
 	for i := 0; i < len(path); i++ {
 		ch := path[i]
-		if ch == '.' {
+		switch ch {
+		case '.':
 			if current != "" {
 				segments = append(segments, current)
 				current = ""
 			}
-		} else if ch == '[' {
+		case '[':
 			// Handle array index notation
 			if current != "" {
 				segments = append(segments, current)
@@ -442,7 +443,7 @@ func parseJSONPath(path string) []string {
 				segments = append(segments, path[i:i+end+1])
 				i += end
 			}
-		} else {
+		default:
 			current += string(ch)
 		}
 	}
