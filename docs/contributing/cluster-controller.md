@@ -6,7 +6,7 @@
 
 ```bash
 # Install dependencies
-# Requires Go 1.21+ and kubebuilder
+# Requires Go 1.25+ and kubebuilder
 go mod download
 
 # Install kubebuilder (for CRD generation)
