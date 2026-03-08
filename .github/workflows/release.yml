@@ -1,5 +1,5 @@
 # Release workflow - triggers when a release is published via GitHub UI
-# Only builds services that have changed since the last tag
+# Builds all service images unconditionally on every release
 
 name: Release
 
@@ -11,52 +11,8 @@ env:
   REGISTRY: quay.io
 
 jobs:
-  # Detect which services have changed since the last tag
-  detect-changes:
-    runs-on: ubuntu-latest
-    outputs:
-      api: ${{ steps.filter.outputs.api }}
-      cluster-controller: ${{ steps.filter.outputs.cluster-controller }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Get previous tag
-        id: prev-tag
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          echo "tag=${PREV_TAG}" >> $GITHUB_OUTPUT
-
-      # Currently doesn't do much as these will both build pretty much every time
-      - name: Detect changes
-        uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          base: ${{ steps.prev-tag.outputs.tag || github.event.repository.default_branch }}
-          filters: |
-            api:
-              - 'cmd/api/**'
-              - 'internal/**'
-              - 'api/**'
-              - 'pkg/**'
-              - 'go.mod'
-              - 'go.sum'
-              - 'Dockerfile.api'
-            cluster-controller:
-              - 'cmd/manager/**'
-              - 'internal/**'
-              - 'api/**'
-              - 'pkg/**'
-              - 'go.mod'
-              - 'go.sum'
-              - 'Dockerfile.cluster-controller'
-
   # Build and push API
   build-api:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,8 +57,6 @@ jobs:
 
   # Build and push Cluster Controller
   build-cluster-controller:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.cluster-controller == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -145,6 +99,122 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=min
 
+  # Build and push Collector
+  build-collector:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/clusterpulse/collector
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern=v{{major}}
+            type=sha,prefix=sha-
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: Dockerfile.collector
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TREE_STATE=clean
+            BUILD_DATE=${{ github.event.release.published_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=min
+
+  # Build and push UI
+  build-ui:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/clusterpulse/ui
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern=v{{major}}
+            type=sha,prefix=sha-
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: ui/
+          file: ui/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TREE_STATE=clean
+            BUILD_DATE=${{ github.event.release.published_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=min
+
+  # Create a release on the ClusterPulse/ui repo
+  release-ui:
+    needs: build-ui
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate deployer token
+        id: deployer-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYER_APP_ID }}
+          private-key: ${{ secrets.DEPLOYER_APP_PRIVATE_KEY }}
+          owner: ClusterPulse
+          repositories: operator,ui
+
+      - name: Create UI release
+        env:
+          GH_TOKEN: ${{ steps.deployer-token.outputs.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" \
+            --repo ClusterPulse/ui \
+            --title "ClusterPulse UI $VERSION" \
+            --notes "Automated release for ClusterPulse $VERSION.
+
+          **Source release:** ${{ github.server_url }}/${{ github.repository }}/releases/tag/$VERSION
+          **Image:** \`${{ env.REGISTRY }}/clusterpulse/ui:$VERSION\`
+          **Digest:** \`${{ needs.build-ui.outputs.digest }}\`"
+
   # Build and deploy documentation
   deploy-docs:
     runs-on: ubuntu-latest
@@ -181,12 +251,13 @@ jobs:
 
   # Update operator repo with new image tags and CRDs
   update-operator:
-    needs: [build-api, build-cluster-controller]
+    needs: [build-api, build-cluster-controller, build-collector, build-ui]
     if: >-
       !cancelled() &&
-      needs.build-api.result != 'failure' &&
-      needs.build-cluster-controller.result != 'failure' &&
-      (needs.build-api.result == 'success' || needs.build-cluster-controller.result == 'success')
+      needs.build-api.result == 'success' &&
+      needs.build-cluster-controller.result == 'success' &&
+      needs.build-collector.result == 'success' &&
+      needs.build-ui.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Generate deployer token
@@ -196,7 +267,7 @@ jobs:
           app-id: ${{ secrets.DEPLOYER_APP_ID }}
           private-key: ${{ secrets.DEPLOYER_APP_PRIVATE_KEY }}
           owner: ClusterPulse
-          repositories: operator
+          repositories: operator,ui
 
       - name: Checkout main repo
         uses: actions/checkout@v4
@@ -225,6 +296,7 @@ jobs:
           # Update image tags
           sed -i "s|image: quay.io/clusterpulse/api:.*|image: quay.io/clusterpulse/api:${VERSION}|" "$VALUES"
           sed -i "s|image: quay.io/clusterpulse/cluster-controller:.*|image: quay.io/clusterpulse/cluster-controller:${VERSION}|" "$VALUES"
+          sed -i "s|image: quay.io/clusterpulse/ui:.*|image: quay.io/clusterpulse/ui:${VERSION}|" "$VALUES"
 
           # Generate CRDs from Go types
           go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
@@ -264,7 +336,7 @@ jobs:
   # Update the GitHub Release with build info
   update-release:
     if: always()
-    needs: [detect-changes, build-api, build-cluster-controller, deploy-docs, update-operator]
+    needs: [build-api, build-cluster-controller, build-collector, build-ui, release-ui, deploy-docs, update-operator]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -289,21 +361,31 @@ jobs:
             echo "|---------|--------|--------|"
 
             # API
-            if [[ "${{ needs.detect-changes.outputs.api }}" != "true" ]]; then
-              echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Skipped (no changes) | — |"
-            elif [[ "${{ needs.build-api.result }}" == "success" ]]; then
+            if [[ "${{ needs.build-api.result }}" == "success" ]]; then
               echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Pushed | \`${{ needs.build-api.outputs.digest }}\` |"
             else
               echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Failed | — |"
             fi
 
             # Cluster Controller
-            if [[ "${{ needs.detect-changes.outputs.cluster-controller }}" != "true" ]]; then
-              echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Skipped (no changes) | — |"
-            elif [[ "${{ needs.build-cluster-controller.result }}" == "success" ]]; then
+            if [[ "${{ needs.build-cluster-controller.result }}" == "success" ]]; then
               echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Pushed | \`${{ needs.build-cluster-controller.outputs.digest }}\` |"
             else
               echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Failed | — |"
+            fi
+
+            # Collector
+            if [[ "${{ needs.build-collector.result }}" == "success" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/collector\` | Pushed | \`${{ needs.build-collector.outputs.digest }}\` |"
+            else
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/collector\` | Failed | — |"
+            fi
+
+            # UI
+            if [[ "${{ needs.build-ui.result }}" == "success" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/ui\` | Pushed | \`${{ needs.build-ui.outputs.digest }}\` |"
+            else
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/ui\` | Failed | — |"
             fi
 
             echo ""
@@ -314,6 +396,14 @@ jobs:
             echo "- \`v${TAG}\`"
             echo "- \`sha-${GITHUB_SHA::7}\`"
             echo "- \`latest\`"
+            echo ""
+            echo "### UI Release"
+            echo ""
+            if [[ "${{ needs.release-ui.result }}" == "success" ]]; then
+              echo "UI release created at [ClusterPulse/ui $TAG](${{ github.server_url }}/ClusterPulse/ui/releases/tag/$TAG)."
+            else
+              echo "UI release **failed** or was skipped."
+            fi
             echo ""
             echo "### Documentation"
             echo ""
