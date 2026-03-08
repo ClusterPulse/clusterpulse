@@ -153,7 +153,19 @@ jobs:
       tags: ${{ steps.meta.outputs.tags }}
       digest: ${{ steps.build.outputs.digest }}
     steps:
+      - name: Generate deployer token
+        id: deployer-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPLOYER_APP_ID }}
+          private-key: ${{ secrets.DEPLOYER_APP_PRIVATE_KEY }}
+          owner: ClusterPulse
+          repositories: ui
       - uses: actions/checkout@v4
+        with:
+          repository: ClusterPulse/ui
+          token: ${{ steps.deployer-token.outputs.token }}
+          path: ui
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -335,7 +347,7 @@ jobs:
 
   # Update the GitHub Release with build info
   update-release:
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [build-api, build-cluster-controller, build-collector, build-ui, release-ui, deploy-docs, update-operator]
     runs-on: ubuntu-latest
     permissions:
@@ -393,7 +405,7 @@ jobs:
             echo ""
             echo "All pushed images were tagged with:"
             echo ""
-            echo "- \`v${TAG}\`"
+            echo "- \`${TAG}\`"
             echo "- \`sha-${GITHUB_SHA::7}\`"
             echo "- \`latest\`"
             echo ""
