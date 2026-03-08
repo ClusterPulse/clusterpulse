@@ -28,7 +28,7 @@ ClusterPulse documentation is deployed via mkdocs. See more [here](https://clust
 
 ## 🏗️ Architecture
 
-![architecture](/docs/assets/architecture.jpg)
+![architecture](/docs/assets/architecture.png)
 
 ClusterPulse follows a microservices architecture with four core components:
 
@@ -39,6 +39,7 @@ ClusterPulse follows a microservices architecture with four core components:
 | **Cluster Controller** | Go | Connects to target clusters, collects metrics, and stores in Redis |
 | **Policy Controller** | Go | Compiles RBAC policies into optimized structures (runs within cluster-controller) |
 | **API** | Go, Chi | Serves filtered cluster data based on user permissions |
+| **Collector** | Go | gRPC agent deployed on target clusters, streams metrics to the manager's ingester |
 | **Frontend** | React, TypeScript, PatternFly | Provides intuitive dashboard for cluster monitoring |
 
 ### Data Flow
@@ -71,8 +72,7 @@ ClusterPulse follows a microservices architecture with four core components:
 - **OAuth2 Integration**: Seamless authentication with enterprise identity providers
 - **Dark Mode Support**: Reduce eye strain with theme preferences
 - **Responsive Design**: Access from desktop, tablet, or mobile devices
-- **Prometheus Metrics**: Export metrics for integration with existing monitoring
-- **High Availability**: Redis-backed storage with clustering support
+- **High Availability**: Redis-backed storage with replica support
 
 ## Deployment
 
@@ -103,18 +103,18 @@ Detailed documentation for each component:
 - **Frontend**: React, TypeScript
 - **Storage**: Redis
 - **Container**: Kubernetes/OpenShift
-- **Protocols**: REST API, WebSocket (future)
+- **Protocols**: REST API, gRPC (collector ingest)
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details. - TBD
+We welcome contributions! Please see our [Contributing Guides](./docs/contributing/) for details.
 
 ### Areas for Contribution
 - Additional cluster platform support
 - Enhanced visualizations and charts
 - Performance optimizations
 - Documentation improvements
-- Testing and quality assurance - (I've been bad about unit tests sorry >\_<)
+- Testing and quality assurance
 
 ## 📄 License
 

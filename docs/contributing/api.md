@@ -56,7 +56,6 @@ internal/rbac/
     engine.go                     # Core RBAC engine (authorize, filter)
     filter.go                     # Filter compilation and matching helpers
     cache.go                      # Decision cache (Redis-backed)
-  metrics.go                      # FilteredMetricsCalculator
 internal/api/
   config.go                       # API configuration (env vars)
   server.go                       # Chi router + middleware + graceful shutdown

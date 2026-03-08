@@ -159,7 +159,7 @@ go test ./internal/api/...
 
 ## Continuous Integration
 
-All tests run automatically on every pull request targeting `main` via GitHub Actions (`.github/workflows/ci.yml`).
+All tests run automatically on every pull request targeting `main` via GitHub Actions (`.github/workflows/linting.yml`).
 
 ### CI Jobs
 

@@ -4,7 +4,7 @@ ClusterPulse consists of several components that work together to provide
 secure multi-cluster monitoring with both pull and push-based collection modes.
 
 ## System Overview
-![Diagram](../assets/architecture.jpg)
+![Diagram](../assets/architecture.png)
 
 ## Components
 

@@ -115,7 +115,7 @@ The policy controller is registered in `cmd/manager/main.go` alongside the other
 
 ## Redis Data Format
 
-The Redis format **must remain identical** to the Python implementation since the API reads these structures at runtime.
+The Redis format **must remain identical** across the controller and API since the API reads these structures at runtime.
 
 ### Key Patterns
 
@@ -195,7 +195,7 @@ The `CompiledPolicy` struct uses snake_case JSON tags:
 
 ## Policy Compilation
 
-The `Compiler` in `internal/controller/policy/compiler.go` mirrors the Python `PolicyCompiler`:
+The `Compiler` in `internal/controller/policy/compiler.go` performs:
 
 1. **Validate** - identity, access, scope required; valid effect/priority
 2. **Extract subjects** - users/groups as-is, SAs → `system:serviceaccount:{ns}:{name}`
@@ -243,13 +243,13 @@ No code changes required. Add a new entry to the `resources` list in your `Monit
 
 ### Modifying Redis Storage
 
-1. Ensure changes are backward-compatible with the Python API
+1. Ensure changes are backward-compatible with the API
 2. Update `StorePolicy()` / `RemovePolicy()` in `internal/store/policy_storage.go`
 3. Test with `redis-cli` to verify key format matches expectations
 
 ## Coordination with API
 
-The policy controller and API are tightly coupled through Redis. The compiled format stored by the Go controller must match exactly what the Python API expects.
+The policy controller and API are tightly coupled through Redis. The compiled format stored by the controller must match exactly what the API expects.
 
 **Safe changes:** Adding optional fields with defaults in the API.
 **Breaking changes:** Renaming fields, changing data types, removing fields. These require coordinated deployment.
