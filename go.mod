@@ -1,6 +1,6 @@
 module github.com/clusterpulse/cluster-controller
 
-go 1.25.1
+go 1.26.1
 
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
