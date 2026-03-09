@@ -61,7 +61,7 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 | `internal/client/pool` | `pool_test.go` | 6 | Remove (existing/nonexistent/concurrent), Close, cleanupIdleClients (all idle/empty pool) |
 | `internal/client/cluster` | `client_test.go` | 24 | deriveConsoleURL, getStringValue, extractNodeMetrics (ready/unschedulable/notReady/noPods), extractClusterOperatorInfo, extractOperatorInfo, getLastUsed, GetNodeMetrics (populated/empty), GetClusterMetrics, GetNamespaces, TestConnection, collectDeployments/Services/StatefulSets/DaemonSets, GetResourceCollection (enabled/disabled) |
 | `internal/client/registry` | `client_test.go` | 15 | NewDockerV2Client, HealthCheck (OK/401/500/refused/auth), CheckCatalog (OK/maxEntries/error), detectRegistryInfo, ExtendedHealthCheck |
-| `internal/metricsource/collector` | `collector_test.go` | 8 | filterNamespaces (nil/include/exclude/combined/wildcards) |
+| `internal/metricsource/collector` | `collector_test.go` | 16 | filterNamespaces (nil/include/exclude/combined/wildcards), useClusterWideList (nil ns/exclude/wildcard/exact names/mixed) |
 | `internal/version` | `version_test.go` | 1 | Default build variable values |
 | `internal/controller/cluster` | `cluster_controller_test.go` | 13 | getReconcileInterval, statusEqual, countAvailable, countDegraded, Reconcile (NotFound, DeletionTimestamp), handleDeletion, storeCRDData, updateClusterStatus, getClusterClient (SecretNotFound, EmptyToken) |
 | `internal/controller/registry` | `registry_controller_test.go` | 17 | getReconcileInterval, calculateRegistryHealth, shouldUpdateStatus, generateHealthMessage, mapsEqual, Reconcile (NotFound, DeletionTimestamp), handleDeletion, storeRegistryData (success, with error) |

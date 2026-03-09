@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,26 +77,11 @@ func (c *Collector) Collect(
 		Resource: source.Source.Resource,
 	}
 
-	// Determine namespaces to collect from
-	namespaces, err := c.resolveNamespaces(ctx, dynamicClient, source)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve namespaces: %w", err)
-	}
-
-	log.Debugf("Collecting from %d namespaces", len(namespaces))
-
-	// Collect resources
-	var allResources []types.CustomCollectedResource
-	var collectMu sync.Mutex
-	var collectErrors []error
-	var errorMu sync.Mutex
-
-	// Use semaphore for parallelism control
-	sem := make(chan struct{}, source.Collection.Parallelism)
-
-	var wg sync.WaitGroup
 	maxResources := int(source.Collection.MaxResources)
 	truncated := false
+
+	var allResources []types.CustomCollectedResource
+	var collectErrors []error
 
 	if source.Source.Scope == "Cluster" {
 		resources, err := c.collectFromScope(ctx, dynamicClient, gvr, "", source, maxResources)
@@ -104,7 +90,53 @@ func (c *Collector) Collect(
 		}
 		allResources = resources
 		truncated = len(resources) >= maxResources
+	} else if useClusterWideList(source) {
+		// Single cluster-wide List + post-filter by namespace is faster than N per-namespace calls
+		resources, err := c.collectFromScope(ctx, dynamicClient, gvr, "", source, maxResources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to collect resources: %w", err)
+		}
+
+		// Build allowed namespace set for filtering
+		var allowedNS map[string]bool
+		if source.Source.Namespaces != nil {
+			allNamespaces, err := c.listAllNamespaces(ctx, dynamicClient)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve namespaces: %w", err)
+			}
+			filtered := c.filterNamespaces(allNamespaces, source)
+			allowedNS = make(map[string]bool, len(filtered))
+			for _, ns := range filtered {
+				allowedNS[ns] = true
+			}
+		}
+
+		if allowedNS != nil {
+			allResources = make([]types.CustomCollectedResource, 0, len(resources))
+			for _, r := range resources {
+				if allowedNS[r.Namespace] {
+					allResources = append(allResources, r)
+				}
+			}
+		} else {
+			allResources = resources
+		}
+		truncated = len(allResources) >= maxResources
+		log.Debugf("Cluster-wide list collected %d resources (filtered from %d)", len(allResources), len(resources))
 	} else {
+		// Small set of exact namespace names — per-namespace List is efficient
+		namespaces, err := c.resolveNamespaces(ctx, dynamicClient, source)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve namespaces: %w", err)
+		}
+
+		log.Debugf("Collecting from %d namespaces", len(namespaces))
+
+		var collectMu sync.Mutex
+		var errorMu sync.Mutex
+		sem := make(chan struct{}, source.Collection.Parallelism)
+
+		var wg sync.WaitGroup
 		for _, ns := range namespaces {
 			collectMu.Lock()
 			currentCount := len(allResources)
@@ -345,6 +377,27 @@ func (c *Collector) listAllNamespaces(ctx context.Context, dynamicClient dynamic
 	}
 
 	return namespaces, nil
+}
+
+// useClusterWideList returns true when a single cluster-wide List + post-filter
+// is more efficient than per-namespace iteration. This applies when:
+// - no namespace config (collect all): single List, no filter needed
+// - patterns with wildcards or excludes: single List + filter avoids N calls
+// Exact namespace names without excludes use per-namespace List (less data transferred).
+func useClusterWideList(source *types.CompiledMetricSource) bool {
+	ns := source.Source.Namespaces
+	if ns == nil {
+		return true // collect all namespaces
+	}
+	if len(ns.Exclude) > 0 {
+		return true // excludes require resolving all namespaces anyway
+	}
+	for _, pattern := range ns.Include {
+		if strings.ContainsAny(pattern, "*?") {
+			return true // wildcard requires namespace resolution
+		}
+	}
+	return false // exact names only — per-namespace List is fine
 }
 
 // filterNamespaces applies include/exclude patterns to namespace list

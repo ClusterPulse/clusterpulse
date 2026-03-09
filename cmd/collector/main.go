@@ -49,6 +49,8 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to get in-cluster config")
 	}
+	restConfig.QPS = 50
+	restConfig.Burst = 100
 
 	dynamicClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {

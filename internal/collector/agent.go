@@ -396,17 +396,9 @@ func (a *Agent) collectClusterAndNodeMetrics(ctx context.Context) (*pb.ClusterMe
 		return nil, nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
 
-	pods, err := a.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	podsByNode, err := a.listPodsByNode(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	// Group pods by node
-	podsByNode := make(map[string][]corev1.Pod)
-	for _, pod := range pods.Items {
-		if pod.Spec.NodeName != "" {
-			podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
-		}
+		return nil, nil, err
 	}
 
 	cm := &pb.ClusterMetrics{}
@@ -533,6 +525,32 @@ func (a *Agent) extractNodeMetrics(node *corev1.Node, pods []corev1.Pod) *pb.Nod
 	}
 
 	return nm
+}
+
+// listPodsByNode lists all pods with pagination and groups them by node name.
+func (a *Agent) listPodsByNode(ctx context.Context) (map[string][]corev1.Pod, error) {
+	podsByNode := make(map[string][]corev1.Pod)
+	listOpts := metav1.ListOptions{Limit: 500}
+
+	for {
+		pods, err := a.clientset.CoreV1().Pods("").List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list pods: %w", err)
+		}
+
+		for _, pod := range pods.Items {
+			if pod.Spec.NodeName != "" {
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
+			}
+		}
+
+		if pods.Continue == "" {
+			break
+		}
+		listOpts.Continue = pods.Continue
+	}
+
+	return podsByNode, nil
 }
 
 // collectOperators queries OLM Subscriptions + CSVs and returns proto OperatorInfo.
