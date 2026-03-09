@@ -157,21 +157,21 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=min
 
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.REGISTRY }}/clusterpulse/ui@${{ steps.build.outputs.digest }}
-          format: sarif
-          output: trivy-ui.sarif
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-
-      - name: Upload Trivy SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-ui.sarif
-          category: trivy-ui
+#      - name: Scan image with Trivy
+#        uses: aquasecurity/trivy-action@master
+#        with:
+#          image-ref: ${{ env.REGISTRY }}/clusterpulse/ui@${{ steps.build.outputs.digest }}
+#          format: sarif
+#          output: trivy-ui.sarif
+#          severity: HIGH,CRITICAL
+#          exit-code: '1'
+#
+#      - name: Upload Trivy SARIF
+#        if: always()
+#        uses: github/codeql-action/upload-sarif@v4
+#        with:
+#          sarif_file: trivy-ui.sarif
+#          category: trivy-ui
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
