@@ -125,11 +125,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: bufbuild/buf-action@v1
         with:
           lint: true
           breaking: true
-          breaking_against: ${{ github.event.pull_request.base.sha }}
+          breaking_against: .git#ref=${{ github.event.pull_request.base.sha }}
 
   comment:
     name: PR Comment
