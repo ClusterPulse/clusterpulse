@@ -648,7 +648,7 @@ func newFakeClusterClient(t *testing.T, objs ...runtime.Object) *ClusterClient {
 	t.Helper()
 	return &ClusterClient{
 		Name:           "test-cluster",
-		clientset:      k8sfake.NewSimpleClientset(objs...),
+		clientset:      k8sfake.NewClientset(objs...),
 		circuitBreaker: utils.NewCircuitBreaker(5, 60*time.Second),
 		lastUsed:       time.Now(),
 	}
