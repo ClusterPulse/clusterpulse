@@ -8,7 +8,8 @@
       "description": "Group Go toolchain updates (go.mod directive + Dockerfile base image)",
       "groupName": "Go toolchain",
       "matchDepNames": ["go", "golang"],
-      "addLabels": ["go"]
+      "addLabels": ["go"],
+      "rangeStrategy": "bump"
     },
     {
       "description": "Group minor/patch Go dependency updates",
