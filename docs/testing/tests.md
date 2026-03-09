@@ -48,6 +48,7 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 | `internal/api` | `middleware_test.go` | 5 | getPrincipal, securityHeaders, resolveGroups |
 | `internal/controller/policy` | `compiler_test.go` | 18 | Policy compilation, subject extraction, permissions |
 | `internal/controller/policy` | `validator_test.go` | 6 | Policy validation, lifecycle parsing |
+| `internal/controller/policy` | `policy_controller_test.go` | 7 | Reconcile (create/NotFound/DeletionTimestamp/compilation error), handleDeletion (Redis cleanup), updateStatusError, EvalCacheCleaner.Start |
 | `internal/ingester` | `handler_test.go` | 8 | Proto-to-internal type conversions |
 | `internal/ingester` | `vmwriter_test.go` | 4 | formatLine, boolToInt, VMWriter.Send |
 | `internal/ingester` | `server_tls_test.go` | 2 | TLS cert/key loading |
@@ -57,12 +58,14 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 
 | Package | File | Tests | What It Covers |
 |---------|------|-------|----------------|
-| `internal/client/cluster` | `client_test.go` | 14 | deriveConsoleURL, getStringValue, extractNodeMetrics (ready/unschedulable/notReady/noPods), extractClusterOperatorInfo, extractOperatorInfo, getLastUsed |
+| `internal/client/pool` | `pool_test.go` | 6 | Remove (existing/nonexistent/concurrent), Close, cleanupIdleClients (all idle/empty pool) |
+| `internal/client/cluster` | `client_test.go` | 24 | deriveConsoleURL, getStringValue, extractNodeMetrics (ready/unschedulable/notReady/noPods), extractClusterOperatorInfo, extractOperatorInfo, getLastUsed, GetNodeMetrics (populated/empty), GetClusterMetrics, GetNamespaces, TestConnection, collectDeployments/Services/StatefulSets/DaemonSets, GetResourceCollection (enabled/disabled) |
 | `internal/client/registry` | `client_test.go` | 15 | NewDockerV2Client, HealthCheck (OK/401/500/refused/auth), CheckCatalog (OK/maxEntries/error), detectRegistryInfo, ExtendedHealthCheck |
 | `internal/metricsource/collector` | `collector_test.go` | 8 | filterNamespaces (nil/include/exclude/combined/wildcards) |
 | `internal/version` | `version_test.go` | 1 | Default build variable values |
-| `internal/controller/cluster` | `cluster_controller_test.go` | 6 | getReconcileInterval, statusEqual, countAvailable, countDegraded |
-| `internal/controller/registry` | `registry_controller_test.go` | 12 | getReconcileInterval, calculateRegistryHealth, shouldUpdateStatus, generateHealthMessage, mapsEqual |
+| `internal/controller/cluster` | `cluster_controller_test.go` | 13 | getReconcileInterval, statusEqual, countAvailable, countDegraded, Reconcile (NotFound, DeletionTimestamp), handleDeletion, storeCRDData, updateClusterStatus, getClusterClient (SecretNotFound, EmptyToken) |
+| `internal/controller/registry` | `registry_controller_test.go` | 17 | getReconcileInterval, calculateRegistryHealth, shouldUpdateStatus, generateHealthMessage, mapsEqual, Reconcile (NotFound, DeletionTimestamp), handleDeletion, storeRegistryData (success, with error) |
+| `internal/controller/metricsource` | `metricsource_controller_test.go` | 8 | InvalidateClusterClient, GetCachedMetricSource (hit/miss), handleDeletion (cache+Redis cleanup), updateStatusSuccess, updateStatusError, Reconcile (NotFound, DeletionTimestamp) |
 
 ### Miniredis-Backed Tests (store layer + RBAC cache)
 

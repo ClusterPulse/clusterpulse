@@ -1,14 +1,19 @@
 package cluster
 
 import (
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/clusterpulse/cluster-controller/pkg/types"
+	"github.com/clusterpulse/cluster-controller/pkg/utils"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 func TestDeriveConsoleURL(t *testing.T) {
@@ -632,5 +637,399 @@ func TestGetLastUsed(t *testing.T) {
 	after := client.GetLastUsed()
 	if !after.After(before) && after != before {
 		t.Error("expected lastUsed to be updated")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
+
+func newFakeClusterClient(t *testing.T, objs ...runtime.Object) *ClusterClient {
+	t.Helper()
+	return &ClusterClient{
+		Name:           "test-cluster",
+		clientset:      k8sfake.NewSimpleClientset(objs...),
+		circuitBreaker: utils.NewCircuitBreaker(5, 60*time.Second),
+		lastUsed:       time.Now(),
+	}
+}
+
+func int32Ptr(v int32) *int32 { return &v }
+
+// ---------------------------------------------------------------------------
+// GetNodeMetrics
+// ---------------------------------------------------------------------------
+
+func TestGetNodeMetrics(t *testing.T) {
+	node1 := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+		Status: corev1.NodeStatus{
+			Conditions:  []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")},
+			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")},
+		},
+	}
+	node2 := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-2"},
+		Status: corev1.NodeStatus{
+			Conditions:  []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8")},
+			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8")},
+		},
+	}
+	pod1 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	pod2 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-2", Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	pod3 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-3", Namespace: "kube-system"},
+		Spec:       corev1.PodSpec{NodeName: "node-2"},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+
+	c := newFakeClusterClient(t, node1, node2, pod1, pod2, pod3)
+	metrics, err := c.GetNodeMetrics(t.Context())
+	if err != nil {
+		t.Fatalf("GetNodeMetrics() error = %v", err)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("got %d NodeMetrics, want 2", len(metrics))
+	}
+
+	// Build a lookup by name for stable assertions
+	byName := map[string]types.NodeMetrics{}
+	for _, m := range metrics {
+		byName[m.Name] = m
+	}
+
+	// node-1 should have 2 pods
+	if n1 := byName["node-1"]; n1.PodsTotal != 2 {
+		t.Errorf("node-1 PodsTotal = %d, want 2", n1.PodsTotal)
+	}
+	// node-2 should have 1 pod
+	if n2 := byName["node-2"]; n2.PodsTotal != 1 {
+		t.Errorf("node-2 PodsTotal = %d, want 1", n2.PodsTotal)
+	}
+}
+
+func TestGetNodeMetrics_Empty(t *testing.T) {
+	c := newFakeClusterClient(t)
+	metrics, err := c.GetNodeMetrics(t.Context())
+	if err != nil {
+		t.Fatalf("GetNodeMetrics() error = %v", err)
+	}
+	if len(metrics) != 0 {
+		t.Errorf("got %d NodeMetrics, want 0", len(metrics))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetClusterMetrics
+// ---------------------------------------------------------------------------
+
+func TestGetClusterMetrics(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+		Status: corev1.NodeStatus{
+			Conditions:  []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+			Capacity:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8"), corev1.ResourceMemory: resource.MustParse("32Gi")},
+			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8"), corev1.ResourceMemory: resource.MustParse("32Gi")},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	ns1 := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	ns2 := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+		Spec:       appsv1.DeploymentSpec{Replicas: int32Ptr(2)},
+	}
+
+	c := newFakeClusterClient(t, node, pod, ns1, ns2, dep)
+	m, err := c.GetClusterMetrics(t.Context())
+	if err != nil {
+		t.Fatalf("GetClusterMetrics() error = %v", err)
+	}
+	if m.Nodes != 1 {
+		t.Errorf("Nodes = %d, want 1", m.Nodes)
+	}
+	if m.NodesReady != 1 {
+		t.Errorf("NodesReady = %d, want 1", m.NodesReady)
+	}
+	if m.Namespaces != 2 {
+		t.Errorf("Namespaces = %d, want 2", m.Namespaces)
+	}
+	if m.Deployments != 1 {
+		t.Errorf("Deployments = %d, want 1", m.Deployments)
+	}
+	if m.Pods != 1 {
+		t.Errorf("Pods = %d, want 1", m.Pods)
+	}
+	if m.PodsRunning != 1 {
+		t.Errorf("PodsRunning = %d, want 1", m.PodsRunning)
+	}
+	if m.CPUCapacity != 8 {
+		t.Errorf("CPUCapacity = %v, want 8", m.CPUCapacity)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetNamespaces
+// ---------------------------------------------------------------------------
+
+func TestGetNamespaces(t *testing.T) {
+	ns1 := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}}
+	ns2 := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "bravo"}}
+	ns3 := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "charlie"}}
+
+	c := newFakeClusterClient(t, ns1, ns2, ns3)
+	got, err := c.GetNamespaces(t.Context())
+	if err != nil {
+		t.Fatalf("GetNamespaces() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d namespaces, want 3", len(got))
+	}
+	slices.Sort(got)
+	want := []string{"alpha", "bravo", "charlie"}
+	if !slices.Equal(got, want) {
+		t.Errorf("namespaces = %v, want %v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestConnection
+// ---------------------------------------------------------------------------
+
+func TestTestConnection(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	c := newFakeClusterClient(t, ns)
+	if err := c.TestConnection(t.Context()); err != nil {
+		t.Fatalf("TestConnection() error = %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collectDeployments
+// ---------------------------------------------------------------------------
+
+func TestCollectDeployments(t *testing.T) {
+	dep1 := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default", Labels: map[string]string{"app": "api"}},
+		Spec:       appsv1.DeploymentSpec{Replicas: int32Ptr(3)},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 2},
+	}
+	dep2 := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "jobs"},
+		Spec:       appsv1.DeploymentSpec{Replicas: int32Ptr(1)},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
+	}
+
+	c := newFakeClusterClient(t, dep1, dep2)
+	cfg := types.CollectionConfig{Enabled: true, MaxDeployments: 10, IncludeLabels: true}
+	deps, truncated := c.collectDeployments(t.Context(), cfg)
+	if truncated {
+		t.Error("expected truncated = false")
+	}
+	if len(deps) != 2 {
+		t.Fatalf("got %d deployments, want 2", len(deps))
+	}
+
+	// Find api deployment
+	idx := slices.IndexFunc(deps, func(d types.DeploymentSummary) bool { return d.Name == "api" })
+	if idx < 0 {
+		t.Fatal("deployment 'api' not found")
+	}
+	if deps[idx].Replicas != 3 {
+		t.Errorf("api Replicas = %d, want 3", deps[idx].Replicas)
+	}
+	if deps[idx].Ready != 2 {
+		t.Errorf("api Ready = %d, want 2", deps[idx].Ready)
+	}
+	if deps[idx].Labels["app"] != "api" {
+		t.Errorf("api Labels = %v, want app=api", deps[idx].Labels)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collectServices
+// ---------------------------------------------------------------------------
+
+func TestCollectServices(t *testing.T) {
+	svc1 := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "web"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: "10.0.0.1"},
+	}
+	svc2 := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "lb", Namespace: "web"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer, ClusterIP: "10.0.0.2"},
+	}
+
+	c := newFakeClusterClient(t, svc1, svc2)
+	cfg := types.CollectionConfig{Enabled: true, MaxServices: 10}
+	svcs, truncated := c.collectServices(t.Context(), cfg)
+	if truncated {
+		t.Error("expected truncated = false")
+	}
+	if len(svcs) != 2 {
+		t.Fatalf("got %d services, want 2", len(svcs))
+	}
+
+	idx := slices.IndexFunc(svcs, func(s types.ServiceSummary) bool { return s.Name == "frontend" })
+	if idx < 0 {
+		t.Fatal("service 'frontend' not found")
+	}
+	if svcs[idx].Type != string(corev1.ServiceTypeClusterIP) {
+		t.Errorf("frontend Type = %q, want ClusterIP", svcs[idx].Type)
+	}
+	if svcs[idx].ClusterIP != "10.0.0.1" {
+		t.Errorf("frontend ClusterIP = %q, want 10.0.0.1", svcs[idx].ClusterIP)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collectStatefulSets
+// ---------------------------------------------------------------------------
+
+func TestCollectStatefulSets(t *testing.T) {
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "redis", Namespace: "cache"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(3)},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 3},
+	}
+
+	c := newFakeClusterClient(t, sts)
+	cfg := types.CollectionConfig{Enabled: true, MaxDeployments: 10}
+	sets, truncated := c.collectStatefulSets(t.Context(), cfg)
+	if truncated {
+		t.Error("expected truncated = false")
+	}
+	if len(sets) != 1 {
+		t.Fatalf("got %d statefulsets, want 1", len(sets))
+	}
+	if sets[0].Name != "redis" {
+		t.Errorf("Name = %q, want redis", sets[0].Name)
+	}
+	if sets[0].Replicas != 3 {
+		t.Errorf("Replicas = %d, want 3", sets[0].Replicas)
+	}
+	if sets[0].Ready != 3 {
+		t.Errorf("Ready = %d, want 3", sets[0].Ready)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collectDaemonSets
+// ---------------------------------------------------------------------------
+
+func TestCollectDaemonSets(t *testing.T) {
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "fluentd", Namespace: "logging"},
+		Status: appsv1.DaemonSetStatus{
+			DesiredNumberScheduled: 5,
+			CurrentNumberScheduled: 5,
+			NumberReady:            4,
+		},
+	}
+
+	c := newFakeClusterClient(t, ds)
+	cfg := types.CollectionConfig{Enabled: true}
+	sets, truncated := c.collectDaemonSets(t.Context(), cfg)
+	if truncated {
+		t.Error("expected truncated = false")
+	}
+	if len(sets) != 1 {
+		t.Fatalf("got %d daemonsets, want 1", len(sets))
+	}
+	if sets[0].Name != "fluentd" {
+		t.Errorf("Name = %q, want fluentd", sets[0].Name)
+	}
+	if sets[0].DesiredNumber != 5 {
+		t.Errorf("DesiredNumber = %d, want 5", sets[0].DesiredNumber)
+	}
+	if sets[0].ReadyNumber != 4 {
+		t.Errorf("ReadyNumber = %d, want 4", sets[0].ReadyNumber)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetResourceCollection
+// ---------------------------------------------------------------------------
+
+func TestGetResourceCollection(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "d1", Namespace: "default"},
+		Spec:       appsv1.DeploymentSpec{Replicas: int32Ptr(1)},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "s1", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: "10.0.0.1"},
+	}
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "ss1", Namespace: "default"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+	}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "ds1", Namespace: "default"},
+		Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 1, NumberReady: 1},
+	}
+
+	c := newFakeClusterClient(t, pod, dep, svc, sts, ds)
+	cfg := types.CollectionConfig{
+		Enabled:        true,
+		MaxTotalPods:   100,
+		MaxDeployments: 100,
+		MaxServices:    100,
+	}
+	rc, err := c.GetResourceCollection(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("GetResourceCollection() error = %v", err)
+	}
+	if rc == nil {
+		t.Fatal("expected non-nil ResourceCollection")
+	}
+	// Fake clientset ignores field selectors, so the pod is returned regardless
+	if len(rc.Pods) != 1 {
+		t.Errorf("Pods = %d, want 1", len(rc.Pods))
+	}
+	if len(rc.Deployments) != 1 {
+		t.Errorf("Deployments = %d, want 1", len(rc.Deployments))
+	}
+	if len(rc.Services) != 1 {
+		t.Errorf("Services = %d, want 1", len(rc.Services))
+	}
+	if len(rc.StatefulSets) != 1 {
+		t.Errorf("StatefulSets = %d, want 1", len(rc.StatefulSets))
+	}
+	if len(rc.DaemonSets) != 1 {
+		t.Errorf("DaemonSets = %d, want 1", len(rc.DaemonSets))
+	}
+	if rc.TotalResources != 5 {
+		t.Errorf("TotalResources = %d, want 5", rc.TotalResources)
+	}
+}
+
+func TestGetResourceCollection_Disabled(t *testing.T) {
+	c := newFakeClusterClient(t)
+	cfg := types.CollectionConfig{Enabled: false}
+	rc, err := c.GetResourceCollection(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("GetResourceCollection() error = %v", err)
+	}
+	if rc != nil {
+		t.Errorf("expected nil ResourceCollection when disabled, got %+v", rc)
 	}
 }
