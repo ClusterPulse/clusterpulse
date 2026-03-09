@@ -19,7 +19,8 @@
       ],
       "addLabels": [
         "go"
-      ]
+      ],
+      "rangeStrategy": "bump"
     },
     {
       "description": "Group minor/patch Go dependency updates",
