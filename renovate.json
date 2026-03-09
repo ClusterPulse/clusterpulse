@@ -40,6 +40,16 @@
       ]
     },
     {
+      "description": "Group Docker updates",
+      "groupName": "Docker",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "addLabels": [
+        "docker"
+      ]
+    },
+    {
       "description": "Group all GitHub Actions updates",
       "groupName": "GitHub Actions",
       "matchManagers": [
