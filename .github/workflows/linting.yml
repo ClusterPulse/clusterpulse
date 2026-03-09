@@ -91,7 +91,7 @@ jobs:
 
   docker-build:
     name: Docker Build (${{ matrix.service }})
-    if: contains(github.event.pull_request.labels.*.name, 'dependencies') && contains(github.event.pull_request.labels.*.name, 'go')
+    if: contains(github.event.pull_request.labels.*.name, 'dependencies') && (contains(github.event.pull_request.labels.*.name, 'go') || contains(github.event.pull_request.labels.*.name, 'docker'))
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
