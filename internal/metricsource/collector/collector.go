@@ -208,11 +208,8 @@ func (c *Collector) Collect(
 	if len(collectErrors) > 0 {
 		log.Warnf("Collection completed with %d errors: %d resources collected (truncated: %v, took %dms)",
 			len(collectErrors), len(allResources), truncated, result.Collection.DurationMs)
-	} else if result.Collection.DurationMs > 5000 {
-		log.Infof("Collection completed: %d resources (truncated: %v, took %dms)",
-			len(allResources), truncated, result.Collection.DurationMs)
 	} else {
-		log.Debugf("Collection completed: %d resources (truncated: %v, took %dms)",
+		log.Infof("Collection completed: %d resources (truncated: %v, took %dms)",
 			len(allResources), truncated, result.Collection.DurationMs)
 	}
 

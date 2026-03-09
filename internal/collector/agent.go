@@ -210,7 +210,10 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 	// Flush any buffered batches first
 	a.flushBuffer(ctx, stream)
 
-	// Collection loop
+	// Trigger immediate first collection, then switch to ticker
+	collectCh := make(chan struct{}, 1)
+	collectCh <- struct{}{}
+
 	ticker := time.NewTicker(time.Duration(a.config.CollectIntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
@@ -226,25 +229,15 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 		case err := <-recvDone:
 			return fmt.Errorf("receive loop ended: %w", err)
 
+		case <-collectCh:
+			if err := a.collectAndSend(ctx, log, stream); err != nil {
+				return err
+			}
+
 		case <-ticker.C:
-			batch, err := a.collectMetrics(ctx)
-			if err != nil {
-				log.WithError(err).Warn("Collection failed")
-				continue
+			if err := a.collectAndSend(ctx, log, stream); err != nil {
+				return err
 			}
-
-			if err := stream.Send(&pb.ConnectRequest{
-				Payload: &pb.ConnectRequest_Metrics{Metrics: batch},
-			}); err != nil {
-				// Buffer the batch for retry
-				a.buffer.Push(batch)
-				return fmt.Errorf("failed to send metrics: %w", err)
-			}
-
-			log.WithFields(logrus.Fields{
-				"batch_id":         batch.BatchId,
-				"custom_resources": len(batch.CustomResources),
-			}).Debug("Pushed metrics batch")
 
 		case <-heartbeat.C:
 			if err := stream.Send(&pb.ConnectRequest{
@@ -261,6 +254,27 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (a *Agent) collectAndSend(ctx context.Context, log *logrus.Entry, stream pb.CollectorService_ConnectClient) error {
+	batch, err := a.collectMetrics(ctx)
+	if err != nil {
+		log.WithError(err).Warn("Collection failed")
+		return nil // collection errors are non-fatal
+	}
+
+	if err := stream.Send(&pb.ConnectRequest{
+		Payload: &pb.ConnectRequest_Metrics{Metrics: batch},
+	}); err != nil {
+		a.buffer.Push(batch)
+		return fmt.Errorf("failed to send metrics: %w", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"batch_id":         batch.BatchId,
+		"custom_resources": len(batch.CustomResources),
+	}).Info("Pushed metrics batch")
+	return nil
 }
 
 func (a *Agent) receiveLoop(ctx context.Context, stream pb.CollectorService_ConnectClient) error {
