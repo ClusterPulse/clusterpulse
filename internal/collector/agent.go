@@ -186,8 +186,8 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 	a.stream = stream
 
 	// Register
-	if err := stream.Send(&pb.CollectorMessage{
-		Payload: &pb.CollectorMessage_Register{
+	if err := stream.Send(&pb.ConnectRequest{
+		Payload: &pb.ConnectRequest_Register{
 			Register: &pb.RegisterRequest{
 				ClusterName: a.config.ClusterName,
 				Token:       a.config.Token,
@@ -233,8 +233,8 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 				continue
 			}
 
-			if err := stream.Send(&pb.CollectorMessage{
-				Payload: &pb.CollectorMessage_Metrics{Metrics: batch},
+			if err := stream.Send(&pb.ConnectRequest{
+				Payload: &pb.ConnectRequest_Metrics{Metrics: batch},
 			}); err != nil {
 				// Buffer the batch for retry
 				a.buffer.Push(batch)
@@ -247,8 +247,8 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 			}).Debug("Pushed metrics batch")
 
 		case <-heartbeat.C:
-			if err := stream.Send(&pb.CollectorMessage{
-				Payload: &pb.CollectorMessage_Health{
+			if err := stream.Send(&pb.ConnectRequest{
+				Payload: &pb.ConnectRequest_Health{
 					Health: &pb.HealthReport{
 						ClusterName:     a.config.ClusterName,
 						Timestamp:       timestamppb.Now(),
@@ -276,11 +276,11 @@ func (a *Agent) receiveLoop(ctx context.Context, stream pb.CollectorService_Conn
 		}
 
 		switch payload := msg.Payload.(type) {
-		case *pb.IngesterMessage_Config:
+		case *pb.ConnectResponse_Config:
 			a.applyConfig(payload.Config)
 			log.Infof("Received config update: %d metric sources", len(payload.Config.MetricSourcesJson))
 
-		case *pb.IngesterMessage_Ack:
+		case *pb.ConnectResponse_Ack:
 			if !payload.Ack.Success {
 				log.WithField("batch_id", payload.Ack.BatchId).
 					Warnf("Batch rejected: %s", payload.Ack.Error)
@@ -844,8 +844,8 @@ func (a *Agent) flushBuffer(ctx context.Context, stream pb.CollectorService_Conn
 		if batch == nil {
 			return
 		}
-		if err := stream.Send(&pb.CollectorMessage{
-			Payload: &pb.CollectorMessage_Metrics{Metrics: batch},
+		if err := stream.Send(&pb.ConnectRequest{
+			Payload: &pb.ConnectRequest_Metrics{Metrics: batch},
 		}); err != nil {
 			// Put it back
 			a.buffer.Push(batch)

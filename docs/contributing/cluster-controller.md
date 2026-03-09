@@ -382,8 +382,8 @@ buf generate proto
 ```
 
 **Key messages:**
-- `CollectorMessage` - Sent by collector (Register, MetricsBatch, HealthReport)
-- `IngesterMessage` - Sent by ingester (ConfigUpdate, Ack)
+- `ConnectRequest` - Sent by collector (Register, MetricsBatch, HealthReport)
+- `ConnectResponse` - Sent by ingester (ConfigUpdate, Ack)
 - `MetricsBatch` - Contains cluster metrics, node metrics, custom resources
 
 #### `internal/controller/cluster/`

@@ -128,7 +128,7 @@ func (s *Server) Connect(stream pb.CollectorService_ConnectServer) error {
 		}
 
 		switch payload := msg.Payload.(type) {
-		case *pb.CollectorMessage_Register:
+		case *pb.ConnectRequest_Register:
 			clusterName = payload.Register.ClusterName
 			if clusterName == "" {
 				return fmt.Errorf("register: cluster_name is required")
@@ -145,14 +145,14 @@ func (s *Server) Connect(stream pb.CollectorService_ConnectServer) error {
 			if err != nil {
 				log.WithError(err).Warn("Failed to build initial config")
 			} else if configMsg != nil {
-				if err := stream.Send(&pb.IngesterMessage{
-					Payload: &pb.IngesterMessage_Config{Config: configMsg},
+				if err := stream.Send(&pb.ConnectResponse{
+					Payload: &pb.ConnectResponse_Config{Config: configMsg},
 				}); err != nil {
 					return fmt.Errorf("failed to send config: %w", err)
 				}
 			}
 
-		case *pb.CollectorMessage_Metrics:
+		case *pb.ConnectRequest_Metrics:
 			if clusterName == "" {
 				return fmt.Errorf("metrics received before registration")
 			}
@@ -176,13 +176,13 @@ func (s *Server) Connect(stream pb.CollectorService_ConnectServer) error {
 				}).Debug("Processed metrics batch")
 			}
 
-			if err := stream.Send(&pb.IngesterMessage{
-				Payload: &pb.IngesterMessage_Ack{Ack: ack},
+			if err := stream.Send(&pb.ConnectResponse{
+				Payload: &pb.ConnectResponse_Ack{Ack: ack},
 			}); err != nil {
 				return fmt.Errorf("failed to send ack: %w", err)
 			}
 
-		case *pb.CollectorMessage_Health:
+		case *pb.ConnectRequest_Health:
 			if clusterName == "" {
 				return fmt.Errorf("health received before registration")
 			}

@@ -14,4 +14,4 @@ jobs:
         with:
           mode: minimum
           count: 1
-          labels: "breaking-change, enhancement, feature, bug, fix, documentation"
+          labels: "breaking-change, enhancement, feature, bug, fix, documentation, dependencies"

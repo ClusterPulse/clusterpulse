@@ -2,20 +2,20 @@ syntax = "proto3";
 
 package clusterpulse.collector.v1;
 
-option go_package = "github.com/clusterpulse/cluster-controller/proto/collectorpb";
-
 import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/clusterpulse/cluster-controller/proto/collectorpb";
 
 // CollectorService handles bidirectional communication between
 // managed cluster collectors and the hub ingester.
 service CollectorService {
   // Connect establishes a bidirectional stream between collector and ingester.
   // Collector sends metrics/health; ingester sends config/acks.
-  rpc Connect(stream CollectorMessage) returns (stream IngesterMessage);
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
 }
 
-// CollectorMessage is sent from collector agent to hub ingester.
-message CollectorMessage {
+// ConnectRequest is sent from collector agent to hub ingester.
+message ConnectRequest {
   oneof payload {
     MetricsBatch metrics = 1;
     HealthReport health = 2;
@@ -23,8 +23,8 @@ message CollectorMessage {
   }
 }
 
-// IngesterMessage is sent from hub ingester to collector agent.
-message IngesterMessage {
+// ConnectResponse is sent from hub ingester to collector agent.
+message ConnectResponse {
   oneof payload {
     ConfigUpdate config = 1;
     Ack ack = 2;
@@ -73,11 +73,7 @@ message ClusterMetrics {
   int32 deployments = 22;
 
   reserved 3, 8, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 23, 24;
-  reserved "nodes_not_ready", "pods_pending", "pods_failed",
-           "cpu_allocatable", "cpu_requested", "cpu_usage_percent",
-           "memory_allocatable", "memory_requested", "memory_usage_percent",
-           "storage_capacity", "storage_used", "pvcs", "services",
-           "statefulsets", "daemonsets";
+  reserved "nodes_not_ready", "pods_pending", "pods_failed", "cpu_allocatable", "cpu_requested", "cpu_usage_percent", "memory_allocatable", "memory_requested", "memory_usage_percent", "storage_capacity", "storage_used", "pvcs", "services", "statefulsets", "daemonsets";
 }
 
 // NodeMetrics mirrors pkg/types.NodeMetrics in protobuf form.
