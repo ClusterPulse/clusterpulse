@@ -55,8 +55,10 @@ jobs:
         id: coverage
         run: |
           TOTAL=$(go tool cover -func=coverage.out 2>/dev/null | grep '^total:' | awk '{print $NF}') || TOTAL="N/A"
-          PASSED=$(grep -c '^--- PASS' test-output.txt 2>/dev/null) || PASSED=0
-          FAILED=$(grep -c '^--- FAIL' test-output.txt 2>/dev/null) || FAILED=0
+          # Use go tool test2json for structured parsing instead of fragile grep patterns
+          go tool test2json < test-output.txt > test-results.json 2>/dev/null || true
+          PASSED=$(jq -s '[.[] | select(.Action=="pass") | select(.Test)] | length' test-results.json 2>/dev/null) || PASSED=0
+          FAILED=$(jq -s '[.[] | select(.Action=="fail") | select(.Test)] | length' test-results.json 2>/dev/null) || FAILED=0
           TESTS=$((PASSED + FAILED))
           echo "total=${TOTAL}" >> "$GITHUB_OUTPUT"
           echo "tests=${TESTS}" >> "$GITHUB_OUTPUT"
