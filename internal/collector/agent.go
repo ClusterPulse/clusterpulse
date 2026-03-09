@@ -210,7 +210,10 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 	// Flush any buffered batches first
 	a.flushBuffer(ctx, stream)
 
-	// Collection loop
+	// Trigger immediate first collection, then switch to ticker
+	collectCh := make(chan struct{}, 1)
+	collectCh <- struct{}{}
+
 	ticker := time.NewTicker(time.Duration(a.config.CollectIntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
@@ -226,25 +229,15 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 		case err := <-recvDone:
 			return fmt.Errorf("receive loop ended: %w", err)
 
+		case <-collectCh:
+			if err := a.collectAndSend(ctx, log, stream); err != nil {
+				return err
+			}
+
 		case <-ticker.C:
-			batch, err := a.collectMetrics(ctx)
-			if err != nil {
-				log.WithError(err).Warn("Collection failed")
-				continue
+			if err := a.collectAndSend(ctx, log, stream); err != nil {
+				return err
 			}
-
-			if err := stream.Send(&pb.ConnectRequest{
-				Payload: &pb.ConnectRequest_Metrics{Metrics: batch},
-			}); err != nil {
-				// Buffer the batch for retry
-				a.buffer.Push(batch)
-				return fmt.Errorf("failed to send metrics: %w", err)
-			}
-
-			log.WithFields(logrus.Fields{
-				"batch_id":         batch.BatchId,
-				"custom_resources": len(batch.CustomResources),
-			}).Debug("Pushed metrics batch")
 
 		case <-heartbeat.C:
 			if err := stream.Send(&pb.ConnectRequest{
@@ -261,6 +254,27 @@ func (a *Agent) connectAndRun(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (a *Agent) collectAndSend(ctx context.Context, log *logrus.Entry, stream pb.CollectorService_ConnectClient) error {
+	batch, err := a.collectMetrics(ctx)
+	if err != nil {
+		log.WithError(err).Warn("Collection failed")
+		return nil // collection errors are non-fatal
+	}
+
+	if err := stream.Send(&pb.ConnectRequest{
+		Payload: &pb.ConnectRequest_Metrics{Metrics: batch},
+	}); err != nil {
+		a.buffer.Push(batch)
+		return fmt.Errorf("failed to send metrics: %w", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"batch_id":         batch.BatchId,
+		"custom_resources": len(batch.CustomResources),
+	}).Info("Pushed metrics batch")
+	return nil
 }
 
 func (a *Agent) receiveLoop(ctx context.Context, stream pb.CollectorService_ConnectClient) error {
@@ -396,17 +410,9 @@ func (a *Agent) collectClusterAndNodeMetrics(ctx context.Context) (*pb.ClusterMe
 		return nil, nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
 
-	pods, err := a.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	podsByNode, err := a.listPodsByNode(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	// Group pods by node
-	podsByNode := make(map[string][]corev1.Pod)
-	for _, pod := range pods.Items {
-		if pod.Spec.NodeName != "" {
-			podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
-		}
+		return nil, nil, err
 	}
 
 	cm := &pb.ClusterMetrics{}
@@ -533,6 +539,32 @@ func (a *Agent) extractNodeMetrics(node *corev1.Node, pods []corev1.Pod) *pb.Nod
 	}
 
 	return nm
+}
+
+// listPodsByNode lists all pods with pagination and groups them by node name.
+func (a *Agent) listPodsByNode(ctx context.Context) (map[string][]corev1.Pod, error) {
+	podsByNode := make(map[string][]corev1.Pod)
+	listOpts := metav1.ListOptions{Limit: 500}
+
+	for {
+		pods, err := a.clientset.CoreV1().Pods("").List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list pods: %w", err)
+		}
+
+		for _, pod := range pods.Items {
+			if pod.Spec.NodeName != "" {
+				podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
+			}
+		}
+
+		if pods.Continue == "" {
+			break
+		}
+		listOpts.Continue = pods.Continue
+	}
+
+	return podsByNode, nil
 }
 
 // collectOperators queries OLM Subscriptions + CSVs and returns proto OperatorInfo.

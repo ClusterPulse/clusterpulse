@@ -102,3 +102,81 @@ func TestFilterNamespaces(t *testing.T) {
 		})
 	}
 }
+
+func TestUseClusterWideList(t *testing.T) {
+	tests := []struct {
+		name string
+		ns   *types.NamespaceConfig
+		want bool
+	}{
+		{
+			"nil namespaces — collect all",
+			nil,
+			true,
+		},
+		{
+			"exclude present — needs cluster-wide",
+			&types.NamespaceConfig{
+				Include: []string{"app-*"},
+				Exclude: []string{"app-test"},
+			},
+			true,
+		},
+		{
+			"wildcard in include — needs cluster-wide",
+			&types.NamespaceConfig{
+				Include: []string{"prod-*"},
+			},
+			true,
+		},
+		{
+			"question mark wildcard — needs cluster-wide",
+			&types.NamespaceConfig{
+				Include: []string{"ns?"},
+			},
+			true,
+		},
+		{
+			"exact names only — per-namespace",
+			&types.NamespaceConfig{
+				Include: []string{"default", "kube-system"},
+			},
+			false,
+		},
+		{
+			"single exact name — per-namespace",
+			&types.NamespaceConfig{
+				Include: []string{"my-namespace"},
+			},
+			false,
+		},
+		{
+			"empty include with exclude — needs cluster-wide",
+			&types.NamespaceConfig{
+				Exclude: []string{"kube-*"},
+			},
+			true,
+		},
+		{
+			"mixed exact and wildcard — needs cluster-wide",
+			&types.NamespaceConfig{
+				Include: []string{"default", "app-*"},
+			},
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := &types.CompiledMetricSource{
+				Source: types.CompiledSourceTarget{
+					Namespaces: tt.ns,
+				},
+			}
+			got := useClusterWideList(source)
+			if got != tt.want {
+				t.Errorf("useClusterWideList() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
