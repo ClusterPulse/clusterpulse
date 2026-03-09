@@ -11,15 +11,27 @@ env:
   REGISTRY: quay.io
 
 jobs:
-  # Build and push API
-  build-api:
+  # Build, scan, and sign Go service images
+  build-services:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
-      digest: ${{ steps.build.outputs.digest }}
+      security-events: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: Dockerfile.api
+            image: quay.io/clusterpulse/api
+          - service: cluster-controller
+            dockerfile: Dockerfile.cluster-controller
+            image: quay.io/clusterpulse/cluster-controller
+          - service: collector
+            dockerfile: Dockerfile.collector
+            image: quay.io/clusterpulse/collector
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -31,7 +43,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ${{ env.REGISTRY }}/clusterpulse/api
+          images: ${{ matrix.image }}
           tags: |
             type=semver,pattern=v{{version}}
             type=semver,pattern=v{{major}}.{{minor}}
@@ -42,7 +54,7 @@ jobs:
         id: build
         with:
           context: .
-          file: Dockerfile.api
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -51,97 +63,41 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
             GIT_TREE_STATE=clean
             BUILD_DATE=${{ github.event.release.published_at }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
           provenance: mode=min
 
-  # Build and push Cluster Controller
-  build-cluster-controller:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_TOKEN }}
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ${{ env.REGISTRY }}/clusterpulse/cluster-controller
-          tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
-            type=sha,prefix=sha-
-            type=raw,value=latest
-      - uses: docker/build-push-action@v6
-        id: build
-        with:
-          context: .
-          file: Dockerfile.cluster-controller
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            GIT_COMMIT=${{ github.sha }}
-            GIT_TREE_STATE=clean
-            BUILD_DATE=${{ github.event.release.published_at }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=min
+#      - name: Scan image with Trivy
+#        uses: aquasecurity/trivy-action@master
+#        with:
+#          image-ref: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+#          format: sarif
+#          output: trivy-${{ matrix.service }}.sarif
+#          severity: HIGH,CRITICAL
+#          exit-code: '1'
+#
+#      - name: Upload Trivy SARIF
+#        if: always()
+#        uses: github/codeql-action/upload-sarif@v3
+#        with:
+#          sarif_file: trivy-${{ matrix.service }}.sarif
+#          category: trivy-${{ matrix.service }}
 
-  # Build and push Collector
-  build-collector:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image
+        run: cosign sign --yes ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+
+      - name: Save digest
+        run: echo "${{ steps.build.outputs.digest }}" > digest.txt
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_TOKEN }}
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ${{ env.REGISTRY }}/clusterpulse/collector
-          tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
-            type=sha,prefix=sha-
-            type=raw,value=latest
-      - uses: docker/build-push-action@v6
-        id: build
-        with:
-          context: .
-          file: Dockerfile.collector
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            GIT_COMMIT=${{ github.sha }}
-            GIT_TREE_STATE=clean
-            BUILD_DATE=${{ github.event.release.published_at }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=min
+          name: digest-${{ matrix.service }}
+          path: digest.txt
+          retention-days: 1
 
   # Build and push UI
   build-ui:
@@ -149,6 +105,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
+      id-token: write
     outputs:
       tags: ${{ steps.meta.outputs.tags }}
       digest: ${{ steps.build.outputs.digest }}
@@ -198,6 +156,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=min
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/clusterpulse/ui@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-ui.sarif
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-ui.sarif
+          category: trivy-ui
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image
+        run: cosign sign --yes ${{ env.REGISTRY }}/clusterpulse/ui@${{ steps.build.outputs.digest }}
 
   # Create a release on the ClusterPulse/ui repo
   release-ui:
@@ -263,12 +243,10 @@ jobs:
 
   # Update operator repo with new image tags and CRDs
   update-operator:
-    needs: [build-api, build-cluster-controller, build-collector, build-ui]
+    needs: [build-services, build-ui]
     if: >-
       !cancelled() &&
-      needs.build-api.result == 'success' &&
-      needs.build-cluster-controller.result == 'success' &&
-      needs.build-collector.result == 'success' &&
+      needs.build-services.result == 'success' &&
       needs.build-ui.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -348,18 +326,44 @@ jobs:
   # Update the GitHub Release with build info
   update-release:
     if: ${{ !cancelled() }}
-    needs: [build-api, build-cluster-controller, build-collector, build-ui, release-ui, deploy-docs, update-operator]
+    needs: [build-services, build-ui, release-ui, deploy-docs, update-operator]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download API digest
+        if: needs.build-services.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-api
+          path: digests/api
+
+      - name: Download Cluster Controller digest
+        if: needs.build-services.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-cluster-controller
+          path: digests/cluster-controller
+
+      - name: Download Collector digest
+        if: needs.build-services.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-collector
+          path: digests/collector
+
       - name: Build release body and update release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ github.ref_name }}"
+
+          # Read digests from artifacts
+          API_DIGEST=$(cat digests/api/digest.txt 2>/dev/null || echo "")
+          CC_DIGEST=$(cat digests/cluster-controller/digest.txt 2>/dev/null || echo "")
+          COLLECTOR_DIGEST=$(cat digests/collector/digest.txt 2>/dev/null || echo "")
 
           {
             echo "## Build Summary"
@@ -373,22 +377,22 @@ jobs:
             echo "|---------|--------|--------|"
 
             # API
-            if [[ "${{ needs.build-api.result }}" == "success" ]]; then
-              echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Pushed | \`${{ needs.build-api.outputs.digest }}\` |"
+            if [[ "${{ needs.build-services.result }}" == "success" && -n "$API_DIGEST" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Pushed | \`${API_DIGEST}\` |"
             else
               echo "| \`${{ env.REGISTRY }}/clusterpulse/api\` | Failed | — |"
             fi
 
             # Cluster Controller
-            if [[ "${{ needs.build-cluster-controller.result }}" == "success" ]]; then
-              echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Pushed | \`${{ needs.build-cluster-controller.outputs.digest }}\` |"
+            if [[ "${{ needs.build-services.result }}" == "success" && -n "$CC_DIGEST" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Pushed | \`${CC_DIGEST}\` |"
             else
               echo "| \`${{ env.REGISTRY }}/clusterpulse/cluster-controller\` | Failed | — |"
             fi
 
             # Collector
-            if [[ "${{ needs.build-collector.result }}" == "success" ]]; then
-              echo "| \`${{ env.REGISTRY }}/clusterpulse/collector\` | Pushed | \`${{ needs.build-collector.outputs.digest }}\` |"
+            if [[ "${{ needs.build-services.result }}" == "success" && -n "$COLLECTOR_DIGEST" ]]; then
+              echo "| \`${{ env.REGISTRY }}/clusterpulse/collector\` | Pushed | \`${COLLECTOR_DIGEST}\` |"
             else
               echo "| \`${{ env.REGISTRY }}/clusterpulse/collector\` | Failed | — |"
             fi

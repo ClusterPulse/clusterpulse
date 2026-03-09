@@ -75,10 +75,66 @@ jobs:
       - name: Build all binaries
         run: go build ./...
 
+  vulncheck:
+    name: Vulncheck
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  docker-build:
+    name: Docker Build (${{ matrix.service }})
+    if: contains(github.event.pull_request.labels.*.name, 'dependencies') && contains(github.event.pull_request.labels.*.name, 'go')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: Dockerfile.api
+          - service: cluster-controller
+            dockerfile: Dockerfile.cluster-controller
+          - service: collector
+            dockerfile: Dockerfile.collector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          build-args: |
+            VERSION=ci
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TREE_STATE=dirty
+            BUILD_DATE=${{ github.event.pull_request.updated_at }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  proto:
+    name: Proto
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-action@v1
+        with:
+          lint: true
+          breaking: true
+          breaking_against: ${{ github.event.pull_request.base.sha }}
+
   comment:
     name: PR Comment
     if: always() && github.event_name == 'pull_request'
-    needs: [lint, test, build]
+    needs: [lint, test, build, vulncheck, proto, docker-build]
     runs-on: ubuntu-latest
     steps:
       - uses: marocchino/sticky-pull-request-comment@v2
@@ -92,5 +148,8 @@ jobs:
             | **Lint** | ${{ needs.lint.result == 'success' && '✅ Passed' || '❌ Failed' }} |
             | **Test** | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |
             | **Build** | ${{ needs.build.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+            | **Vulncheck** | ${{ needs.vulncheck.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+            | **Proto** | ${{ needs.proto.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+            | **Docker Build** | ${{ needs.docker-build.result == 'success' && '✅ Passed' || needs.docker-build.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |
 
             **Tests:** ${{ needs.test.outputs.passed || '0' }} passed, ${{ needs.test.outputs.failed || '0' }} failed (${{ needs.test.outputs.tests || '0' }} total) | **Coverage:** ${{ needs.test.outputs.total || 'N/A' }}
