@@ -8,16 +8,28 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	// Operator settings
-	Namespace string
+	// Namespace defines the Kubernetes namespace where ClusterPulse
+    // operator resources are deployed.
+    // Environment variable: NAMESPACE
+    // Default: "clusterpulse"
+    Namespace string
 
 	// Redis settings
 	RedisHost     string
+	// RedisPort defines the port used to connect to the Redis instance.
+// Environment variable: REDIS_PORT
+// Default: 6379
+// Valid range: 1–65535
 	RedisPort     int
 	RedisPassword string
 	RedisDB       int
 
 	// Timing configuration (in seconds)
+	// ReconciliationInterval controls how frequently the operator
+// reconciles cluster resources.
+// Environment variable: RECONCILIATION_INTERVAL
+// Default: 30 seconds
+// Minimum: 30 seconds
 	ReconciliationInterval int
 	OperatorScanInterval   int
 	CacheTTL               int
