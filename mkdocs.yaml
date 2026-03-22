@@ -9,18 +9,21 @@ theme:
   name: material
   logo: assets/logo.svg
   favicon: assets/logo.svg
+  font:
+    text: Inter
+    code: JetBrains Mono
   palette:
     # Light mode
     - scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: green
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     # Dark mode
     - scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: green
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -47,6 +50,9 @@ plugins:
   - awesome-pages
   - mike:
       version_selector: true
+
+extra_css:
+  - stylesheets/extra.css
 
 markdown_extensions:
   - pymdownx.highlight:
