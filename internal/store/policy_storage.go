@@ -20,7 +20,6 @@ const (
 	keyPolicySA           = "policy:sa:%s"           // sa
 	keyPolicyCustomType   = "policy:customtype:%s"   // resource_type
 	keyUserPermissions    = "user:permissions:%s"    // user
-	keyGroupMembers       = "group:members:%s"       // group
 	keyPoliciesAll        = "policies:all"
 	keyPoliciesEnabled    = "policies:enabled"
 	keyPoliciesByPriority = "policies:by:priority"
@@ -28,9 +27,19 @@ const (
 	policyScanBatchSize = 100
 )
 
-// StorePolicy stores a compiled policy in Redis with all indexes
+// StorePolicy stores a compiled policy in Redis with all indexes.
+// On update, stale index entries from the previous version are removed.
 func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) error {
 	policyKey := fmt.Sprintf(keyPolicy, policy.Namespace, policy.PolicyName)
+
+	// Fetch existing policy to diff indexes on update
+	var oldPolicy types.CompiledPolicy
+	var hasOld bool
+	if data, err := c.client.HGet(ctx, policyKey, "data").Result(); err == nil {
+		if json.Unmarshal([]byte(data), &oldPolicy) == nil {
+			hasOld = true
+		}
+	}
 
 	policyData, err := json.Marshal(policy)
 	if err != nil {
@@ -47,6 +56,16 @@ func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) 
 		"hash":        policy.Hash,
 		"compiled_at": policy.CompiledAt,
 	})
+
+	// Remove stale index entries from previous version
+	if hasOld {
+		removeIndexEntries(ctx, pipe, policyKey,
+			diffSlices(oldPolicy.Users, policy.Users),
+			diffSlices(oldPolicy.Groups, policy.Groups),
+			diffSlices(oldPolicy.ServiceAccounts, policy.ServiceAccounts),
+			diffSlices(oldPolicy.CustomResourceTypes, policy.CustomResourceTypes),
+		)
+	}
 
 	z := func(priority int, member string) *goredis.Z {
 		return &goredis.Z{Score: float64(priority), Member: member}
@@ -103,7 +122,14 @@ func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) 
 		return fmt.Errorf("failed to store policy: %w", err)
 	}
 
-	c.InvalidateEvaluationCaches(ctx, policy.Users, policy.Groups, policy.ServiceAccounts)
+	// Invalidate caches for both old (removed) and new (added) principals
+	allUsers, allGroups, allSAs := policy.Users, policy.Groups, policy.ServiceAccounts
+	if hasOld {
+		allUsers = unionSlices(oldPolicy.Users, policy.Users)
+		allGroups = unionSlices(oldPolicy.Groups, policy.Groups)
+		allSAs = unionSlices(oldPolicy.ServiceAccounts, policy.ServiceAccounts)
+	}
+	c.InvalidateEvaluationCaches(ctx, allUsers, allGroups, allSAs)
 
 	logrus.Infof("Stored policy %s with %d custom resource types", policyKey, len(policy.CustomResourceTypes))
 	return nil
@@ -126,29 +152,9 @@ func (c *Client) RemovePolicy(ctx context.Context, namespace, name string) error
 
 	pipe := c.client.Pipeline()
 
-	for _, user := range policy.Users {
-		userKey := fmt.Sprintf(keyPolicyUser, user)
-		pipe.SRem(ctx, userKey, policyKey)
-		pipe.ZRem(ctx, userKey+":sorted", policyKey)
-	}
-
-	for _, group := range policy.Groups {
-		groupKey := fmt.Sprintf(keyPolicyGroup, group)
-		pipe.SRem(ctx, groupKey, policyKey)
-		pipe.ZRem(ctx, groupKey+":sorted", policyKey)
-	}
-
-	for _, sa := range policy.ServiceAccounts {
-		saKey := fmt.Sprintf(keyPolicySA, sa)
-		pipe.SRem(ctx, saKey, policyKey)
-		pipe.ZRem(ctx, saKey+":sorted", policyKey)
-	}
-
-	for _, resourceType := range policy.CustomResourceTypes {
-		typeKey := fmt.Sprintf(keyPolicyCustomType, resourceType)
-		pipe.SRem(ctx, typeKey, policyKey)
-		pipe.ZRem(ctx, typeKey+":sorted", policyKey)
-	}
+	removeIndexEntries(ctx, pipe, policyKey,
+		policy.Users, policy.Groups, policy.ServiceAccounts, policy.CustomResourceTypes,
+	)
 
 	pipe.SRem(ctx, keyPoliciesAll, policyKey)
 	pipe.ZRem(ctx, keyPoliciesByPriority, policyKey)
@@ -214,22 +220,17 @@ func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, 
 	for _, user := range users {
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:%s:*", user))
 		pipe.Del(ctx, fmt.Sprintf(keyUserPermissions, user))
-		// Clear RBAC engine decision caches for this user
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:decision:%s:*", escapeRedisGlobChars(user)))
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:%s:*", escapeRedisGlobChars(user)))
 	}
 
 	for _, group := range groups {
-		members, err := c.client.SMembers(ctx, fmt.Sprintf(keyGroupMembers, group)).Result()
-		if err == nil {
-			for _, member := range members {
-				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:%s:*", member))
-				pipe.Del(ctx, fmt.Sprintf(keyUserPermissions, member))
-				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:decision:%s:*", escapeRedisGlobChars(member)))
-				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:%s:*", escapeRedisGlobChars(member)))
-			}
-		}
+		// Group membership is resolved at request time from OpenShift, so we
+		// cannot enumerate members here. Use broad pattern scans to clear any
+		// cached decisions that reference this group.
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:*:group:%s:*", group))
+		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:decision:*:group:%s:*", escapeRedisGlobChars(group)))
+		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:*:group:%s:*", escapeRedisGlobChars(group)))
 	}
 
 	for _, sa := range serviceAccounts {
@@ -338,6 +339,64 @@ func (c *Client) GetCustomResourceTypes(ctx context.Context) ([]string, error) {
 	}
 
 	return result, nil
+}
+
+// removeIndexEntries removes a policy key from user/group/SA/custom-type indexes.
+func removeIndexEntries(ctx context.Context, pipe goredis.Pipeliner, policyKey string, users, groups, serviceAccounts, customResourceTypes []string) {
+	for _, user := range users {
+		userKey := fmt.Sprintf(keyPolicyUser, user)
+		pipe.SRem(ctx, userKey, policyKey)
+		pipe.ZRem(ctx, userKey+":sorted", policyKey)
+	}
+	for _, group := range groups {
+		groupKey := fmt.Sprintf(keyPolicyGroup, group)
+		pipe.SRem(ctx, groupKey, policyKey)
+		pipe.ZRem(ctx, groupKey+":sorted", policyKey)
+	}
+	for _, sa := range serviceAccounts {
+		saKey := fmt.Sprintf(keyPolicySA, sa)
+		pipe.SRem(ctx, saKey, policyKey)
+		pipe.ZRem(ctx, saKey+":sorted", policyKey)
+	}
+	for _, resourceType := range customResourceTypes {
+		typeKey := fmt.Sprintf(keyPolicyCustomType, resourceType)
+		pipe.SRem(ctx, typeKey, policyKey)
+		pipe.ZRem(ctx, typeKey+":sorted", policyKey)
+	}
+}
+
+// diffSlices returns elements in old that are not in new.
+func diffSlices(old, new []string) []string {
+	newSet := make(map[string]struct{}, len(new))
+	for _, v := range new {
+		newSet[v] = struct{}{}
+	}
+	var removed []string
+	for _, v := range old {
+		if _, ok := newSet[v]; !ok {
+			removed = append(removed, v)
+		}
+	}
+	return removed
+}
+
+// unionSlices returns the deduplicated union of two slices.
+func unionSlices(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	var result []string
+	for _, v := range a {
+		if _, ok := seen[v]; !ok {
+			seen[v] = struct{}{}
+			result = append(result, v)
+		}
+	}
+	for _, v := range b {
+		if _, ok := seen[v]; !ok {
+			seen[v] = struct{}{}
+			result = append(result, v)
+		}
+	}
+	return result
 }
 
 // scanAndDeletePolicy scans for keys matching a pattern and queues them for deletion
