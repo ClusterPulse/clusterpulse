@@ -36,6 +36,15 @@ ClusterPulse is available in the OperatorHub community operator index.
 
 9. Once installed, create a ClusterPulse instance by navigating to the operator's detail page and selecting **Create Instance** under the provided API.
 
+> [!IMPORTANT]
+> For cluster built with FIPS, you must change the oauth proxy in the UI or it will not start
+> ```
+> spec:
+>   frontend:
+>     oauth:
+>       image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9
+> ```
+
 ### CLI Installation
 
 1. Create a namespace for the operator (optional, if not using an existing namespace):
@@ -94,6 +103,15 @@ ClusterPulse is available in the OperatorHub community operator index.
     The output should show the ClusterPulse operator with a phase of `Succeeded`.
 
 5. Create a ClusterPulse custom resource to deploy the application. The default options should suffice for most instances:
+
+> [!IMPORTANT]
+> For cluster built with FIPS, you must change the oauth proxy in the UI or it will not start
+> ```
+> spec:
+>   frontend:
+>     oauth:
+>       image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9
+> ```
 
     ```yaml
     apiVersion: clusterpulse.io/v1alpha1
