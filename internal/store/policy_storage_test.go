@@ -222,6 +222,123 @@ func TestUpdatePolicyStatus(t *testing.T) {
 	}
 }
 
+func TestStorePolicy_UpdateCleansOldIndexes(t *testing.T) {
+	c, _ := newTestClient(t)
+	ctx := t.Context()
+
+	policyKey := "policy:default:test-policy"
+
+	// Store initial policy with alice, bob and admins group
+	p := testPolicy()
+	p.Users = []string{"alice", "bob"}
+	p.Groups = []string{"admins"}
+	p.ServiceAccounts = []string{"system:serviceaccount:default:sa1"}
+	p.CustomResourceTypes = []string{"virtualmachines"}
+	if err := c.StorePolicy(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify initial indexes
+	isMember, _ := c.client.SIsMember(ctx, "policy:user:bob", policyKey).Result()
+	if !isMember {
+		t.Fatal("bob should be in user index after initial store")
+	}
+	isMember, _ = c.client.SIsMember(ctx, "policy:group:admins", policyKey).Result()
+	if !isMember {
+		t.Fatal("admins should be in group index after initial store")
+	}
+
+	// Update: remove bob, change group from admins to devs, change SA, change custom type
+	p.Users = []string{"alice"}
+	p.Groups = []string{"devs"}
+	p.ServiceAccounts = []string{"system:serviceaccount:default:sa2"}
+	p.CustomResourceTypes = []string{"configaudits"}
+	if err := c.StorePolicy(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	// Removed entries should be gone
+	isMember, _ = c.client.SIsMember(ctx, "policy:user:bob", policyKey).Result()
+	if isMember {
+		t.Error("bob should be removed from user index after update")
+	}
+	score, err := c.client.ZScore(ctx, "policy:user:bob:sorted", policyKey).Result()
+	if err == nil {
+		t.Errorf("bob:sorted should not contain policy, got score %v", score)
+	}
+
+	isMember, _ = c.client.SIsMember(ctx, "policy:group:admins", policyKey).Result()
+	if isMember {
+		t.Error("admins should be removed from group index after update")
+	}
+
+	isMember, _ = c.client.SIsMember(ctx, "policy:sa:system:serviceaccount:default:sa1", policyKey).Result()
+	if isMember {
+		t.Error("sa1 should be removed from SA index after update")
+	}
+
+	isMember, _ = c.client.SIsMember(ctx, "policy:customtype:virtualmachines", policyKey).Result()
+	if isMember {
+		t.Error("virtualmachines should be removed from custom type index after update")
+	}
+
+	// Kept/new entries should be present
+	isMember, _ = c.client.SIsMember(ctx, "policy:user:alice", policyKey).Result()
+	if !isMember {
+		t.Error("alice should still be in user index")
+	}
+
+	isMember, _ = c.client.SIsMember(ctx, "policy:group:devs", policyKey).Result()
+	if !isMember {
+		t.Error("devs should be in group index")
+	}
+
+	isMember, _ = c.client.SIsMember(ctx, "policy:sa:system:serviceaccount:default:sa2", policyKey).Result()
+	if !isMember {
+		t.Error("sa2 should be in SA index")
+	}
+
+	isMember, _ = c.client.SIsMember(ctx, "policy:customtype:configaudits", policyKey).Result()
+	if !isMember {
+		t.Error("configaudits should be in custom type index")
+	}
+}
+
+func TestDiffSlices(t *testing.T) {
+	tests := []struct {
+		name     string
+		old, new []string
+		want     []string
+	}{
+		{"remove one", []string{"a", "b", "c"}, []string{"a", "c"}, []string{"b"}},
+		{"remove all", []string{"a", "b"}, nil, []string{"a", "b"}},
+		{"no change", []string{"a", "b"}, []string{"a", "b"}, nil},
+		{"add only", []string{"a"}, []string{"a", "b"}, nil},
+		{"both empty", nil, nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := diffSlices(tt.old, tt.new)
+			if len(got) != len(tt.want) {
+				t.Errorf("diffSlices(%v, %v) = %v, want %v", tt.old, tt.new, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnionSlices(t *testing.T) {
+	got := unionSlices([]string{"a", "b"}, []string{"b", "c"})
+	if len(got) != 3 {
+		t.Errorf("unionSlices = %v, want 3 elements", got)
+	}
+	want := map[string]bool{"a": true, "b": true, "c": true}
+	for _, v := range got {
+		if !want[v] {
+			t.Errorf("unexpected element %q", v)
+		}
+	}
+}
+
 func TestEscapeRedisGlobChars(t *testing.T) {
 	tests := []struct {
 		input, want string
