@@ -84,7 +84,7 @@ jobs:
 #          category: trivy-${{ matrix.service }}
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.1
 
       - name: Sign image
         run: cosign sign --yes ${{ matrix.image }}@${{ steps.build.outputs.digest }}
@@ -174,7 +174,7 @@ jobs:
 #          category: trivy-ui
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.1
 
       - name: Sign image
         run: cosign sign --yes ${{ env.REGISTRY }}/clusterpulse/ui@${{ steps.build.outputs.digest }}
