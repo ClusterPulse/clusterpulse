@@ -31,13 +31,17 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
     -o clusterpulse-collector cmd/collector/main.go
 
 # Final stage
-FROM alpine:3.23
+FROM registry.access.redhat.com/ubi9-minimal:latest
 
-RUN apk --no-cache add ca-certificates
+RUN microdnf install -y ca-certificates shadow-utils \
+    && microdnf clean all \
+    && useradd -u 65532 -g 0 -M -s /sbin/nologin -d / nonroot \
+    && microdnf remove -y shadow-utils \
+    && microdnf clean all
 
 WORKDIR /
 
-COPY --from=builder /app/clusterpulse-collector .
+COPY --from=builder --chown=65532:0 /app/clusterpulse-collector .
 
 USER 65532
 
