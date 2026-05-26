@@ -257,7 +257,3 @@ type MetricSourceList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []MetricSource `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&MetricSource{}, &MetricSourceList{})
-}

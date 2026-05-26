@@ -121,7 +121,3 @@ type ClusterConnectionList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ClusterConnection `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&ClusterConnection{}, &ClusterConnectionList{})
-}

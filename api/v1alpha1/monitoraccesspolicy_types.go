@@ -281,7 +281,3 @@ type MonitorAccessPolicyList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []MonitorAccessPolicy `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&MonitorAccessPolicy{}, &MonitorAccessPolicyList{})
-}
