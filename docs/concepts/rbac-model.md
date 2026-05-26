@@ -60,6 +60,8 @@ The entity making a request. Contains:
 
 Principals are extracted from OAuth proxy headers or Kubernetes authentication.
 
+`username` is canonicalized to the OpenShift `User.metadata.name` whenever a matching `User` CR can be resolved — looked up first by the value of `X-Forwarded-User`, then (when that 404s) by `X-Forwarded-Email`. This is necessary because `openshift/oauth-proxy` stores the user's email in the session cookie and decodes it by splitting on `@`, so `X-Forwarded-User` ends up as the local-part of the email while the actual OpenShift identity is the full email. The fallback ensures policies that name the OpenShift identity (typically the email) match consistently. Service accounts (`system:serviceaccount:…`) are never canonicalized.
+
 ### Resource
 
 The object being accessed:
@@ -408,7 +410,7 @@ The RBAC engine supports optional decision caching:
 
 Cache invalidation occurs when:
 
-1. A policy is created, updated, or deleted — clears `policy:eval:*`, `rbac:decision:*`, and `rbac:custom:*` for affected users/groups
+1. A policy is created, updated, or deleted — clears `policy:eval:*`, `rbac:decision:*`, and `rbac:custom:*` for affected users/groups. Group invalidation is performed by scanning the decision keyspace and matching the groups CSV embedded in the cache key (see [Cache Invalidation](policy-evaluation.md#cache-invalidation) for details). Updates diff against the previous compilation so identities removed from a policy lose their stale "allow" decisions in the same store call.
 2. Manual cache clear via `POST /api/v1/auth/cache/clear` — clears both `rbac:decision:*` and `rbac:custom:*`
 
 ## Related Documentation

@@ -441,22 +441,25 @@ cache_key = f"{username}:{','.join(sorted(groups))}"
 
 Caches are invalidated when:
 
-1. **Policy created/updated/deleted** - All affected users, groups, and service accounts have their caches cleared
+1. **Policy created/updated/deleted** - All affected users, groups, and service accounts have their caches cleared. On update, the previous compilation is diffed against the new one and the *union* of old and new subjects is invalidated, so identities dropped from a policy lose their stale "allow" decisions and identities newly named in a policy lose their stale "deny" decisions in the same store call.
 2. **Manual clear** - Via `POST /api/v1/auth/cache/clear`
 
-Invalidation uses Redis SCAN to find affected keys:
+Invalidation uses Redis SCAN to find affected keys.
+
+**User and service-account paths** match by prefix:
 
 ```python
 patterns = [
     f"policy:eval:{user}:*",
-    f"policy:eval:*:group:{group}:*",
     f"policy:eval:{service_account}:*",
     f"rbac:decision:{user}:*",   # Standard decision cache
     f"rbac:custom:{user}:*",     # Custom resource decision cache
 ]
 ```
 
-> **Note:** Redis glob metacharacters (`*`, `?`, `[`, `]`) in usernames are escaped before constructing SCAN patterns to prevent unintended cache key matching.
+**Group path** walks the entire `rbac:decision:*` and `rbac:custom:*` keyspaces and parses the groups CSV segment of each cache key (the `Principal.CacheKey()` format is `{username}:{sorted_groups_csv}`); any cached decision whose groups CSV contains a changed group is deleted. This is the truth source — there is no separate `group:members:*` index to keep in sync, which means group-targeted policy changes always invalidate accurately, regardless of whether affected users have authenticated recently.
+
+> **Note:** Redis glob metacharacters (`*`, `?`, `[`, `]`) in usernames are escaped before constructing user-prefix SCAN patterns to prevent unintended cache key matching.
 
 ## Performance Considerations
 

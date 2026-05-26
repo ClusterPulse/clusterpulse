@@ -14,13 +14,12 @@ import (
 
 // Policy Redis key patterns (must match Python exactly)
 const (
-	keyPolicy             = "policy:%s:%s"           // namespace:name
-	keyPolicyUser         = "policy:user:%s"         // user
-	keyPolicyGroup        = "policy:group:%s"        // group
-	keyPolicySA           = "policy:sa:%s"           // sa
-	keyPolicyCustomType   = "policy:customtype:%s"   // resource_type
-	keyUserPermissions    = "user:permissions:%s"    // user
-	keyGroupMembers       = "group:members:%s"       // group
+	keyPolicy             = "policy:%s:%s"         // namespace:name
+	keyPolicyUser         = "policy:user:%s"       // user
+	keyPolicyGroup        = "policy:group:%s"      // group
+	keyPolicySA           = "policy:sa:%s"         // sa
+	keyPolicyCustomType   = "policy:customtype:%s" // resource_type
+	keyUserPermissions    = "user:permissions:%s"  // user
 	keyPoliciesAll        = "policies:all"
 	keyPoliciesEnabled    = "policies:enabled"
 	keyPoliciesByPriority = "policies:by:priority"
@@ -28,7 +27,14 @@ const (
 	policyScanBatchSize = 100
 )
 
-// StorePolicy stores a compiled policy in Redis with all indexes
+// StorePolicy stores a compiled policy in Redis with all indexes.
+//
+// On UPDATE, it diffs against the previously-stored compilation and cleans
+// stale index entries for subjects that were removed in this revision. The
+// effective set of subjects for indexing is empty when the policy is disabled
+// (matching the SAdd guards below), so toggling Enabled correctly removes or
+// adds subjects from the indexes. Caches are invalidated for the union of old
+// and new subjects so removed identities lose stale "allow" decisions.
 func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) error {
 	policyKey := fmt.Sprintf(keyPolicy, policy.Namespace, policy.PolicyName)
 
@@ -36,6 +42,9 @@ func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) 
 	if err != nil {
 		return fmt.Errorf("failed to marshal policy: %w", err)
 	}
+
+	// Read the previous compilation (if any) so we can clean up stale indexes.
+	oldPolicy := c.readPreviousPolicy(ctx, policyKey)
 
 	pipe := c.client.Pipeline()
 
@@ -52,36 +61,50 @@ func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) 
 		return &goredis.Z{Score: float64(priority), Member: member}
 	}
 
-	// Index by users
-	for _, user := range policy.Users {
-		if policy.Enabled {
+	// Diff-driven index cleanup: drop subjects (and custom resource types) that
+	// were indexed under the previous compilation but are no longer present, or
+	// drop all of them if the policy is being disabled.
+	oldUsers, oldGroups, oldSAs, oldTypes := indexedSubjects(oldPolicy)
+	newUsers, newGroups, newSAs, newTypes := indexedSubjects(policy)
+	for _, u := range diffStrings(oldUsers, newUsers) {
+		k := fmt.Sprintf(keyPolicyUser, u)
+		pipe.SRem(ctx, k, policyKey)
+		pipe.ZRem(ctx, k+":sorted", policyKey)
+	}
+	for _, g := range diffStrings(oldGroups, newGroups) {
+		k := fmt.Sprintf(keyPolicyGroup, g)
+		pipe.SRem(ctx, k, policyKey)
+		pipe.ZRem(ctx, k+":sorted", policyKey)
+	}
+	for _, sa := range diffStrings(oldSAs, newSAs) {
+		k := fmt.Sprintf(keyPolicySA, sa)
+		pipe.SRem(ctx, k, policyKey)
+		pipe.ZRem(ctx, k+":sorted", policyKey)
+	}
+	for _, rt := range diffStrings(oldTypes, newTypes) {
+		k := fmt.Sprintf(keyPolicyCustomType, rt)
+		pipe.SRem(ctx, k, policyKey)
+		pipe.ZRem(ctx, k+":sorted", policyKey)
+	}
+
+	// Index by users / groups / SAs / custom resource types (enabled only).
+	if policy.Enabled {
+		for _, user := range policy.Users {
 			userKey := fmt.Sprintf(keyPolicyUser, user)
 			pipe.SAdd(ctx, userKey, policyKey)
 			pipe.ZAdd(ctx, userKey+":sorted", z(policy.Priority, policyKey))
 		}
-	}
-
-	// Index by groups
-	for _, group := range policy.Groups {
-		if policy.Enabled {
+		for _, group := range policy.Groups {
 			groupKey := fmt.Sprintf(keyPolicyGroup, group)
 			pipe.SAdd(ctx, groupKey, policyKey)
 			pipe.ZAdd(ctx, groupKey+":sorted", z(policy.Priority, policyKey))
 		}
-	}
-
-	// Index by service accounts
-	for _, sa := range policy.ServiceAccounts {
-		if policy.Enabled {
+		for _, sa := range policy.ServiceAccounts {
 			saKey := fmt.Sprintf(keyPolicySA, sa)
 			pipe.SAdd(ctx, saKey, policyKey)
 			pipe.ZAdd(ctx, saKey+":sorted", z(policy.Priority, policyKey))
 		}
-	}
-
-	// Index by custom resource types
-	for _, resourceType := range policy.CustomResourceTypes {
-		if policy.Enabled {
+		for _, resourceType := range policy.CustomResourceTypes {
 			typeKey := fmt.Sprintf(keyPolicyCustomType, resourceType)
 			pipe.SAdd(ctx, typeKey, policyKey)
 			pipe.ZAdd(ctx, typeKey+":sorted", z(policy.Priority, policyKey))
@@ -94,19 +117,120 @@ func (c *Client) StorePolicy(ctx context.Context, policy *types.CompiledPolicy) 
 
 	if policy.Enabled {
 		pipe.SAdd(ctx, keyPoliciesEnabled, policyKey)
+	} else {
+		pipe.SRem(ctx, keyPoliciesEnabled, policyKey)
 	}
 
-	pipe.SAdd(ctx, fmt.Sprintf("policies:effect:%s", strings.ToLower(policy.Effect)), policyKey)
+	newEffectKey := fmt.Sprintf("policies:effect:%s", strings.ToLower(policy.Effect))
+	pipe.SAdd(ctx, newEffectKey, policyKey)
+	if oldPolicy != nil && !strings.EqualFold(oldPolicy.Effect, policy.Effect) && oldPolicy.Effect != "" {
+		pipe.SRem(ctx, fmt.Sprintf("policies:effect:%s", strings.ToLower(oldPolicy.Effect)), policyKey)
+	}
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to store policy: %w", err)
 	}
 
-	c.InvalidateEvaluationCaches(ctx, policy.Users, policy.Groups, policy.ServiceAccounts)
+	// Invalidate caches for the UNION of old and new subjects: identities that
+	// were removed in this update need stale "allow" decisions cleared, and
+	// identities just granted need stale "deny" decisions cleared.
+	c.InvalidateEvaluationCaches(
+		ctx,
+		unionStrings(oldUsersAll(oldPolicy), policy.Users),
+		unionStrings(oldGroupsAll(oldPolicy), policy.Groups),
+		unionStrings(oldSAsAll(oldPolicy), policy.ServiceAccounts),
+	)
 
 	logrus.Infof("Stored policy %s with %d custom resource types", policyKey, len(policy.CustomResourceTypes))
 	return nil
+}
+
+// readPreviousPolicy fetches the previously-stored compiled policy at policyKey.
+// Returns nil if the policy doesn't exist or can't be unmarshaled.
+func (c *Client) readPreviousPolicy(ctx context.Context, policyKey string) *types.CompiledPolicy {
+	data, err := c.client.HGet(ctx, policyKey, "data").Result()
+	if err != nil {
+		return nil
+	}
+	var p types.CompiledPolicy
+	if err := json.Unmarshal([]byte(data), &p); err != nil {
+		logrus.WithError(err).Warnf("Failed to unmarshal previous policy %s; stale indexes may remain", policyKey)
+		return nil
+	}
+	return &p
+}
+
+// indexedSubjects returns the subject and custom-resource-type slices that
+// are currently expected to be present in the per-subject Redis indexes for
+// the given policy. When the policy is nil or disabled the policy's subjects
+// were never written to indexes, so all returned slices are empty.
+func indexedSubjects(p *types.CompiledPolicy) (users, groups, sas, types []string) {
+	if p == nil || !p.Enabled {
+		return nil, nil, nil, nil
+	}
+	return p.Users, p.Groups, p.ServiceAccounts, p.CustomResourceTypes
+}
+
+// oldUsersAll / oldGroupsAll / oldSAsAll return the raw subject slices from a
+// previous policy regardless of its enabled state. Used for cache invalidation,
+// where we want to clear decisions for *any* identity ever named by the policy.
+func oldUsersAll(p *types.CompiledPolicy) []string {
+	if p == nil {
+		return nil
+	}
+	return p.Users
+}
+
+func oldGroupsAll(p *types.CompiledPolicy) []string {
+	if p == nil {
+		return nil
+	}
+	return p.Groups
+}
+
+func oldSAsAll(p *types.CompiledPolicy) []string {
+	if p == nil {
+		return nil
+	}
+	return p.ServiceAccounts
+}
+
+// diffStrings returns elements present in `a` but not in `b`.
+func diffStrings(a, b []string) []string {
+	if len(a) == 0 {
+		return nil
+	}
+	bset := make(map[string]struct{}, len(b))
+	for _, x := range b {
+		bset[x] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, x := range a {
+		if _, ok := bset[x]; !ok {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// unionStrings returns the set-union of `a` and `b`, deduplicated, order undefined.
+func unionStrings(a, b []string) []string {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	s := make(map[string]struct{}, len(a)+len(b))
+	for _, x := range a {
+		s[x] = struct{}{}
+	}
+	for _, x := range b {
+		s[x] = struct{}{}
+	}
+	out := make([]string, 0, len(s))
+	for x := range s {
+		out = append(out, x)
+	}
+	return out
 }
 
 // RemovePolicy removes a policy and all its indexes from Redis
@@ -207,6 +331,13 @@ func (c *Client) UpdatePolicyStatus(ctx context.Context, namespace, name string,
 // InvalidateEvaluationCaches clears evaluation caches for affected identities.
 // Also clears rbac:decision:* and rbac:custom:* caches so stale
 // authorization decisions don't persist after policy changes.
+//
+// Group invalidation walks the RBAC decision keyspace directly rather than
+// consulting a separately-maintained group-membership index: the cache itself
+// is the truth source, so we scan keys and delete those whose groups CSV
+// (encoded in the cache key by Principal.CacheKey) intersects with the
+// changed group set. This costs an O(keyspace) scan, which is acceptable
+// because policy changes are rare.
 func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, serviceAccounts []string) {
 	count := 0
 	pipe := c.client.Pipeline()
@@ -219,17 +350,11 @@ func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, 
 		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:%s:*", escapeRedisGlobChars(user)))
 	}
 
-	for _, group := range groups {
-		members, err := c.client.SMembers(ctx, fmt.Sprintf(keyGroupMembers, group)).Result()
-		if err == nil {
-			for _, member := range members {
-				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:%s:*", member))
-				pipe.Del(ctx, fmt.Sprintf(keyUserPermissions, member))
-				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:decision:%s:*", escapeRedisGlobChars(member)))
-				count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("rbac:custom:%s:*", escapeRedisGlobChars(member)))
-			}
+	if len(groups) > 0 {
+		count += c.invalidateRBACDecisionsForGroups(ctx, pipe, groups)
+		for _, group := range groups {
+			count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:*:group:%s:*", group))
 		}
-		count += c.scanAndDeletePolicy(ctx, pipe, fmt.Sprintf("policy:eval:*:group:%s:*", group))
 	}
 
 	for _, sa := range serviceAccounts {
@@ -243,6 +368,71 @@ func (c *Client) InvalidateEvaluationCaches(ctx context.Context, users, groups, 
 	}
 
 	logrus.Debugf("Cleared %d evaluation cache entries", count)
+}
+
+// invalidateRBACDecisionsForGroups scans rbac:decision:* and rbac:custom:* keys
+// and queues for deletion any entry whose Principal.CacheKey groups CSV
+// contains one of the changed groups. The cache key format is
+// "rbac:{decision|custom}:{username}:{sorted_groups_csv}:..." where the CSV
+// is comma-joined. We scan each `:`-delimited segment of the suffix and look
+// for any element matching a changed group, which tolerates usernames that
+// themselves contain colons (e.g. service accounts).
+func (c *Client) invalidateRBACDecisionsForGroups(ctx context.Context, pipe goredis.Pipeliner, groups []string) int {
+	changed := make(map[string]struct{}, len(groups))
+	for _, g := range groups {
+		if g != "" {
+			changed[g] = struct{}{}
+		}
+	}
+	if len(changed) == 0 {
+		return 0
+	}
+
+	count := 0
+	for _, prefix := range []string{"rbac:decision:", "rbac:custom:"} {
+		pattern := prefix + "*"
+		var cursor uint64
+		for {
+			keys, next, err := c.client.Scan(ctx, cursor, pattern, policyScanBatchSize).Result()
+			if err != nil {
+				break
+			}
+			for _, key := range keys {
+				suffix, ok := strings.CutPrefix(key, prefix)
+				if !ok {
+					continue
+				}
+				if cacheKeyMatchesGroup(suffix, changed) {
+					pipe.Del(ctx, key)
+					count++
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+	return count
+}
+
+// cacheKeyMatchesGroup reports whether any `:`-delimited segment of the
+// supplied cache-key suffix contains a CSV element present in `changed`.
+func cacheKeyMatchesGroup(suffix string, changed map[string]struct{}) bool {
+	for segment := range strings.SplitSeq(suffix, ":") {
+		if segment == "" {
+			continue
+		}
+		for elem := range strings.SplitSeq(segment, ",") {
+			if elem == "" {
+				continue
+			}
+			if _, hit := changed[elem]; hit {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // escapeRedisGlobChars escapes Redis glob metacharacters to prevent pattern injection.

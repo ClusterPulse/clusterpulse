@@ -83,6 +83,7 @@ internal/store/
 | `OAUTH_HEADER_EMAIL` | X-Forwarded-Email | Email header |
 | `ENVIRONMENT` | production | development/production |
 | `RBAC_CACHE_TTL` | 0 | Cache TTL seconds (0=disabled) |
+| `GROUP_CACHE_TTL` | 60 | In-memory cache TTL for `resolveGroups` results — coalesces parallel page-load requests so a single dashboard load hits the OpenShift API at most once per principal. 0 disables. |
 | `SWAGGER_ENABLED` | false | Enable Swagger UI at `/api/v1/swagger/` |
 | `SWAGGER_HOST` | _(empty)_ | Override Swagger API host (empty = use browser URL) |
 
