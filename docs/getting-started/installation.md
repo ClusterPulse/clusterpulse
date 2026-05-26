@@ -1,202 +1,181 @@
 # Installation
 
-ClusterPulse can be installed on OpenShift clusters via OperatorHub or on any Kubernetes cluster using Helm.
+ClusterPulse installs on OpenShift (via OperatorHub or Helm) or any Kubernetes 1.21+ cluster (Helm). The operator manifests and Helm chart live in the [`ClusterPulse/operator`](https://github.com/ClusterPulse/operator) repo.
 
 ## Prerequisites
 
-- OpenShift 4.x or Kubernetes 1.21+ cluster
-- Cluster administrator privileges
-- For Helm installation: Helm 3.x installed locally
+- OpenShift 4.x or Kubernetes 1.21+
+- `cluster-admin` on the install cluster
+- For Helm: Helm 3.x and either `kubectl` or `oc`
 
-## OperatorHub Installation (OpenShift)
+## FIPS clusters
 
-ClusterPulse is available in the OperatorHub community operator index.
+If the hub cluster is FIPS-enabled, the default oauth-proxy image will not start. Override it in the `ClusterPulse` CR:
 
-### GUI Installation
+```yaml
+spec:
+  frontend:
+    oauth:
+      image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9
+```
 
-1. Log in to the OpenShift web console as a cluster administrator.
+This applies to both the OperatorHub and Helm install paths. Apply it when you create the `ClusterPulse` CR, or patch it in afterwards.
 
-2. Navigate to **Operators** > **OperatorHub** in the left sidebar.
+## OperatorHub (OpenShift)
 
-3. In the search field, enter `ClusterPulse`.
+ClusterPulse is in the community operator index.
 
-4. Select the **ClusterPulse** tile from the search results.
+=== "Console (GUI)"
 
-5. Review the operator information and click **Install**.
+    1. Sign in to the OpenShift web console as `cluster-admin`.
+    2. Go to **Operators → OperatorHub**.
+    3. Search for `ClusterPulse` and select the tile.
+    4. Click **Install**.
+    5. Set:
+        - **Update channel** — pick the channel you want to track.
+        - **Installation mode** — namespace-scoped or all-namespaces. The operator is namespace-scoped; "A specific namespace" is the typical choice.
+        - **Installed Namespace** — select or create the namespace (e.g. `clusterpulse`).
+        - **Update approval** — Automatic or Manual.
+    6. Click **Install** and wait for **Operators → Installed Operators** to show `Succeeded`.
+    7. On the operator detail page, **Create Instance** under the `ClusterPulse` API. The defaults are enough to start. Add the FIPS override above if your cluster is FIPS-enabled.
 
-6. Configure the installation options:
-    - **Update channel**: Select the desired release channel.
-    - **Installation mode**: Choose whether to install in a specific namespace or all namespaces.
-    - **Installed Namespace**: Select or create the target namespace.
-    - **Update approval**: Select `Automatic` or `Manual` based on your upgrade policy.
+=== "CLI"
 
-7. Click **Install** to begin the installation.
+    1. Create the namespace (skip if it already exists):
 
-8. Wait for the operator status to display `Succeeded`. This can be monitored under **Operators** > **Installed Operators**.
+        ```bash
+        oc create namespace clusterpulse
+        ```
 
-9. Once installed, create a ClusterPulse instance by navigating to the operator's detail page and selecting **Create Instance** under the provided API.
+    2. Create an `OperatorGroup` (skip if one already exists in the namespace):
 
-> [!IMPORTANT]
-> For cluster built with FIPS, you must change the oauth proxy in the UI or it will not start
-> ```
-> spec:
->   frontend:
->     oauth:
->       image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9
-> ```
+        ```yaml
+        apiVersion: operators.coreos.com/v1
+        kind: OperatorGroup
+        metadata:
+          name: clusterpulse-operatorgroup
+          namespace: clusterpulse
+        spec:
+          targetNamespaces:
+            - clusterpulse
+        ```
 
-### CLI Installation
+        ```bash
+        oc apply -f operatorgroup.yaml
+        ```
 
-1. Create a namespace for the operator (optional, if not using an existing namespace):
+    3. Create the `Subscription`:
 
-    ```bash
-    oc create namespace clusterpulse
-    ```
+        ```yaml
+        apiVersion: operators.coreos.com/v1alpha1
+        kind: Subscription
+        metadata:
+          name: clusterpulse
+          namespace: clusterpulse
+        spec:
+          channel: stable
+          name: clusterpulse
+          source: community-operators
+          sourceNamespace: openshift-marketplace
+          installPlanApproval: Automatic
+        ```
 
-2. Create an `OperatorGroup` if one does not already exist in the target namespace:
+        ```bash
+        oc apply -f subscription.yaml
+        ```
 
-    ```yaml
-    apiVersion: operators.coreos.com/v1
-    kind: OperatorGroup
-    metadata:
-      name: clusterpulse-operatorgroup
-      namespace: clusterpulse
-    spec:
-      targetNamespaces:
-        - clusterpulse
-    ```
+    4. Verify the operator installed:
 
-    Apply the manifest:
+        ```bash
+        oc get csv -n clusterpulse
+        ```
 
-    ```bash
-    oc apply -f operatorgroup.yaml
-    ```
+        The ClusterPulse CSV should show `Succeeded`. If it sticks on `Pending` or `InstallReady`, check `oc get installplan -n clusterpulse` and `oc describe csv -n clusterpulse`.
 
-3. Create a `Subscription` to install the operator:
+    5. Create a `ClusterPulse` CR to deploy the workloads:
 
-    ```yaml
-    apiVersion: operators.coreos.com/v1alpha1
-    kind: Subscription
-    metadata:
-      name: clusterpulse
-      namespace: clusterpulse
-    spec:
-      channel: stable
-      name: clusterpulse
-      source: community-operators
-      sourceNamespace: openshift-marketplace
-      installPlanApproval: Automatic
-    ```
+        ```yaml
+        apiVersion: clusterpulse.io/v1alpha1
+        kind: ClusterPulse
+        metadata:
+          name: clusterpulse
+          namespace: clusterpulse
+        spec: {}
+        ```
 
-    Apply the manifest:
+        ```bash
+        oc apply -f clusterpulse-cr.yaml
+        ```
 
-    ```bash
-    oc apply -f subscription.yaml
-    ```
+## Helm
 
-4. Verify the operator installation:
+Works on OpenShift and any Kubernetes 1.21+ cluster.
 
-    ```bash
-    oc get csv -n clusterpulse
-    ```
-
-    The output should show the ClusterPulse operator with a phase of `Succeeded`.
-
-5. Create a ClusterPulse custom resource to deploy the application. The default options should suffice for most instances:
-
-> [!IMPORTANT]
-> For cluster built with FIPS, you must change the oauth proxy in the UI or it will not start
-> ```
-> spec:
->   frontend:
->     oauth:
->       image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9
-> ```
-
-    ```yaml
-    apiVersion: clusterpulse.io/v1alpha1
-    kind: ClusterPulse
-    metadata:
-      name: clusterpulse
-      namespace: clusterpulse
-    spec:
-      # Add configuration options as needed
-    ```
-
-    Apply the manifest:
-
-    ```bash
-    oc apply -f clusterpulse-cr.yaml
-    ```
-
-## Helm Installation
-
-Helm installation is suitable for any Kubernetes cluster, including OpenShift.
-
-1. Clone the operator repository:
+1. Clone the operator repo (it contains the chart):
 
     ```bash
     git clone https://github.com/ClusterPulse/operator.git
     cd operator/
     ```
 
-2. Install the Custom Resource Definitions:
+2. Install the CRDs:
 
     ```bash
     make install
     ```
 
-3. Install ClusterPulse using Helm:
+3. Install the chart:
 
     ```bash
-    helm install clusterpulse ./helm-charts/clusterpulse
+    helm install clusterpulse ./helm-charts/clusterpulse \
+        --namespace clusterpulse --create-namespace
     ```
 
-4. To install in a specific namespace:
+4. Verify:
 
     ```bash
-    helm install clusterpulse ./helm-charts/clusterpulse --namespace clusterpulse --create-namespace
+    kubectl get pods -n clusterpulse
     ```
 
-5. Verify the installation:
+### Configuration
 
-    ```bash
-    oc get pods -n clusterpulse
-    ```
-
-### Helm Configuration
-
-To customize the installation, create a `values.yaml` file with your configuration overrides:
+Generate a `values.yaml` for overrides:
 
 ```bash
+helm show values ./helm-charts/clusterpulse > values.yaml
 helm install clusterpulse ./helm-charts/clusterpulse -f values.yaml
 ```
 
-Refer to the chart's default `values.yaml` in `./helm-charts/clusterpulse/values.yaml` for available configuration options.
+The chart's `values.yaml` documents every option. Notable sections:
 
-### Upgrading
+- `redis.*` — bundled Bitnami Redis subchart. Disable (`redis.enabled: false`) to bring your own. See [Connect to an external Redis](../how-to/misc/external-redis.md).
+- `api.*`, `clusterEngine.*`, `policyEngine.*` — per-component config including Redis connection.
+- `clusterEngine.ingester.*` — enable the gRPC ingester for push-mode collectors. See [Configure ingester TLS](../how-to/clusters/configure-ingester-tls.md).
+- `frontend.oauth.image` — override for FIPS (see above).
 
-To upgrade an existing Helm installation:
+### Upgrade
 
 ```bash
 cd operator/
 git pull
-helm upgrade clusterpulse ./helm-charts/clusterpulse
+helm upgrade clusterpulse ./helm-charts/clusterpulse -f values.yaml
 ```
 
-### Uninstalling
-
-To remove ClusterPulse installed via Helm:
+### Uninstall
 
 ```bash
-helm uninstall clusterpulse
-make uninstall  # Removes CRDs
+helm uninstall clusterpulse -n clusterpulse
+make uninstall    # Removes CRDs
 ```
 
-## Post-Installation
+> **Note:** `make uninstall` deletes the CRDs cluster-wide, which deletes every `ClusterConnection`, `RegistryConnection`, `MonitorAccessPolicy`, and `MetricSource` in the cluster. Skip this step if other namespaces use those CRDs.
 
-After installation, configure the following:
+## Post-installation
 
-1. **Target Clusters**: Add the Kubernetes clusters you want to monitor.
-2. **RBAC Policies**: Define access control policies for your users and teams.
-3. **Authentication**: Configure OAuth2 integration with your identity provider.
+Once pods are running, do these in order:
+
+1. [Connect a target cluster](../how-to/clusters/add-openshift-cluster.md) — required before there's any data to view.
+2. [Create your first policy](../how-to/policies/create-first-policy.md) — required before any user can see data (default is implicit deny).
+3. (Optional) [Enable push-mode collection](../how-to/clusters/enable-push-mode.md) for clusters where the hub can't reach the kube-apiserver.
+4. (Optional) [Add registries](../how-to/clusters/add-registry.md) for container registry health monitoring.
+5. (Optional) [Create custom MetricSources](../how-to/metricsources/create-metricsource.md) to collect resources beyond the built-ins.

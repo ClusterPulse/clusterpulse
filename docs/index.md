@@ -1,10 +1,10 @@
 # ClusterPulse
 
-**Multi-cluster Kubernetes monitoring with fine-grained RBAC**
+Multi-cluster Kubernetes/OpenShift monitoring with policy-based RBAC.
 
-ClusterPulse provides a unified view of your Kubernetes clusters with 
-enterprise-grade access control. Monitor clusters, registries, and 
-resources while ensuring users only see what they're authorized to access.
+ClusterPulse aggregates cluster health, capacity, operator, and custom-resource state from a fleet of connected clusters and serves a filtered view to each user. Access is controlled by `MonitorAccessPolicy` CRDs that the operator compiles into Redis-indexed structures evaluated on every API request.
+
+If you're new here, start with the [quickstart](getting-started/index.md). If you want to understand the moving parts before installing, read [Architecture](concepts/architecture.md) and the [RBAC Model](concepts/rbac-model.md).
 
 ## Quick Links
 
@@ -14,7 +14,7 @@ resources while ensuring users only see what they're authorized to access.
 
     ---
 
-    Install ClusterPulse and connect your first cluster in 5 minutes
+    Install ClusterPulse, connect a cluster, and create the first policy.
 
     [Quickstart](getting-started/index.md)
 
@@ -22,23 +22,23 @@ resources while ensuring users only see what they're authorized to access.
 
     ---
 
-    Step-by-step guides for common tasks
+    Step-by-step recipes for connecting clusters and registries, writing policies, and defining MetricSources.
 
     [How-To Guides](how-to/index.md)
 
--   **Reference**
+-   **Concepts**
 
     ---
 
-    CRD specifications, API docs, and configuration
+    Architecture, the RBAC model, and how policies are evaluated.
 
-    [References](references/index.md)
+    [Concepts](concepts/architecture.md)
 
 -   **Contributing**
 
     ---
 
-    Help improve ClusterPulse
+    Per-component developer guides, test suite layout, and release workflow.
 
     [Contributing](contributing/index.md)
 

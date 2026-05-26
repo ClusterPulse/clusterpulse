@@ -19,11 +19,11 @@ The Cluster Controller is a Kubernetes operator that:
 - Hosts the **Ingester gRPC server** for push-mode collectors
 - Deploys collector agents to managed clusters when `collectionMode: push`
 
-[Learn more →](../contributing/cluster-controller.md)
+[Learn more →](../contributing/cluster-controller-architecture.md)
 
 ### Collector Agent (Go)
 
-The Collector Agent is a lightweight binary deployed on each managed cluster
+The Collector Agent is a single binary deployed on each managed cluster
 in push mode. It:
 
 - Runs as a single-replica Deployment in `clusterpulse-system` namespace

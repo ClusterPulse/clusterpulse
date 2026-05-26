@@ -18,7 +18,7 @@ flowchart TD
     H -->|Deny| I[Return DENY]
     H -->|Allow| J[Extract Permissions & Filters]
     J --> K[Return ALLOW/PARTIAL]
-    E -->|No More Policies| L[Return Default DENY]
+    E -->|No More Policies| L[Return Default DENY or default-allow if<br/>scope.clusters.default=allow on a matched policy]
 ```
 
 ## Step 1: Policy Retrieval
@@ -47,14 +47,16 @@ if principal.is_service_account:
 
 ### Priority Sorting
 
-Retrieved policies are sorted by priority in descending order (highest priority first, meaning lowest numeric value):
+Retrieved policies are sorted by priority in descending order — highest numeric value first. The store keeps policies in a Redis sorted set keyed by priority and reads them back with `ZRevRange` (`internal/store/reader.go`), so the highest-priority policy is always evaluated first.
 
 | Priority | Order |
 |----------|-------|
-| 0 | First (highest priority) |
-| 100 | Second |
-| 200 | Third |
-| 999 | Last (lowest priority) |
+| 10000 | First (highest priority) |
+| 500 | Second |
+| 100 | Third (CRD default) |
+| 1 | Last (lowest priority) |
+
+Valid range: 1–10000.
 
 ## Step 2: Policy Validation
 
@@ -106,9 +108,9 @@ flowchart TD
     F -->|Yes| D
     F -->|No| G{More Rules?}
     G -->|Yes| B
-    G -->|No| H{default access?}
-    H -->|all/allow| D
-    H -->|none| I[No Match]
+    G -->|No| H{scope.clusters.default?}
+    H -->|allow| D
+    H -->|deny / none| I[No Match]
 ```
 
 #### Selector Types
@@ -398,21 +400,21 @@ If policies have the same priority, evaluation order is undefined. Avoid this by
 
 ### Deny Precedence
 
-A `Deny` policy at any priority level stops evaluation:
+A `Deny` policy stops evaluation as soon as the engine encounters it. Because evaluation runs highest-priority-first, a higher-priority `Deny` will short-circuit a lower-priority `Allow`:
 
 ```
-Priority 100: Allow (skipped - Deny found first)
-Priority 50: Deny  <-- Evaluation stops here
-Priority 10: Allow (never reached)
+Priority 200: Deny   <-- Evaluated first, evaluation stops here
+Priority 100: Allow  (never reached)
+Priority 50:  Allow  (never reached)
 ```
 
 ### Additive Permissions
 
-Permissions from a matching `Allow` policy are not additive. Only the first matching policy's permissions apply:
+Permissions from a matching `Allow` policy are not additive. Only the first (highest-priority) matching policy's permissions apply:
 
 ```
-Priority 100: Allow {view: true}           <-- This applies
-Priority 200: Allow {view: true, viewMetrics: true} (not reached)
+Priority 200: Allow {view: true, viewMetrics: true}  <-- This applies
+Priority 100: Allow {view: true}                     (not reached)
 ```
 
 ## Caching Behavior

@@ -1,129 +1,69 @@
 # ClusterPulse
 
-**Enterprise Multi-Cluster Kubernetes Monitoring with Fine-Grained Access Control**
+Multi-cluster Kubernetes/OpenShift monitoring with policy-based RBAC. ClusterPulse collects health, capacity, operator, and arbitrary custom-resource data from a fleet of clusters, stores it centrally, and serves a filtered view of that data to each user based on `MonitorAccessPolicy` CRDs.
 
-ClusterPulse is a comprehensive monitoring platform designed for organizations managing multiple Kubernetes and OpenShift clusters. It provides real-time visibility into cluster health, resource utilization, and operational status while enforcing granular Role-Based Access Control (RBAC) to ensure teams only see what they need to see.
+Full documentation: <https://clusterpulse.github.io/clusterpulse/latest/>
 
-## 🎯 Why ClusterPulse?
+## What it does
 
-### The Challenge
-Organizations operating multiple Kubernetes clusters face several critical challenges:
-- **Visibility Gaps**: No unified view across all clusters, leading to blind spots in infrastructure monitoring
-- **Security Concerns**: Difficulty implementing fine-grained access control across multiple clusters
-- **Operational Overhead**: Teams waste time switching between different tools and contexts
-- **Compliance Requirements**: Need to restrict data access based on roles, teams, and regulatory requirements
-- **Resource Inefficiency**: Inability to spot underutilized resources across the fleet
+- Connects to remote clusters via a `ClusterConnection` CRD. Either the hub pulls metrics over the cluster's API (default), or a collector agent on the managed cluster pushes metrics back over gRPC.
+- Collects node, namespace, pod, deployment, operator, and OpenShift `ClusterOperator` state. Optional `MetricSource` CRDs collect any other Kubernetes resource via JSONPath field extraction with cluster-wide aggregations.
+- Optionally monitors container registries (Docker v2 API) via `RegistryConnection`.
+- Compiles `MonitorAccessPolicy` CRDs into Redis-indexed structures so the API can authorize every request without hitting the kube-apiserver.
+- Filters every response — clusters, nodes, namespaces, operators, custom resources, and aggregations — to what the requesting principal is allowed to see.
+- Authenticates via OAuth proxy headers (`X-Forwarded-User` / `X-Forwarded-Email`), resolving group membership from OpenShift `User`/`Group` CRs.
 
-### The ClusterPulse Solution
-ClusterPulse addresses these challenges by providing:
+## Components
 
-- **📊 Unified Multi-Cluster Dashboard**: Monitor all your clusters from a single pane of glass with real-time metrics and health status
-- **🔒 Enterprise-Grade RBAC**: Define sophisticated access policies that filter visibility down to the namespace, node, and pod level
-- **⚡ Real-Time Performance**: Sub-second response times (cluster size dependent) with intelligent caching and optimized data structures
-- **🔄 Automatic Discovery**: Automatically discovers and monitors nodes, operators, namespaces, and resources
-- **📈 Scalable Architecture**: Designed to handle hundreds of clusters with thousands of nodes
+| Binary | Path | Purpose |
+|---|---|---|
+| `manager` | `cmd/manager/` | Controller manager. Reconciles `ClusterConnection`, `MonitorAccessPolicy`, `MetricSource`, `RegistryConnection`. Embeds the gRPC ingester for push-mode collectors. |
+| `api` | `cmd/api/` | Chi-based REST server. Serves `/api/v1/*` to the UI with RBAC applied per request. |
+| `collector` | `cmd/collector/` | Per-cluster agent for push mode. Streams metrics to the hub ingester. |
 
-## 📄 Documentation
-ClusterPulse documentation is deployed via mkdocs. See more [here](https://clusterpulse.github.io/clusterpulse/latest/)
+The frontend is in a separate repo (React/TypeScript/PatternFly).
 
-## 🏗️ Architecture
+## Architecture
 
-![architecture](/docs/assets/architecture.png)
+![Architecture diagram](docs/assets/architecture.png)
 
-ClusterPulse follows a microservices architecture with four core components:
-
-### Components Overview
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Cluster Controller** | Go | Connects to target clusters, collects metrics, and stores in Redis |
-| **Policy Controller** | Go | Compiles RBAC policies into optimized structures (runs within cluster-controller) |
-| **API** | Go, Chi | Serves filtered cluster data based on user permissions |
-| **Collector** | Go | gRPC agent deployed on target clusters, streams metrics to the manager's ingester |
-| **Frontend** | React, TypeScript, PatternFly | Provides intuitive dashboard for cluster monitoring |
-
-### Data Flow
-1. **Cluster Controller** connects to configured clusters and continuously collects metrics
-2. **Policy Engine** watches for policy changes and compiles them for fast evaluation
-3. **API** combines cluster data with policies to serve filtered, authorized responses
-4. **Frontend** displays real-time, personalized views based on user permissions
-
-## ✨ Key Features
-
-### Multi-Cluster Management
-- Monitor unlimited OpenShift clusters
-- Automatic detection of cluster version and platform
-- Real-time health status with color-coded indicators
-
-### Fine-Grained RBAC
-- **Subject-Based Policies**: Define access for users, groups, and service accounts
-- **Resource Filtering**: Control visibility of nodes, operators, namespaces, and pods
-- **Pattern Matching**: Use wildcards and regex for flexible resource selection
-- **Priority Resolution**: Handle policy conflicts with priority-based ordering
-
-### Real-Time Monitoring
-- **X-Second Auto-Refresh**: Modifiable reconciliation timer
-- **Resource Metrics**: CPU, memory, storage utilization
-- **Node Health**: Track node status, conditions, and resource pressure
-- **Operator Status**: Monitor OLM-managed operators across namespaces
-- **Registry Health**: Track container registry availability
-
-### Enterprise Features
-- **OAuth2 Integration**: Seamless authentication with enterprise identity providers
-- **Dark Mode Support**: Reduce eye strain with theme preferences
-- **Responsive Design**: Access from desktop, tablet, or mobile devices
-- **High Availability**: Redis-backed storage with replica support
+See [docs/concepts/architecture.md](docs/concepts/architecture.md) for the full description.
 
 ## Deployment
 
-### OperatorHub
-ClusterPulse can be deployed through OLM in the OperatorHub. It is currently inside the community operator index!
+The Helm chart and operator manifests live in [`ClusterPulse/operator`](https://github.com/ClusterPulse/operator).
+
+### OperatorHub (OpenShift)
+
+ClusterPulse is in the community operator index. Install from **Operators → OperatorHub** in the OpenShift console, then create a `ClusterPulse` CR. Full walkthrough in [docs/getting-started/installation.md](docs/getting-started/installation.md).
 
 ### Helm
-```
+
+```bash
 git clone https://github.com/ClusterPulse/operator.git
 cd operator/
-make install							# Will install CRDs
-helm install clusterpulse ./helm-charts/clusterpulse		# Will install ClusterPulse
+make install                                              # Installs CRDs
+helm install clusterpulse ./helm-charts/clusterpulse      # Installs ClusterPulse
 ```
 
-## 📚 Documentation
+## Documentation
 
-Detailed documentation for each component:
+- [Getting started](https://clusterpulse.github.io/clusterpulse/latest/getting-started/) — install + first cluster + first policy
+- [How-to guides](https://clusterpulse.github.io/clusterpulse/latest/how-to/) — connecting clusters/registries, writing policies, defining MetricSources, push mode, ingester TLS
+- [Concepts](https://clusterpulse.github.io/clusterpulse/latest/concepts/) — architecture, RBAC model, policy evaluation
+- [Contributing](docs/contributing/) — per-component developer guides
 
-- [Full Documentation](https://clusterpulse.github.io/clusterpulse/latest/) - Hosted docs site
-- [API Contributing Guide](./docs/contributing/api.md) - Go API server and RBAC engine
-- [Cluster Controller Guide](./docs/contributing/cluster-controller.md) - Cluster connection manager
-- [Policy Controller Guide](./docs/contributing/policy-controller.md) - Policy compilation and management
+## Tech stack
 
-### Technology Stack
+- Go (controller-runtime for reconcilers, Chi for the API, gRPC for collector/ingester)
+- Redis (current state + policy indexes)
+- VictoriaMetrics (optional, time-series history)
+- Kubernetes / OpenShift
 
-- **Backend**: Go (Chi)
-- **Controllers**: Go (controller-runtime)
-- **Frontend**: React, TypeScript
-- **Storage**: Redis
-- **Container**: Kubernetes/OpenShift
-- **Protocols**: REST API, gRPC (collector ingest)
+## License
 
-## 🤝 Contributing
+Apache 2.0 — see [LICENSE](LICENSE).
 
-We welcome contributions! Please see our [Contributing Guides](./docs/contributing/) for details.
+## Support
 
-### Areas for Contribution
-- Additional cluster platform support
-- Enhanced visualizations and charts
-- Performance optimizations
-- Documentation improvements
-- Testing and quality assurance
-
-## 📄 License
-
-ClusterPulse is released under the [Apache 2.0 License](LICENSE).
-
-## 💬 Support
-
-- **Issues**: [GitHub Issues](https://github.com/ClusterPulse/clusterpulse/issues)
-
----
-
-**ClusterPulse** - Bringing clarity to multi-cluster Kubernetes operations.
+- [GitHub Issues](https://github.com/ClusterPulse/clusterpulse/issues)

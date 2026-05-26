@@ -1,18 +1,18 @@
 # Filter by Namespace
 
-This guide explains how to configure `MonitorAccessPolicy` resources to restrict visibility to specific namespaces.
+Restrict what namespaces (and the resources inside them) a user can see in a cluster by configuring a `MonitorAccessPolicy`.
 
-## Overview
+When namespace filtering is applied:
 
-Namespace filtering controls which namespaces a user can see within a cluster. When namespace filtering is applied:
+- The namespace list returned for the cluster is filtered.
+- Per-cluster counts (pods, deployments, services) are recomputed against only visible namespaces.
+- Custom resources that the policy ties to the same namespace set are also filtered.
 
-- Namespace lists are filtered to show only permitted namespaces
-- Pod, deployment, and service counts reflect only resources in permitted namespaces
-- Cluster metrics are recalculated based on visible namespaces
+This guide assumes you've read [Create your first policy](create-first-policy.md).
 
-## Basic Namespace Filter
+## Minimal example
 
-The following policy allows access only to namespaces starting with `app-`:
+Allow `app-developers` to see only namespaces whose names start with `app-`:
 
 ```yaml
 apiVersion: clusterpulse.io/v1alpha1
@@ -26,17 +26,15 @@ spec:
     subjects:
       groups:
         - app-developers
-
   access:
     effect: Allow
     enabled: true
-
   scope:
     clusters:
-      default: filtered
+      default: deny
       rules:
         - selector:
-            matchPattern: .*
+            matchPattern: ".*"
           permissions:
             view: true
             viewMetrics: true
@@ -49,33 +47,35 @@ spec:
                     - "app-*"
 ```
 
-## Visibility Options
+Apply: `oc apply -f policy.yaml`.
 
-The `visibility` field accepts three values:
+> **Note:** `scope.clusters.default` accepts `allow`, `deny`, or `none` (CRD default `none`, which behaves like `deny`). It is **not** the same field as `resources[].visibility`, which accepts `all`/`none`/`filtered`.
 
-| Value | Behavior |
-|-------|----------|
-| `all` | No filtering. User sees all namespaces. |
-| `none` | Complete restriction. User sees no namespaces. |
-| `filtered` | Apply include/exclude rules from `filters`. |
+## `visibility` options (per-resource)
 
-## Filter Patterns
+| Value | Behaviour |
+|---|---|
+| `all` | No filtering on this resource type. Default if omitted. |
+| `none` | Hide everything of this type. |
+| `filtered` | Apply the `filters` block below. |
 
-### Wildcard Patterns
+## Filter patterns
 
-Use `*` to match any characters and `?` to match a single character:
+The `filters.names.allowed` and `filters.names.denied` fields take a mix of literals and wildcard patterns.
+
+### Wildcards
+
+`*` matches any run of characters, `?` matches exactly one:
 
 ```yaml
 filters:
   names:
     allowed:
-      - "app-*"        # Matches app-frontend, app-backend, etc.
-      - "team-?-prod"  # Matches team-a-prod, team-b-prod, etc.
+      - "app-*"        # app-frontend, app-backend, ...
+      - "team-?-prod"  # team-a-prod, team-b-prod, ...
 ```
 
-### Literal Values
-
-Exact namespace names without wildcards:
+### Literals
 
 ```yaml
 filters:
@@ -86,9 +86,9 @@ filters:
       - logging
 ```
 
-### Combining Allowed and Denied
+### Precedence
 
-The `denied` list takes precedence over `allowed`:
+`denied` wins over `allowed`. The engine evaluates exclusions first, then inclusions:
 
 ```yaml
 resources:
@@ -103,9 +103,64 @@ resources:
           - "app-secrets"
 ```
 
-This configuration allows all `app-*` namespaces except `app-internal` and `app-secrets`.
+Result: every `app-*` namespace except `app-internal` and `app-secrets`.
 
-## Complete Example: Team-Based Access
+## Filtering related resources
+
+When you restrict namespaces, you usually want pods (and any other namespace-scoped types you care about) restricted in lockstep. The engine doesn't infer this — list each type explicitly:
+
+```yaml
+resources:
+  - type: namespaces
+    visibility: filtered
+    filters:
+      names:
+        allowed: ["app-*"]
+  - type: pods
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed: ["app-*"]
+  - type: operators
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed: ["app-*"]
+```
+
+> **Note on operators:** the `operators` filter restricts visibility based on the operator's *target* namespaces (from the CSV/Subscription). Operators that install into a single namespace are filtered cleanly. Operators with `AllNamespaces` install mode are visible whenever any matched namespace overlaps their target set, which in practice means they show up as long as you can see any namespace they manage.
+
+## How metrics are affected
+
+Cluster-level metric counts are recomputed from the visible namespaces:
+
+| Metric | After filtering |
+|---|---|
+| `namespaces` | Count of visible namespaces. |
+| `pods` | Pods in visible namespaces. |
+| `pods_running` | Running pods in visible namespaces. |
+| `deployments` | Deployments in visible namespaces. |
+| `services` | Services in visible namespaces. |
+
+The cluster response carries `filter_metadata` when filtering is active:
+
+```json
+{
+  "metrics": {
+    "namespaces": 5,
+    "pods": 42,
+    "filtered": true,
+    "filter_metadata": {
+      "allowed_namespaces": 5,
+      "total_namespaces": 50
+    }
+  }
+}
+```
+
+Custom resource aggregations are also recomputed by default — see [Grant custom resource access → Aggregation recomputation](grant-custom-resource-access.md#aggregation-recomputation).
+
+## End-to-end example: team-scoped Allow
 
 ```yaml
 apiVersion: clusterpulse.io/v1alpha1
@@ -119,17 +174,16 @@ spec:
     subjects:
       groups:
         - team-alpha
-
   access:
     effect: Allow
     enabled: true
-
   scope:
     clusters:
-      default: filtered
+      default: deny
       rules:
         - selector:
-            environment: production
+            matchLabels:
+              environment: production
           permissions:
             view: true
             viewMetrics: true
@@ -152,128 +206,60 @@ spec:
                     - "shared-*"
 ```
 
-## Filtering Related Resources
+This policy:
 
-When filtering namespaces, you should also filter namespace-scoped resources to maintain consistency even though not explicitly necessary:
+- Targets the `team-alpha` group at priority 100.
+- Only matches clusters labelled `environment: production` (`default: deny` blocks the rest).
+- Allows the `alpha-*` and `shared-*` namespaces, except `shared-admin`.
+- Filters pods to the same namespace set.
 
-```yaml
-resources:
-  - type: namespaces
-    visibility: filtered
-    filters:
-      names:
-        allowed:
-          - "app-*"
+## Filtering custom resources by namespace
 
-  - type: pods
-    visibility: filtered
-    filters:
-      namespaces:
-        allowed:
-          - "app-*"
-
-  - type: operators
-    visibility: filtered
-    filters:
-      namespaces:
-        allowed:
-          - "app-*"
-```
-
-## Filtering Operators by Namespace
-
-Operators can be filtered by the namespaces where they are available. Remember that cluster scoped (operators shown in every namespace) operators will always show:
+Custom resources (types defined by `MetricSource`) follow the same pattern — list them by `type` (matching `MetricSource.spec.rbac.resourceTypeName`) and use `filters.namespaces`:
 
 ```yaml
 resources:
-  - type: operators
+  - type: pvc
     visibility: filtered
     filters:
       namespaces:
-        allowed:
-          - "operator-*"
-          - monitoring
-      names:
-        denied:
-          - "*-test"
+        allowed: ["app-*"]
+        denied: ["kube-system"]
+  - type: certificate
+    visibility: filtered
+    filters:
+      namespaces:
+        allowed: ["app-*"]
 ```
 
-## How Metrics Are Affected
+For the full set of options — name filters, field filters, aggregation visibility, and recomputation — see [Grant custom resource access](grant-custom-resource-access.md).
 
-When namespace filtering is active, cluster metrics are recalculated:
+## Common patterns
 
-| Metric | Behavior |
-|--------|----------|
-| `namespaces` | Count of visible namespaces only |
-| `pods` | Count of pods in visible namespaces |
-| `pods_running` | Running pods in visible namespaces |
-| `deployments` | Deployments in visible namespaces |
-| `services` | Services in visible namespaces |
-
-The API response includes filtering metadata:
-
-```json
-{
-  "metrics": {
-    "namespaces": 5,
-    "pods": 42,
-    "filtered": true,
-    "filter_metadata": {
-      "allowed_namespaces": 5,
-      "total_namespaces": 50
-    }
-  }
-}
-```
-
-## Verification
-
-### Check Allowed Namespaces via API
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  https://clusterpulse.example.com/api/v1/clusters/my-cluster/namespaces
-```
-
-### Check Filtered Metrics
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  https://clusterpulse.example.com/api/v1/clusters/my-cluster/metrics?detailed=true
-```
-
-The response includes `filter_details` when filtering is applied.
-
-## Common Patterns
-
-### Exclude System Namespaces
+### Exclude system namespaces
 
 ```yaml
 filters:
   names:
-    allowed:
-      - "*"
+    allowed: ["*"]
     denied:
       - kube-system
       - kube-public
       - kube-node-lease
-      - openshift-*
+      - "openshift-*"
 ```
 
-### Development Team Access
+### Two-team split
 
 ```yaml
 filters:
   names:
     allowed:
-      - "dev-*"
-      - "staging-*"
-    denied:
-      - "*-secrets"
-      - "*-internal"
+      - "team-a-*"
+      - "shared-*"
 ```
 
-### Production Read-Only with Limited Namespaces
+### Production read-only with explicit namespace allowlist
 
 ```yaml
 filters:
@@ -284,88 +270,51 @@ filters:
       - "prod-api"
 ```
 
-## Filtering Custom Resources by Namespace
+## Verification
 
-Custom resources collected by MetricSource can also be filtered by namespace. Custom resource types are listed alongside built-in types in the `resources` list:
+After applying:
 
-```yaml
-resources:
-  - type: pvc
-    visibility: filtered
-    filters:
-      namespaces:
-        allowed:
-          - "app-*"
-        denied:
-          - "kube-system"
-  - type: certificate
-    visibility: filtered
-    filters:
-      namespaces:
-        allowed:
-          - "app-*"
+```bash
+ROUTE=$(oc get route clusterpulse -n clusterpulse -o jsonpath='{.spec.host}')
+
+# What namespaces does the API return for the cluster?
+curl -s "https://$ROUTE/api/v1/clusters/my-cluster/namespaces" | jq
+
+# What does the engine think your effective permissions are?
+curl -s "https://$ROUTE/api/v1/auth/permissions" | jq
 ```
 
-The same pattern rules apply — `denied` takes precedence over `allowed`, and wildcards (`*`, `?`) are supported.
-
-### Combining with Built-In Namespace Filters
-
-When restricting namespace visibility, apply matching filters to custom resources for consistency:
-
-```yaml
-resources:
-  - type: namespaces
-    visibility: filtered
-    filters:
-      names:
-        allowed:
-          - "app-*"
-
-  - type: pods
-    visibility: filtered
-    filters:
-      namespaces:
-        allowed:
-          - "app-*"
-
-  - type: pvc
-    visibility: filtered
-    filters:
-      namespaces:
-        allowed:
-          - "app-*"
-```
-
-### Aggregation Recomputation
-
-When namespace filters reduce the set of visible custom resources, aggregations are automatically recomputed from the filtered set (if `filterAggregations: true` in the MetricSource, which is the default). This means a user filtered to `app-*` namespaces will see aggregation values that reflect only PVCs in those namespaces.
+`/auth/permissions` returns the per-cluster permissions and the resolved filters — useful when a policy looks correct on paper but isn't applying.
 
 ## Troubleshooting
 
-### Namespace Not Visible
+### A namespace I expected to see isn't visible
 
-1. Verify the namespace name matches the allowed patterns exactly
-2. Check that the namespace is not in the denied list
-3. Confirm the policy is active and applies to the user
+1. Confirm the literal/pattern in `allowed` matches the namespace name exactly. The match is glob, not regex (with `?` matching one character and `*` matching any run).
+2. Check `denied` — `denied` beats `allowed`. `openshift-*` is a common accidental exclusion.
+3. Check for a higher-priority `Deny` policy via `/api/v1/auth/policies`.
+4. Confirm the cluster itself is visible. If `scope.clusters.default: deny` (or `none`) and no rule selector matches the cluster, the user sees no namespaces at all.
 
-### Metrics Show Zero
+### Pod count is zero but namespaces are visible
 
-If metrics show zero but namespaces exist:
+The `pods` resource entry probably doesn't include the same namespace set. Add an explicit `pods` filter mirroring the `namespaces` filter.
 
-1. Verify the pod filter matches the namespace filter
-2. Check that `visibility` is set to `filtered`, not `none`
+### Metric counts look wrong
 
-### Debug Policy Application
-
-Use the auth endpoint to see effective permissions:
+Cluster-level counts (pods/deployments/services) are recomputed from visible namespaces every time `/api/v1/clusters/<name>` is fetched. If they look stale, decision caching is the usual culprit:
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  https://clusterpulse.example.com/api/v1/auth/permissions
+curl -X POST "https://$ROUTE/api/v1/auth/cache/clear"
 ```
 
-## Next Steps
+(`RBAC_CACHE_TTL` is `0` by default — caching is off — but a non-default deployment may have it on.)
 
-- [Create Read-Only Policy](create-readonly-policy.md) - Basic policy creation
-- [Grant Custom Resource Access](grant-custom-resource-access.md) - Full custom resource RBAC guide
-- [Policy Evaluation](../../concepts/policy-evaluation.md) - Understand how policies are evaluated
+### Operators visible that shouldn't be
+
+If you filtered `operators` by `namespaces` but a cluster-scoped operator is still visible, that's expected: operators with `AllNamespaces` install mode register against every namespace, so they overlap any allowed namespace. Add an explicit `names.denied` for the specific operator if you need to hide it.
+
+## Next steps
+
+- [Create your first policy](create-first-policy.md)
+- [Grant custom resource access](grant-custom-resource-access.md)
+- [Policy evaluation](../../concepts/policy-evaluation.md)
