@@ -1,21 +1,19 @@
 # Grant Custom Resource Access
 
-This guide covers configuring `MonitorAccessPolicy` resources to control access to custom resources collected by MetricSource.
+Custom resources collected by `MetricSource` use **implicit deny**. A user can't see anything of a given custom type unless a `MonitorAccessPolicy` explicitly grants it. This makes new MetricSource types invisible by default — administrators have to opt principals in.
 
-## Overview
+Custom resources live in the same `resources[]` list as built-in types (`nodes`, `namespaces`, etc.). The `type` field has to match the MetricSource's `spec.rbac.resourceTypeName`.
 
-Custom resources use **implicit deny**. A user cannot see any MetricSource-defined resource type unless a policy explicitly grants access. This provides a secure default — new MetricSource types are invisible until an administrator creates a policy for them.
-
-Custom resource types are listed alongside built-in types in the `resources` list. The `type` field must match the MetricSource's `rbac.resourceTypeName`.
+This guide assumes you've already read [Create your first policy](create-first-policy.md).
 
 ## Prerequisites
 
-- At least one `MetricSource` deployed with an `rbac.resourceTypeName` configured
-- Familiarity with `MonitorAccessPolicy` basics (see [Create Read-Only Policy](create-readonly-policy.md))
+- A `MetricSource` deployed with `spec.rbac.resourceTypeName` set. See [Create a MetricSource](../metricsources/create-metricsource.md).
+- A `MonitorAccessPolicy` that already covers the target principals (or, alternatively, you add the custom-type entries to a new policy).
 
-## Grant Full Access to a Custom Type
+## Grant full access to a type
 
-The simplest case — grant unrestricted read access to a custom resource type:
+Simplest form — unrestricted view of every resource of that type, in every cluster the principal can see:
 
 ```yaml
 apiVersion: clusterpulse.io/v1alpha1
@@ -29,17 +27,15 @@ spec:
     subjects:
       groups:
         - storage-admins
-
   access:
     effect: Allow
     enabled: true
-
   scope:
     clusters:
-      default: all
+      default: allow
       rules:
         - selector:
-            matchPattern: .*
+            matchPattern: ".*"
           permissions:
             view: true
             viewMetrics: true
@@ -48,11 +44,9 @@ spec:
               visibility: all
 ```
 
-The `type: pvc` must match the `rbac.resourceTypeName` in your MetricSource definition.
+`type: pvc` must match the MetricSource's `spec.rbac.resourceTypeName` exactly.
 
-## Filter by Namespace
-
-Restrict which namespaces a user can see resources from:
+## Filter by namespace
 
 ```yaml
 resources:
@@ -67,11 +61,9 @@ resources:
           - "shared-admin"
 ```
 
-`denied` takes precedence over `allowed`. Wildcards (`*`, `?`) are supported.
+Same precedence rules as for built-in types: `denied` beats `allowed`, wildcards `*` and `?` are supported. The namespace dimension uses the field the MetricSource identifies as the namespace (`spec.rbac.identifiers.namespace` if set, otherwise the standard `metadata.namespace` path).
 
-## Filter by Resource Name
-
-Restrict which individual resources are visible:
+## Filter by resource name
 
 ```yaml
 resources:
@@ -85,9 +77,9 @@ resources:
           - "*-internal"
 ```
 
-## Filter by Field Values
+## Filter by field values
 
-Filter resources by the values of extracted fields. Only fields listed in the MetricSource's `rbac.filterableFields` can be used.
+Fields must be listed in the MetricSource's `spec.rbac.filterableFields`. If a field isn't filterable, the engine ignores the filter (which means it's effectively wide open — define filterability deliberately on the MetricSource side).
 
 ```yaml
 resources:
@@ -104,13 +96,13 @@ resources:
             - "Failed"
 ```
 
-## Control Aggregation Visibility
+## Control aggregation visibility
 
-Policies can restrict which aggregations a user sees. This is independent of aggregation recomputation — it controls the names exposed, not the values.
+A policy can hide specific aggregation names. This is separate from aggregation **recomputation** (next section) — visibility controls which aggregation entries appear at all.
 
-### Include List (Whitelist)
+### Include (whitelist)
 
-Only these aggregations are visible:
+Only the listed aggregations are returned:
 
 ```yaml
 resources:
@@ -122,9 +114,9 @@ resources:
         - by_storage_class
 ```
 
-### Exclude List (Blacklist)
+### Exclude (blacklist)
 
-Hide specific aggregations:
+Hide the listed aggregations; everything else is returned:
 
 ```yaml
 resources:
@@ -135,11 +127,11 @@ resources:
         - cost_estimate
 ```
 
-`include` takes precedence — if both are set, only `include` is applied.
+`include` takes precedence when both are set — only `include` is applied.
 
-## Combining Multiple Filters
+## Combining filters
 
-Filters are evaluated in order: namespace, then name, then fields. A resource must pass all filters to be visible:
+The engine evaluates filters in order: namespaces → names → fields. A resource has to pass every filter to be returned.
 
 ```yaml
 resources:
@@ -147,35 +139,23 @@ resources:
     visibility: filtered
     filters:
       namespaces:
-        allowed:
-          - "prod-*"
+        allowed: ["prod-*"]
       names:
-        denied:
-          - "*-temp"
+        denied: ["*-temp"]
       fields:
         phase:
-          allowed:
-            - "Bound"
+          allowed: ["Bound"]
         storageClass:
-          allowed:
-            - "gp3"
+          allowed: ["gp3"]
     aggregations:
       include:
         - total_pvcs
         - total_capacity
 ```
 
-This policy shows only PVCs that are:
-- In namespaces matching `prod-*`
-- Not named `*-temp`
-- In `Bound` phase
-- Using `gp3` storage class
+Returned resources: PVCs in `prod-*` namespaces, name not `*-temp`, phase `Bound`, storage class `gp3`. Only the `total_pvcs` and `total_capacity` aggregations are returned.
 
-And only the `total_pvcs` and `total_capacity` aggregations are visible.
-
-## Multiple Custom Types in One Policy
-
-Grant access to multiple types with different rules:
+## Multiple custom types in one policy
 
 ```yaml
 resources:
@@ -185,8 +165,7 @@ resources:
     visibility: filtered
     filters:
       namespaces:
-        allowed:
-          - "app-*"
+        allowed: ["app-*"]
   - type: cronjob
     visibility: filtered
     filters:
@@ -196,9 +175,9 @@ resources:
             - "* * * * *"
 ```
 
-Types not listed remain invisible (implicit deny).
+Types not listed remain invisible — that's the implicit deny.
 
-## Complete Example
+## End-to-end example
 
 ```yaml
 apiVersion: clusterpulse.io/v1alpha1
@@ -212,17 +191,16 @@ spec:
     subjects:
       groups:
         - team-alpha
-
   access:
     effect: Allow
     enabled: true
-
   scope:
     clusters:
-      default: filtered
+      default: deny
       rules:
         - selector:
-            environment: production
+            matchLabels:
+              environment: production
           permissions:
             view: true
             viewMetrics: true
@@ -231,18 +209,15 @@ spec:
               visibility: filtered
               filters:
                 names:
-                  allowed:
-                    - "alpha-*"
+                  allowed: ["alpha-*"]
             - type: pvc
               visibility: filtered
               filters:
                 namespaces:
-                  allowed:
-                    - "alpha-*"
+                  allowed: ["alpha-*"]
                 fields:
                   storageClass:
-                    allowed:
-                      - "gp3"
+                    allowed: ["gp3"]
               aggregations:
                 include:
                   - total_pvcs
@@ -252,64 +227,57 @@ spec:
               visibility: all
 ```
 
-## Aggregation Recomputation
+## Aggregation recomputation
 
-When a MetricSource has `rbac.filterAggregations: true` (the default), aggregation values are automatically recomputed from the user's filtered resource set. For example, if a user can only see PVCs in `alpha-*` namespaces, the `total_pvcs` count reflects only those PVCs — not the cluster total.
+This is the canonical reference for how aggregation values change when a user has filtered visibility. Other pages link here.
 
-This is separate from aggregation visibility. Even with recomputation, a policy can further hide specific aggregation names using `aggregations.include` or `aggregations.exclude`.
+When a `MetricSource` has `spec.rbac.filterAggregations: true` (the default), aggregation values are recomputed at API time from the user's filtered resource set, not from the cluster-wide totals. For example, if `team-alpha` is restricted to `alpha-*` namespaces, `total_pvcs` reflects PVCs in `alpha-*` only — not the cluster total.
+
+Two switches matter:
+
+- `MetricSource.spec.rbac.filterAggregations` (per type, default `true`) — turn recomputation on or off for the whole type.
+- `MonitorAccessPolicy.spec.scope.clusters.rules[].resources[].aggregations.include` / `exclude` (per policy) — control which aggregation names appear after recomputation.
+
+A user who's filtered to nothing will see aggregation values of zero (or `null` for things like averages) when recomputation is on; with recomputation off, they'd see the unfiltered values — which would leak the unfiltered totals to a user who can't see the resources behind them. Leave it on unless you have a specific reason not to.
 
 ## Verification
 
-### List Accessible Types
-
 ```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  https://clusterpulse.example.com/api/v1/custom-types | jq
-```
+ROUTE=$(oc get route clusterpulse -n clusterpulse -o jsonpath='{.spec.host}')
 
-Only types granted by the user's policy are returned.
+# What custom types is the user allowed to see?
+curl -s "https://$ROUTE/api/v1/custom-types" | jq
 
-### Check Filtered Resources
+# Filtered resources of one type, for one cluster:
+curl -s "https://$ROUTE/api/v1/clusters/<cluster>/custom/pvc" | jq
 
-```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  https://clusterpulse.example.com/api/v1/clusters/my-cluster/custom/pvc | jq
-```
-
-### Check Aggregations
-
-```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://clusterpulse.example.com/api/v1/custom-types/clusters?type=pvc&include_aggregations=true" | jq
+# Cluster-wide aggregations for the type:
+curl -s "https://$ROUTE/api/v1/custom-types/clusters?type=pvc&include_aggregations=true" | jq
 ```
 
 ## Troubleshooting
 
-### Custom Type Not Visible
+### Custom type doesn't appear in `/custom-types`
 
-1. Verify the MetricSource exists and has `rbac.resourceTypeName` set
-2. Confirm the policy includes a `resources` entry with the matching `type` and `visibility` not set to `none`
-3. Check that the policy applies to the user (correct subjects, priority, enabled)
+1. Verify the MetricSource exists and `spec.rbac.resourceTypeName` is set: `oc get metricsource <name> -o yaml`.
+2. Confirm the policy has a `resources[]` entry with the matching `type` and `visibility` is not `none`.
+3. Confirm the policy is `Active` and applies to the principal (use `/api/v1/auth/policies`).
 
-### Resources Filtered More Than Expected
+### Resources are filtered more aggressively than expected
 
-1. Review namespace, name, and field filters — all must pass
-2. Check for higher-priority `Deny` policies
-3. Use the permissions endpoint to see effective rules:
-   ```bash
-   curl -s -H "Authorization: Bearer $TOKEN" \
-     https://clusterpulse.example.com/api/v1/auth/permissions | jq
-   ```
+1. Check every filter — `namespaces`, `names`, `fields`. A resource must pass all of them.
+2. Look for a higher-priority `Deny` policy via `/api/v1/auth/policies`.
+3. Confirm a `fields` filter you set is actually filterable: `oc get metricsource <name> -o jsonpath='{.spec.rbac.filterableFields}'`. Filters on non-filterable fields are silently ignored, which usually surfaces as "filter looks set but isn't taking effect."
 
-### Aggregations Missing
+### Aggregations missing
 
-1. Verify the aggregation name matches the MetricSource definition
-2. Check if the policy uses `aggregations.include` — unlisted names are hidden
-3. Confirm `filterAggregations` is not causing empty results (no resources match after filtering)
+1. Confirm the aggregation name in your `include`/`exclude` matches `MetricSource.spec.aggregations[].name` exactly.
+2. If `aggregations.include` is set, anything not listed is hidden — that's by design.
+3. With `filterAggregations: true` and no resources passing the filter, numeric aggregations return zero/null, which can look like "missing."
 
-## Next Steps
+## Next steps
 
-- [Create a MetricSource](../metricsources/create-metricsource.md) - Define the resource type to collect
-- [Filter by Namespace](filter-by-namespace.md) - Namespace filtering for built-in and custom resources
-- [RBAC Model](../../concepts/rbac-model.md) - Full RBAC architecture reference
-- [Policy Evaluation](../../concepts/policy-evaluation.md) - How policies are evaluated
+- [Create a MetricSource](../metricsources/create-metricsource.md)
+- [Filter by namespace](filter-by-namespace.md)
+- [RBAC model](../../concepts/rbac-model.md)
+- [Policy evaluation](../../concepts/policy-evaluation.md)

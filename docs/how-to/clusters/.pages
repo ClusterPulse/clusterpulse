@@ -1,3 +1,5 @@
 nav:
   - add-openshift-cluster.md
+  - enable-push-mode.md
   - configure-ingester-tls.md
+  - add-registry.md

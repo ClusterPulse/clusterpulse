@@ -1,5 +1,6 @@
 site_name: ClusterPulse Documentation
 site_description: Multi-cluster Kubernetes monitoring with RBAC
+site_url: https://clusterpulse.github.io/clusterpulse/
 
 repo_name: ClusterPulse/clusterpulse
 repo_url: https://github.com/ClusterPulse/clusterpulse
@@ -15,19 +16,17 @@ theme:
   palette:
     # Light mode
     - scheme: default
-      primary: custom
       accent: green
       toggle:
-        icon: material/brightness-7
+        icon: lucide/sun
         name: Switch to dark mode
     # Dark mode
     - scheme: slate
-      primary: custom
       accent: green
       toggle:
-        icon: material/brightness-4
+        icon: lucide/moon
         name: Switch to light mode
-  
+
   features:
     - navigation.instant
     - navigation.tracking
@@ -40,19 +39,12 @@ theme:
     - content.code.copy
     - content.code.annotate
     - content.tabs.link
-  
+
   icon:
     repo: fontawesome/brands/github
 
 plugins:
   - search
-  - mermaid2
-  - awesome-pages
-  - mike:
-      version_selector: true
-
-extra_css:
-  - stylesheets/extra.css
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -73,9 +65,9 @@ markdown_extensions:
       permalink: true
 
 extra:
+  generator: false
   version:
     provider: mike
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/ClusterPulse/clusterpulse
-

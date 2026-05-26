@@ -120,7 +120,7 @@ spec:
   
   scope:
     clusters:
-      default: all | none | filtered
+      default: allow | deny | none
       rules:
         - selector: {}
           permissions: {}
@@ -136,7 +136,7 @@ spec:
 
 Defines who the policy applies to and its evaluation priority.
 
-**Priority**: Integer from 0-999. Lower values are evaluated first. When multiple policies match, the first Allow or Deny decision wins.
+**Priority**: Integer from 1-10000 (default 100). Higher values are evaluated first. When multiple policies match, the first Allow or Deny decision wins. The compiled policies are stored in a Redis sorted set and retrieved with `ZRevRange`, so the highest priority lands at the top of the evaluation list.
 
 **Subjects**: Policies can target:
 
@@ -159,13 +159,15 @@ Defines who the policy applies to and its evaluation priority.
 
 Defines which clusters and resources the policy covers.
 
-**Default Cluster Access**:
+**Default Cluster Access** (`scope.clusters.default`):
 
-| Value | Behavior |
-|-------|----------|
-| `all` | Access all clusters unless restricted by rules |
-| `none` | Deny by default; only rules grant access |
-| `filtered` | Apply rule-based filtering |
+| Value | Behaviour |
+|-------|-----------|
+| `allow` | Treat clusters that don't match any rule as accessible (use permissions/resources from the matching rule, otherwise default to view-only). |
+| `deny` | Treat clusters that don't match any rule as inaccessible. Equivalent to `none` in current code. |
+| `none` | CRD default. Same effect as `deny` — clusters only become visible through an explicit rule match. |
+
+> **Note:** Don't confuse this with the per-resource `visibility` field below, which uses `all`/`none`/`filtered`. They are different fields on different parts of the spec.
 
 **Rules**: Array of cluster access rules, each containing:
 
@@ -416,6 +418,5 @@ Cache invalidation occurs when:
 ## Related Documentation
 
 - [Policy Evaluation](policy-evaluation.md) - Detailed evaluation algorithm
-- [RBAC Basics Tutorial](../how-to/misc/rbac-basics.md) - Hands-on introduction
-- [Create Read-Only Policy](../how-to/policies/create-readonly-policy.md) - Practical example
+- [Create your first policy](../how-to/policies/create-first-policy.md) - Hands-on introduction
 - [Grant Custom Resource Access](../how-to/policies/grant-custom-resource-access.md) - Custom resource RBAC guide

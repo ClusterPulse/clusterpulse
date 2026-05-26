@@ -224,7 +224,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
-      - run: pip install mkdocs-material mike mkdocs-mermaid2-plugin mkdocs-awesome-pages-plugin
+      - run: |
+          pip install "zensical==0.0.43"
+          pip install "git+https://github.com/squidfunk/mike.git@2.2.0+zensical-0.1.0"
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
