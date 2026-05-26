@@ -112,7 +112,3 @@ type RegistryConnectionList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []RegistryConnection `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&RegistryConnection{}, &RegistryConnectionList{})
-}
