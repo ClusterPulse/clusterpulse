@@ -68,6 +68,6 @@ Updates are scheduled weekly (before 9am on Friday).
     - Builds and pushes Docker images for all services
     - Scans images with Trivy (fails on HIGH/CRITICAL vulnerabilities)
     - Signs images with cosign (keyless, via Sigstore)
-    - Deploys documentation via MkDocs/mike
+    - Deploys documentation via Zensical/mike
     - Opens a PR against `ClusterPulse/operator` with updated image tags and regenerated CRDs
     - Appends a **Build Summary** to the release body with image digests, tags, and docs status
