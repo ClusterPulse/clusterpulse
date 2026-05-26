@@ -101,7 +101,7 @@ The policy controller is registered in `cmd/manager/main.go` alongside the other
 1. MonitorAccessPolicy created/updated (generation change predicate filters status-only updates)
 2. `Reconcile()` fetches the CRD
 3. `Compiler.Compile()` validates spec and produces a `CompiledPolicy`
-4. `RedisClient.StorePolicy()` stores the compiled policy + creates all indexes
+4. `RedisClient.StorePolicy()` stores the compiled policy + creates all indexes. On update, it reads the previously-stored compilation and diffs subjects (users, groups, service accounts) and custom resource types; entries dropped in the new revision are removed from their indexes in the same pipeline, and the `policies:enabled` / `policies:effect:{allow|deny}` memberships are reconciled to the new policy state.
 5. `ValidateCompiledPolicy()` checks lifecycle (notBefore/notAfter/enabled)
 6. CRD status and Redis status both updated
 7. `PublishPolicyEvent()` notifies subscribers
@@ -134,8 +134,6 @@ policies:enabled                             # Only enabled policies (set)
 policies:by:priority                         # All policies by priority (zset)
 policies:effect:{allow|deny}                 # Policies by effect (set)
 policy:eval:{identity}:{cluster}             # Evaluation cache
-user:groups:{username}                       # User's group membership
-group:members:{group}                        # Group's members
 user:permissions:{user}                      # User permission cache
 ```
 

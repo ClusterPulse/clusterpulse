@@ -22,6 +22,7 @@ type APIConfig struct {
 	Environment       string
 	EnableDevAuth     bool // Explicit flag to enable dev-mode auth bypass
 	RBACCacheTTL      int
+	GroupCacheTTL     int // Seconds to cache resolveGroups results; 0 disables.
 	SwaggerEnabled    bool
 	SwaggerHost       string
 }
@@ -45,6 +46,7 @@ func LoadAPIConfig() *APIConfig {
 		Environment:       envStr("ENVIRONMENT", "production"),
 		EnableDevAuth:     envBool("ENABLE_DEV_AUTH", false),
 		RBACCacheTTL:      envInt("RBAC_CACHE_TTL", 0),
+		GroupCacheTTL:     envInt("GROUP_CACHE_TTL", 60),
 		SwaggerEnabled:    envBool("SWAGGER_ENABLED", false),
 		SwaggerHost:       envStr("SWAGGER_HOST", ""),
 	}

@@ -49,14 +49,20 @@ func TestSecurityHeaders(t *testing.T) {
 }
 
 func TestResolveGroups_NilClient_Dev(t *testing.T) {
-	groups := resolveGroups(t.Context(), nil, "user", true)
+	canonical, groups := resolveGroups(t.Context(), nil, "user", "", true)
+	if canonical != "user" {
+		t.Errorf("canonical = %q, want %q", canonical, "user")
+	}
 	if len(groups) != 2 || groups[0] != "developers" {
 		t.Errorf("dev mode nil client should return dev groups, got %v", groups)
 	}
 }
 
 func TestResolveGroups_NilClient_Prod(t *testing.T) {
-	groups := resolveGroups(t.Context(), nil, "user", false)
+	canonical, groups := resolveGroups(t.Context(), nil, "user", "", false)
+	if canonical != "user" {
+		t.Errorf("canonical = %q, want %q", canonical, "user")
+	}
 	if groups != nil {
 		t.Errorf("prod mode nil client should return nil, got %v", groups)
 	}
