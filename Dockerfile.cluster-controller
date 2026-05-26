@@ -31,20 +31,14 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
     -o cluster-controller cmd/manager/main.go
 
 # Final stage
-FROM alpine:3.23
-
-RUN apk --no-cache add ca-certificates
+FROM registry.access.redhat.com/ubi9-micro:9.6
 
 WORKDIR /
 
-# Copy the binary from builder
-COPY --from=builder /app/cluster-controller .
+COPY --from=builder /app/cluster-controller /cluster-controller
 
 USER 65532
 
 EXPOSE 8081
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8081/healthz || exit 1
 
 ENTRYPOINT ["/cluster-controller"]
