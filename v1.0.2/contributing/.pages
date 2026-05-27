@@ -1,0 +1,9 @@
+nav:
+  - index.md
+  - workflow.md
+  - api.md
+  - cluster-controller-quickstart.md
+  - cluster-controller-architecture.md
+  - cluster-controller-reconciliation.md
+  - cluster-controller-patterns.md
+  - policy-controller.md
