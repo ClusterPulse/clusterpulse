@@ -31,13 +31,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
     -o clusterpulse-collector cmd/collector/main.go
 
 # Final stage
-FROM alpine:3.23
-
-RUN apk --no-cache add ca-certificates
+FROM registry.access.redhat.com/ubi9-micro:9.6
 
 WORKDIR /
 
-COPY --from=builder /app/clusterpulse-collector .
+COPY --from=builder /app/clusterpulse-collector /clusterpulse-collector
 
 USER 65532
 
