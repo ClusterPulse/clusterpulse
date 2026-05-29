@@ -31,7 +31,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
     -o clusterpulse-api cmd/api/main.go
 
 # Final stage
-FROM registry.access.redhat.com/ubi9-micro:9.6
+FROM registry.access.redhat.com/ubi9-micro:9.8-1779858820
 
 WORKDIR /
 
