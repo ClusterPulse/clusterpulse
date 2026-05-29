@@ -67,7 +67,7 @@ Updates are scheduled weekly (before 9am on Friday).
 5. The release workflow automatically:
     - Builds and pushes Docker images for all services
     - Scans images with Trivy (fails on HIGH/CRITICAL vulnerabilities)
-    - Signs images with cosign (keyless, via Sigstore)
+    - Signs images with cosign (keyless, via Sigstore) in both legacy `.sig` tag and OCI 1.1 referrer layouts
     - Deploys documentation via Zensical/mike
     - Opens a PR against `ClusterPulse/operator` with updated image tags and regenerated CRDs
     - Appends a **Build Summary** to the release body with image digests, tags, and docs status
