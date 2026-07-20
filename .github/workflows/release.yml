@@ -33,7 +33,7 @@ jobs:
             dockerfile: Dockerfile.collector
             image: quay.io/clusterpulse/collector
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -119,7 +119,7 @@ jobs:
           private-key: ${{ secrets.DEPLOYER_APP_PRIVATE_KEY }}
           owner: ClusterPulse
           repositories: ui
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           repository: ClusterPulse/ui
           token: ${{ steps.deployer-token.outputs.token }}
@@ -217,17 +217,17 @@ jobs:
         with:
           app-id: ${{ secrets.DOCS_APP_ID }}
           private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
       - run: |
           pip install "zensical==0.0.43"
           pip install "git+https://github.com/squidfunk/mike.git@2.2.0+zensical-0.1.0"
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Generate CRD reference docs
@@ -262,19 +262,19 @@ jobs:
           repositories: operator,ui
 
       - name: Checkout main repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: main-repo
 
       - name: Checkout operator repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ClusterPulse/operator
           token: ${{ steps.deployer-token.outputs.token }}
           path: operator-repo
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: main-repo/go.mod
 
@@ -333,7 +333,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download API digest
         if: needs.build-services.result == 'success'
